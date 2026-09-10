@@ -107,16 +107,53 @@ export type ClaimRequest = {
   readonly operationPrefix: string;
   readonly now: Date;
   /**
-   * How long this claim holds the number without publishing.
+   * When this claim's hold on the number lapses.
    *
-   * A claim that never returns must not strand its number for good, and a claim that IS running
-   * must not be taken from underneath. It is written to `claim_expires_at` and nowhere else:
-   * `next_attempt_at` is the scheduler's retry date, read by the nomination that decides which
-   * chunks a run may try at all, and a lease written there says the whole chunk is not due yet —
-   * which stalls a reconsidered block for the length of a lease nobody is holding.
+   * It is written to `claim_expires_at` and nowhere else: `next_attempt_at` is the scheduler's
+   * retry date, read by the nomination that decides which chunks a run may try at all, and a lease
+   * written there says the whole chunk is not due yet — which stalls a reconsidered block for the
+   * length of a lease nobody is holding.
+   *
+   * Lapsing frees the WORK, never the number. See `spendExpiredClaims`.
    */
   readonly leaseUntil: Date;
 };
+
+/**
+ * Retires the numbers whose claim lapsed, so no second actor can ever run under the first's name.
+ *
+ * An expired lease says the deadline passed. It does not say the actor stopped: a stalled process
+ * holding this number can still return with an output. So the number is SPENT rather than handed
+ * on. Reusing it made the operation identity — derived from the family key and the number — the
+ * same string for two actors, and everything downstream that identity is supposed to separate then
+ * ran together: the returning actor's release cleared the newer actor's binding, and its output
+ * collided with the newer publication on one durable identity.
+ *
+ * A number is only ever taken up again by a release, which is an actor saying it finished without
+ * binding an intent. That is the one case where nobody else is running under the name.
+ *
+ * A row carrying a durable intent is left alone whatever its lease says. That attempt belongs to
+ * the coordinator's own recovery, and retiring it would take the number out from under it.
+ */
+function spendExpiredClaims(
+  db: SqliteHandle,
+  family: RevisionFamily,
+  familyKey: string,
+  now: Date,
+): number {
+  return db
+    .prepare(
+      `UPDATE ${family.revisionTable}
+          SET state = 'abandoned', closed_at = ?, last_failure_reason = 'claim_expired'
+        WHERE ${family.keyColumn} = ? AND state = 'allocated'
+          AND operation_id IS NOT NULL
+          AND claim_expires_at IS NOT NULL AND claim_expires_at <= ?
+          AND NOT EXISTS (
+            SELECT 1 FROM publication_intents i
+             WHERE i.operation_id = ${family.revisionTable}.operation_id)`,
+    )
+    .run(now.toISOString(), familyKey, now.toISOString()).changes;
+}
 
 /**
  * Takes ownership of a revision number for one attempt, atomically, before any asynchronous work.
@@ -126,11 +163,11 @@ export type ClaimRequest = {
  * identity. The claim is a write, in one immediate transaction, and what it writes is the binding
  * and the lease together.
  *
- * A row is claimable when it is unblocked, DUE by the scheduler's own retry date, unclaimed or
- * claimed past its lease, and carries no durable intent for the identity its number implies. The
- * last test is what lets a dead claim be taken up again at lease expiry while an attempt the
- * coordinator is still resolving is left alone, and it is why an abandoned number is never reused:
- * abandoned rows are not `allocated`.
+ * A row is claimable when it is unblocked, DUE by the scheduler's own retry date, UNCLAIMED, and
+ * carries no durable intent for the identity its number implies. Unclaimed means never claimed or
+ * given back by the actor that held it; a lapsed lease does not qualify, because expiry proves a
+ * deadline passed and not that anyone stopped. Those are retired first, so the run that finds
+ * nothing free spends a new number rather than a name somebody may still be using.
  */
 export function claimNarrativeRevision(
   db: SqliteHandle,
@@ -139,24 +176,21 @@ export function claimNarrativeRevision(
 ): RevisionClaim {
   return db
     .transaction((): RevisionClaim => {
+      spendExpiredClaims(db, family, request.familyKey, request.now);
       const due = db
         .prepare(
           `SELECT revision_no, node_id FROM ${family.revisionTable}
             WHERE ${family.keyColumn} = ? AND state = 'allocated' AND blocked_reason IS NULL
+              AND operation_id IS NULL AND claim_expires_at IS NULL
               AND COALESCE(next_attempt_at, allocated_at) <= ?
-              AND (claim_expires_at IS NULL OR claim_expires_at <= ?)
               AND NOT EXISTS (
                 SELECT 1 FROM publication_intents i
                  WHERE i.operation_id = ? || CAST(revision_no AS TEXT))
             ORDER BY COALESCE(next_attempt_at, allocated_at), revision_no
             LIMIT 1`,
         )
-        .get(
-          request.familyKey,
-          request.now.toISOString(),
-          request.now.toISOString(),
-          request.operationPrefix,
-        ) as { revision_no: number; node_id: string } | undefined;
+        .get(request.familyKey, request.now.toISOString(), request.operationPrefix) as
+        { revision_no: number; node_id: string } | undefined;
       const claimed =
         due ??
         (() => {
@@ -185,9 +219,11 @@ export function claimNarrativeRevision(
 /**
  * Gives a claimed number back, so the next attempt takes it up rather than spending another.
  *
- * Only from `allocated`, and only when no durable intent was ever opened for it: a number an
- * operation is holding is not the caller's to release, and the coordinator's own recovery is what
- * settles that one.
+ * Only from `allocated`, only when no durable intent was ever opened for it — a number an operation
+ * is holding is not the caller's to release, and the coordinator's own recovery settles that one —
+ * and only under the binding the caller is actually holding. The ownership test is the whole point
+ * of the identity: a release names the claim it is giving back, and a row carrying a different
+ * binding belongs to somebody else's attempt.
  */
 export function releaseNarrativeClaim(
   db: SqliteHandle,
@@ -208,9 +244,10 @@ export function releaseNarrativeClaim(
     db
       .prepare(
         `UPDATE ${family.revisionTable} SET operation_id = NULL, claim_expires_at = NULL
-          WHERE ${family.keyColumn} = ? AND revision_no = ? AND state = 'allocated'`,
+          WHERE ${family.keyColumn} = ? AND revision_no = ? AND state = 'allocated'
+            AND operation_id = ?`,
       )
-      .run(request.familyKey, request.revisionNo).changes === 1
+      .run(request.familyKey, request.revisionNo, request.operationId).changes === 1
   );
 }
 

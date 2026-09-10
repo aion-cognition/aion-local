@@ -3,6 +3,7 @@ import type { Driver } from 'neo4j-driver';
 import {
   PublicationInvariantError,
   PublicationPendingError,
+  PublicationRetryableError,
   PublicationUnavailable,
   publicationFailure,
 } from './errors.js';
@@ -396,7 +397,14 @@ export class PublicationCoordinator {
 
   #sameRequest(record: PublicationRecord, request: PublicationRequest, payloadJson: string): void {
     if (record.kind !== request.kind || record.payloadJson !== payloadJson) {
-      throw new PublicationInvariantError('operation_identity_reused', request.operationId);
+      // Both are refusals, and neither relaxes: one identity carries one request. What differs is
+      // what the caller may do next. A record this coordinator has already SETTLED says the work
+      // under that name finished, so the arriving caller is behind rather than broken and its
+      // answer belongs to a fresh attempt. An unsettled record is a live collision, which is the
+      // invariant violation it always was.
+      throw record.state === 'prepared'
+        ? new PublicationInvariantError('operation_identity_reused', request.operationId)
+        : new PublicationRetryableError('operation_identity_settled', request.operationId);
     }
     storedPlan(record, this.#handler(record.kind));
   }
