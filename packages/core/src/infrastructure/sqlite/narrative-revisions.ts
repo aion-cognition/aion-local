@@ -355,42 +355,6 @@ export function readPublishedRevision(
       };
 }
 
-/** A revision the records call acknowledged, and the graph node that carries it. */
-export type AcknowledgedRevision = {
-  readonly revisionNo: number;
-  readonly nodeId: string;
-};
-
-/**
- * The family's acknowledged revisions in revision order, oldest first.
- *
- * The complement of `listAllocatedRevisions`: these are the versions the substrate decided about,
- * so their nodes are the only ones a repair of this family may touch. Reading the candidates from
- * the records rather than from the graph is what keeps a page of ids the manifest binds to nothing
- * from consuming a repair's whole bound — the records name a bounded population, and a node the
- * records do not name is not a candidate at all rather than a candidate that has to be stepped
- * over. Resumes strictly after `after`, so one family's revisions are walked in bounded pages.
- */
-export function listAcknowledgedRevisions(
-  db: SqliteHandle,
-  family: RevisionFamily,
-  familyKey: string,
-  limit: number,
-  after?: number,
-): readonly AcknowledgedRevision[] {
-  if (limit <= 0) {
-    return [];
-  }
-  const rows = db
-    .prepare(
-      `SELECT revision_no, node_id FROM ${family.revisionTable}
-        WHERE ${family.keyColumn} = ? AND state IN ('published', 'closed') AND revision_no > ?
-        ORDER BY revision_no LIMIT ?`,
-    )
-    .all(familyKey, after ?? 0, limit) as { revision_no: number; node_id: string }[];
-  return rows.map((row) => ({ revisionNo: row.revision_no, nodeId: row.node_id }));
-}
-
 export function readNarrativeRevision(
   db: SqliteHandle,
   family: RevisionFamily,

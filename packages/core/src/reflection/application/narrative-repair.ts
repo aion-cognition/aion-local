@@ -14,9 +14,9 @@ import { narrativeRevisionBinding } from '../../infrastructure/sqlite/chunk-mani
 import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { readScopeMirror, recordScopeMirror } from '../../infrastructure/sqlite/evidence-scope.js';
+import { listAcknowledgedRevisions } from '../../infrastructure/sqlite/narrative-allocations.js';
 import {
   CHUNK_REVISION_FAMILY,
-  listAcknowledgedRevisions,
   readPublishedRevision,
 } from '../../infrastructure/sqlite/narrative-revisions.js';
 
@@ -38,6 +38,10 @@ import {
  * What it will not touch: a revision the manifest still calls allocated or prepared. That is an
  * attempt in flight, its output is recovered by its own receipt, and suppressing its node here
  * would destroy the thing the recovery is for.
+ *
+ * How much it may look at is decided before the guard is taken. The caller names the window of the
+ * family's history this attempt reads, and everything inside it is re-read and re-decided here —
+ * the window bounds the work, and the records still decide the outcome.
  */
 
 export const NARRATIVE_FAMILY_REPAIR_EFFECT = 'narrative_family_repaired';
@@ -55,14 +59,18 @@ const ACKNOWLEDGED_STATES = new Set(['published', 'closed']);
 export const REPAIR_TARGET_LIMIT = 32;
 
 /**
- * Acknowledged revisions of the family one page of the candidate walk reads.
+ * Candidate revision records ONE guarded preparation reads. A total, not a page.
  *
- * The bound is over the RECORDS now, not over the graph. A scan that enumerated the family's
- * standing nodes spent this budget on whatever ids the graph happened to sort first, so a family
- * carrying more unbound nodes than one scan could look at restarted the same protected prefix
- * every run and never reached the legitimate target behind it. The candidates come from the
- * manifest instead, which names a population the family itself created, and the walk continues
- * over that population within the run until it has its targets or the family is exhausted.
+ * Two bounds were tried and neither held. A scan over the family's standing GRAPH nodes spent its
+ * budget on whatever ids sorted first, so a page of ids the manifest binds to nothing hid the
+ * legitimate target behind it on every run. Reading candidates from the records removed that
+ * prefix but bounded each page rather than the work: a family's lifetime history has no configured
+ * maximum, so a long one read all of it inside a single preparation, under the guard, serialized
+ * against every other writer.
+ *
+ * This is the whole read. The window it covers is chosen OUTSIDE the guard by the nomination that
+ * asked for the repair, which carries its own position down the family across attempts, so a
+ * target below one window is reached by a later attempt rather than by a longer one.
  */
 export const REPAIR_SCAN_LIMIT = 128;
 
@@ -71,6 +79,13 @@ const Payload = z.strictObject({
   /** The caller's own epoch, so a registry that moved defers this rather than being re-read. */
   coverageEpoch: z.string().min(1),
   observedAt: z.string().min(1),
+  /**
+   * The nominated window: acknowledged revisions BELOW this number. Omitted starts at the head,
+   * which is where the disagreement is made and where an unbounded walk would have begun anyway.
+   * The window is a bound on the read, never a licence: what may be closed inside it is decided
+   * under the guard from the records, exactly as before.
+   */
+  beforeRevisionNo: z.number().int().positive().optional(),
 });
 
 const Data = Payload.extend({
@@ -79,6 +94,13 @@ const Data = Payload.extend({
   targets: z.array(z.string().min(1)),
   /** Every standing revision node this repair read, the keeper included. */
   examined: z.number().int().nonnegative(),
+  /**
+   * Candidate records read to produce that. A different unit from `examined`, which counts what
+   * the graph reported standing, and from the nomination's own family/version counts. Plans
+   * written before the manifest-driven selection counted a third population again and are not
+   * comparable with either.
+   */
+  candidates: z.number().int().nonnegative(),
 });
 
 const Result = z.strictObject({
@@ -106,65 +128,52 @@ function repairable(db: SqliteHandle, chunkId: string, nodeId: string): boolean 
 /**
  * Standing nodes this repair may close, selected from the records rather than found in the graph.
  *
- * The candidates are the family's own acknowledged revisions, walked in revision order, and the
- * graph is asked only which of those still stand. That is the direction the two stores can each
- * answer: the manifest is the authority on which nodes are revisions of this family, and the graph
- * is the authority on which nodes are current. Asking the graph first spent a fixed scan on
- * whatever ids sorted first, so a family carrying a page of ids the manifest binds to nothing
- * hid its legitimate target behind them on every run — a cursor over FAMILIES cannot step inside
- * one, and raising the bound only moves where the prefix ends.
+ * The candidates are one bounded window of the family's own acknowledged revisions, and the graph
+ * is asked once which of those still stand. That is the direction the two stores can each answer:
+ * the manifest is the authority on which nodes are revisions of this family, and the graph is the
+ * authority on which nodes are current. Asking the graph first spent the bound on whatever ids
+ * sorted first, so a page of ids the manifest binds to nothing hid the legitimate target behind
+ * them — a cursor over FAMILIES cannot step inside one.
  *
  * Both endpoints of every close are still checked against the manifest family, so an id the
  * records have stopped binding between the two reads is not this family's to close.
  *
- * Two bounds. At most `REPAIR_TARGET_LIMIT` targets are collected, and the candidate walk reads
- * `REPAIR_SCAN_LIMIT` acknowledged revisions per page — a population one chunk family created by
- * publishing, which the walk finishes rather than restarting.
+ * Three bounds, all on one attempt: `REPAIR_SCAN_LIMIT` candidate records, one graph read, and
+ * `REPAIR_TARGET_LIMIT` targets written. Nothing here loops, so no bound is renewable inside the
+ * guard; reaching further down a long family is the nomination's job.
  */
 async function repairableTargets(
   context: { readonly graph: GraphTransaction; readonly db: SqliteHandle },
   chunkId: string,
   keeperNodeId: string,
-): Promise<{ targets: string[]; examined: number }> {
+  before: number | undefined,
+): Promise<{ targets: string[]; examined: number; candidates: number }> {
+  const window = listAcknowledgedRevisions(
+    context.db,
+    CHUNK_REVISION_FAMILY,
+    chunkId,
+    REPAIR_SCAN_LIMIT,
+    before,
+  );
+  const standing = await standingFamilyNodesInTransaction(
+    context.graph,
+    chunkId,
+    window.map((row) => row.nodeId),
+  );
   const targets: string[] = [];
-  let examined = 0;
-  let after: number | undefined;
-  while (targets.length < REPAIR_TARGET_LIMIT) {
-    const page = listAcknowledgedRevisions(
-      context.db,
-      CHUNK_REVISION_FAMILY,
-      chunkId,
-      REPAIR_SCAN_LIMIT,
-      after,
-    );
-    const last = page[page.length - 1];
-    if (last === undefined) {
+  for (const row of window) {
+    if (targets.length >= REPAIR_TARGET_LIMIT) {
       break;
     }
-    after = last.revisionNo;
-    const standing = await standingFamilyNodesInTransaction(
-      context.graph,
-      chunkId,
-      page.map((row) => row.nodeId),
-    );
-    examined += standing.size;
-    for (const row of page) {
-      if (targets.length >= REPAIR_TARGET_LIMIT) {
-        break;
-      }
-      if (
-        standing.has(row.nodeId) &&
-        row.nodeId !== keeperNodeId &&
-        repairable(context.db, chunkId, row.nodeId)
-      ) {
-        targets.push(row.nodeId);
-      }
-    }
-    if (page.length < REPAIR_SCAN_LIMIT) {
-      break;
+    if (
+      standing.has(row.nodeId) &&
+      row.nodeId !== keeperNodeId &&
+      repairable(context.db, chunkId, row.nodeId)
+    ) {
+      targets.push(row.nodeId);
     }
   }
-  return { targets, examined };
+  return { targets, examined: standing.size, candidates: window.length };
 }
 
 export const narrativeFamilyRepairPublication = new PublicationOperation({
@@ -189,14 +198,20 @@ export const narrativeFamilyRepairPublication = new PublicationOperation({
         : undefined;
     const found =
       keeper === undefined
-        ? { targets: [], examined: 0 }
-        : await repairableTargets(context, payload.chunkId, keeper.nodeId);
+        ? { targets: [], examined: 0, candidates: 0 }
+        : await repairableTargets(
+            context,
+            payload.chunkId,
+            keeper.nodeId,
+            payload.beforeRevisionNo,
+          );
     const data: RepairData = {
       ...payload,
       headNodeId: keeper?.nodeId ?? '',
       headRevisionNo: head?.revisionNo ?? 1,
       targets: found.targets,
       examined: found.examined,
+      candidates: found.candidates,
     };
     return {
       data,
@@ -213,7 +228,11 @@ export const narrativeFamilyRepairPublication = new PublicationOperation({
       effects: [
         {
           kind: NARRATIVE_FAMILY_REPAIR_EFFECT,
-          detail: { chunkId: payload.chunkId, targets: found.targets.length },
+          detail: {
+            chunkId: payload.chunkId,
+            targets: found.targets.length,
+            candidates: found.candidates,
+          },
         },
       ],
     };

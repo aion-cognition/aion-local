@@ -1,19 +1,14 @@
 import type { Driver } from 'neo4j-driver';
 
 import { synthesizeGrounded } from './consolidation-synthesis.js';
-import {
-  memberEvidence,
-  overviewOperationPrefix,
-  parseEvidence,
-  OVERVIEW_NARRATIVE_FAMILY,
-} from './overview-publication.js';
+import { settled } from './overview-coverage.js';
+import { overviewOperationPrefix, OVERVIEW_NARRATIVE_FAMILY } from './overview-publication.js';
 import {
   closedWindows,
   writeMemberCursor,
   OVERVIEW_MEMBER_SCAN_LIMIT,
   type Window,
 } from './overview-windows.js';
-import { verifyEvidenceRevision } from '../../evidence/application/dependencies.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { findNarrativeBodies } from '../../infrastructure/graph/narrative-rollup-queries.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
@@ -28,7 +23,6 @@ import {
   recordAttemptPolicy,
   releaseNarrativeClaim,
 } from '../../infrastructure/sqlite/narrative-allocations.js';
-import { readCitationsFrom } from '../../infrastructure/sqlite/narrative-citations.js';
 import {
   blockRevisionAttempt,
   clearRevisionBlock,
@@ -139,36 +133,6 @@ const UNCLIPPED = Number.MAX_SAFE_INTEGER;
 
 const CAPACITY_BLOCK = 'blocked_window_capacity';
 const UNREADABLE_BLOCK = 'blocked_window_member_unreadable';
-
-/**
- * Whether the standing head still answers for this window exactly as the records hold it now.
- *
- * Three questions, because the citation set answers none of them alone. What a head CITES is the
- * support its prose rests on, and grounded output that stood on one of two members cites one: an
- * equality against the window's membership called that unchanged window changed and paid for the
- * same synthesis every run. What a head COVERS is the dependency set it published against, which
- * is durable on the revision and moves when a member arrives, leaves or republishes. And a covered
- * set whose ids have not moved can still be out of date — a correction under a member is a new
- * reading of the same member — so the stored evidence is verified rather than assumed current.
- *
- * The citation check that remains is a containment, not an equality: a head citing something the
- * window no longer holds is resting on prose about a member that has gone.
- */
-function settled(db: SqliteHandle, familyKey: string, members: readonly OverviewMember[]): boolean {
-  const head = readPublishedRevision(db, OVERVIEW_REVISION_FAMILY, familyKey);
-  const stored = parseEvidence(head?.evidenceRevisionJson ?? null);
-  if (head === undefined || stored === undefined) {
-    return false;
-  }
-  if (memberEvidence(db, members).digest !== stored.digest) {
-    return false;
-  }
-  const covered = new Set(members.map((member) => member.nodeId));
-  if (readCitationsFrom(db, head.nodeId).some((citation) => !covered.has(citation.targetId))) {
-    return false;
-  }
-  return verifyEvidenceRevision(db, stored).status === 'current';
-}
 
 /**
  * Clears a refusal whose recorded prerequisite no longer holds.

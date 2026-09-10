@@ -185,8 +185,13 @@ const NODE_OWN_SCOPES = [CITATION_SCOPE, durableRoleScope('extraction', 'out')];
  *
  * A member whose own set cannot be read contributes nothing here and is refused by the check; a
  * publication is never built on a reading nobody took.
+ *
+ * What this is NOT is a record of what the overview covered. Two acknowledged revisions of one
+ * child can rest on byte-identical evidence — a corrected wording over the same certified sources
+ * is exactly that — so this union is unchanged across a child replacement that changed the covered
+ * set. Coverage membership is the payload's `members`, and `overview-coverage.ts` compares it.
  */
-export function memberEvidence(
+function memberEvidence(
   db: SqliteHandle,
   members: readonly { readonly familyKey: string; readonly nodeId: string }[],
 ): EvidenceRevision {

@@ -219,6 +219,15 @@ export function windowMembers(
  * half is empty. A week's members are day overviews ordered by family key, so the boundary is the
  * key of the day before it and the span half is empty — the read resumes strictly after the
  * cursor, and the first day of the window must not be the one it skips.
+ *
+ * THE DAY-KEY CONTRACT, in one place because this is the only reader of it. A day overview's
+ * family key is `day:YYYY-MM-DD` in UTC, zero-padded, fixed width. `rollupWindow` writes the date
+ * half (`reflection/domain/rollup.ts`), `overviewFamilyKey` prefixes the scope, and the line below
+ * is the parser: it derives the key by slicing an ISO-8601 timestamp, which is the same encoding
+ * from the other end. Fixed width is what makes lexical order agree with calendar order, and the
+ * week read depends on that agreement. A change to the shape has to move the writer, this parser
+ * and the compatibility cases together — `reflection/domain/rollup.test.ts` holds the UTC naming
+ * and the year-transition cases, and they are the ones a shape change would fail first.
  */
 function pastWindow(scope: RollupScope, at: Date): MemberCursor {
   if (scope === 'day') {

@@ -13,8 +13,13 @@ import {
 } from '../../../infrastructure/graph/narrative-edge-queries.js';
 import { readCurrentCoverageContract } from '../../../infrastructure/sqlite/coverage-contract.js';
 import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import { listAcknowledgedRevisions } from '../../../infrastructure/sqlite/narrative-allocations.js';
+import { CHUNK_REVISION_FAMILY } from '../../../infrastructure/sqlite/narrative-revisions.js';
 import { getLedgerEntry, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
-import { narrativeFamilyRepairOperationId } from '../../../reflection/application/narrative-repair.js';
+import {
+  narrativeFamilyRepairOperationId,
+  REPAIR_SCAN_LIMIT,
+} from '../../../reflection/application/narrative-repair.js';
 import type {
   IntrospectionOperation,
   OperationContext,
@@ -77,6 +82,12 @@ type DuplicateReport = {
   readonly closedEdges: number;
   /** Families whose keeper the records could not name, left standing and reported. */
   readonly unresolved: number;
+  /**
+   * Candidate records the bounded nomination read to choose those repairs. A different population
+   * from `examined`, which is what the graph reported standing, and a cost this run pays outside
+   * the guard rather than inside it.
+   */
+  readonly candidates: number;
   /** Legacy session families carrying more than one standing narrative. */
   readonly legacy: number;
 };
@@ -104,6 +115,7 @@ async function closeExtraRevisions(
   closed: number;
   closedEdges: number;
   unresolved: number;
+  candidates: number;
 }> {
   // The record budget is split between the two bounds, and BOTH have to give. Two versions is the
   // floor on the per-family bound, because a family with one standing version is not a duplicate
@@ -133,12 +145,14 @@ async function closeExtraRevisions(
       closed: 0,
       closedEdges: 0,
       unresolved: families.length,
+      candidates: 0,
     };
   }
   let examined = 0;
   let closed = 0;
   let closedEdges = 0;
   let unresolved = 0;
+  let candidates = 0;
   for (const family of families) {
     if (examined >= REVISION_SCAN_BUDGET) {
       // The family bound is not a write bound. One family can carry any number of standing
@@ -146,6 +160,20 @@ async function closeExtraRevisions(
       // this run does not reach are still there for the next.
       break;
     }
+    // The candidate window, chosen HERE rather than inside the guard. What a repair may read is a
+    // bound on one attempt, and a family's history has no configured maximum, so a preparation
+    // left to walk until it ran out held the publication lock for as long as that family was long.
+    // The nomination is an ordinary indexed read outside every lock; the guard revalidates the
+    // same window from the same records and decides what may actually be closed.
+    const before = readCandidateCursor(ctx.db, family.chunkId);
+    const window = listAcknowledgedRevisions(
+      ctx.db,
+      CHUNK_REVISION_FAMILY,
+      family.chunkId,
+      REPAIR_SCAN_LIMIT,
+      before,
+    );
+    candidates += window.length;
     const outcome = await publications
       .publish({
         kind: 'narrative_family_repair',
@@ -154,6 +182,7 @@ async function closeExtraRevisions(
           chunkId: family.chunkId,
           coverageEpoch: epoch,
           observedAt: ctx.now.toISOString(),
+          ...(before === undefined ? {} : { beforeRevisionNo: before }),
         },
       })
       .catch((err: unknown) => {
@@ -164,6 +193,15 @@ async function closeExtraRevisions(
         return undefined;
       });
     examined += family.versions.length;
+    // The window steps DOWN through the family's history and starts again at the head once it runs
+    // out, whatever the attempt made of it. A repair this window could not reach is behind the
+    // position rather than below the same first window for ever, and a short window means the
+    // history is exhausted rather than that the walk is finished with the family.
+    writeCandidateCursor(
+      ctx.db,
+      family.chunkId,
+      window.length < REPAIR_SCAN_LIMIT ? undefined : window[window.length - 1]?.revisionNo,
+    );
     if (outcome?.status !== 'acknowledged') {
       if (outcome !== undefined) {
         ctx.logger.info(
@@ -185,7 +223,40 @@ async function closeExtraRevisions(
   // Where this page stopped. A family it could not repair is behind the cursor rather than at the
   // front of every later page, and the cursor settles nothing: it wraps at the end of the walk.
   writeRepairCursor(ctx.db, families[families.length - 1]?.chunkId);
-  return { families: families.length, examined, closed, closedEdges, unresolved };
+  return { families: families.length, examined, closed, closedEdges, unresolved, candidates };
+}
+
+/**
+ * Where one family's candidate window stopped, so the next attempt on it starts lower.
+ *
+ * Keyed by family rather than held as one row, because the walk over families rotates: a single
+ * position would be overwritten by whichever family came last in the page, and the family it
+ * belonged to would restart at the head every time. The row is cleared, not moved, when the
+ * history runs out — a position is only a position while there is something below it.
+ */
+function candidateCursorKey(chunkId: string): string {
+  return `narrative_cleanup:candidate_cursor:${chunkId}`;
+}
+
+function readCandidateCursor(db: SqliteHandle, chunkId: string): number | undefined {
+  const summary = getLedgerEntry(db, candidateCursorKey(chunkId))?.summary;
+  if (typeof summary !== 'object' || summary === null) {
+    return undefined;
+  }
+  const { revisionNo } = summary as { revisionNo?: unknown };
+  return typeof revisionNo === 'number' && revisionNo > 1 ? revisionNo : undefined;
+}
+
+function writeCandidateCursor(
+  db: SqliteHandle,
+  chunkId: string,
+  revisionNo: number | undefined,
+): void {
+  markLedgerApplied(
+    db,
+    candidateCursorKey(chunkId),
+    revisionNo === undefined ? {} : { revisionNo },
+  );
 }
 
 /** Where the last run's family nomination stopped. One row, naming a family and nothing else. */
@@ -264,7 +335,7 @@ export function narrativeCleanupOperation(): IntrospectionOperation {
       const batch = ctx.config.maintenance.narrativeCleanupBatch;
       const chunks =
         ctx.narratives === undefined
-          ? { families: 0, examined: 0, closed: 0, closedEdges: 0, unresolved: 0 }
+          ? { families: 0, examined: 0, closed: 0, closedEdges: 0, unresolved: 0, candidates: 0 }
           : await closeExtraRevisions(ctx, ctx.narratives.publications, batch);
       // The legacy family is counted and left alone. Its keeper cannot be read from a manifest
       // that never bound it, and the signed rule is explicit that a winner is not picked by
@@ -298,6 +369,11 @@ export function narrativeCleanupOperation(): IntrospectionOperation {
       // leaving them out of examined would make the two terms incomparable in the other
       // direction. The edge population it read and the one it changed are the same set, for the
       // reason the stale-edge sweep's are: the statement matches what it writes.
+      //
+      // The nomination's candidate reads are NOT in either term. They are a third population, read
+      // outside the guard to bound what one repair may look at, and folding them into a term that
+      // divides into the affected count would make the ratio a statement about history length. The
+      // detail reports them beside the others.
       const processed =
         duplicates.examined + duplicates.closedEdges + nominated.length + edges.examined;
       const affected = duplicates.closed + duplicates.closedEdges + edges.closed;
@@ -318,7 +394,8 @@ export function narrativeCleanupOperation(): IntrospectionOperation {
           `${String(support.supported)} narrative(s) the records hold up, ` +
           `${String(support.withheld)} withheld for want of proof, ` +
           `${String(edges.closed)} stale summarization edge(s) closed; ` +
-          `backlog ${String(edges.backlog)} stale, ${String(edges.active)} active`,
+          `backlog ${String(edges.backlog)} stale, ${String(edges.active)} active; ` +
+          `${String(duplicates.candidates)} candidate record(s) nominated`,
       };
     },
   };
