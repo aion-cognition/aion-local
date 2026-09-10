@@ -96,7 +96,28 @@ export type NodeSupportReading = {
  * cites it; a single uncounted scope makes the whole answer unknown, because the missing count is
  * exactly where the support would have been recorded.
  */
-export function certifyNodeSupport(db: SqliteHandle, nodeId: string): NodeSupportReading {
+/**
+ * What the GRAPH says this node is, read from an authoritative label by the caller that has one.
+ *
+ * The records cannot answer it. A narrative the manifest never bound looks exactly like a claim
+ * nobody ever recorded evidence for, and the two want opposite verdicts: the claim is genuinely
+ * unsupported, and the narrative is a compressed account of history these tables were never asked
+ * about. Blanket-protecting every unbound id would stop the ordinary repair; the classification is
+ * what tells them apart, and it comes from whoever read the node.
+ *
+ * Omitted, the answer is the records' alone — which is right for a caller reasoning about an id
+ * rather than about a node it has just read.
+ */
+export type NodeClassification = {
+  /** The graph carries the `Narrative` label on this node. */
+  readonly narrative: boolean;
+};
+
+export function certifyNodeSupport(
+  db: SqliteHandle,
+  nodeId: string,
+  classification?: NodeClassification,
+): NodeSupportReading {
   const evidenceRevision: Record<string, string> = {};
   for (const scope of NODE_SUPPORT_SCOPES) {
     evidenceRevision[scope] =
@@ -137,6 +158,19 @@ export function certifyNodeSupport(db: SqliteHandle, nodeId: string): NodeSuppor
     return {
       support: 'unknown',
       reason: `a narrative revision the manifest cannot account for: ${narrative.reason}`,
+      evidenceRevision,
+    };
+  }
+  // A narrative the manifest binds nothing to. Its own family's records say nothing about it,
+  // which for a narrative is silence rather than absence: the sources it compressed may have been
+  // evicted, forgotten or never recorded here at all, and the account of them is the node itself.
+  // The generic scopes below can be established and empty over it by construction — nothing is
+  // extracted from a narrative and nothing is mentioned in one — so letting them settle the
+  // question would mature the one record of a session toward suppression on an empty census.
+  if (classification?.narrative === true) {
+    return {
+      support: 'unknown',
+      reason: 'a narrative the manifest binds no revision to; its history is not in these records',
       evidenceRevision,
     };
   }

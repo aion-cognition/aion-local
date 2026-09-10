@@ -45,6 +45,16 @@ export const MEMORY_LABEL = 'Memory';
 export const ENTITY_LABEL: NodeLabel = 'Entity';
 
 /**
+ * A compressed account of sources rather than an interpretation drawn from one.
+ *
+ * A repair reasoning about what the records can say for a node needs this: nothing is extracted
+ * from a narrative and nothing is mentioned in one, so every source-side census over it is
+ * established and empty by construction, and a reader that did not know what it was looking at
+ * would read that emptiness as the absence of support.
+ */
+export const NARRATIVE_LABEL: NodeLabel = 'Narrative';
+
+/**
  * What a source IS, as opposed to an interpretation drawn from one.
  *
  * These carry `Memory` like every other content-bearing node, because one vector index covers

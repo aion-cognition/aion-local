@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { certifyNodeSupport } from '../../evidence/application/node-support.js';
 import { GRAPH_NODE_SCOPE } from '../../evidence/domain/scopes.js';
+import { NARRATIVE_LABEL } from '../../infrastructure/graph/labels.js';
 import {
   findOrphanNodes,
   findOrphanRelinkTargets,
@@ -283,7 +284,12 @@ export async function readOrphanCensus(
   let unsupportedYoung = 0;
   let unknownSupport = 0;
   for (const orphan of disconnected) {
-    const reading = certifyNodeSupport(deps.db, orphan.id);
+    // What the node IS, from the labels the nomination read. A narrative the manifest never
+    // bound is silence rather than absence; an ordinary retained node with the same empty
+    // censuses is genuinely unsupported, and only the classification separates them.
+    const reading = certifyNodeSupport(deps.db, orphan.id, {
+      narrative: orphan.labels?.includes(NARRATIVE_LABEL) ?? false,
+    });
     const standing = proposalStanding(deps.db, orphan.id);
     // The node's own semantic state is a graph fact, and the mirror is the only record of what
     // the graph said and when. Without one there is no reading to qualify against: the node may

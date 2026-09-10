@@ -3,10 +3,12 @@ import { z } from 'zod';
 import { certifyNodeSupport } from '../../../evidence/application/node-support.js';
 import { GRAPH_NODE_SCOPE } from '../../../evidence/domain/scopes.js';
 import { upsertEdgeInTransaction } from '../../../infrastructure/graph/edges.js';
+import { NARRATIVE_LABEL } from '../../../infrastructure/graph/labels.js';
 import {
   currentRetainedNodesInTransaction,
   forgetOrphanNodeInTransaction,
   nodeAssociationHistoryInTransaction,
+  nodeLabelsInTransaction,
   type RelinkKind,
 } from '../../../infrastructure/graph/topology-queries.js';
 import { PublicationOperation } from '../../../infrastructure/publication/operation.js';
@@ -164,7 +166,15 @@ async function qualificationStands(
   ) {
     return 'policy_revision_moved';
   }
-  const reading = certifyNodeSupport(context.db, data.nodeId);
+  // Re-read under the guard rather than carried from the census: a node relabelled since would
+  // otherwise be suppressed as what it used to be.
+  const labels = (await nodeLabelsInTransaction(context.graph, [data.nodeId])).get(data.nodeId);
+  if (labels === undefined) {
+    return 'node_absent';
+  }
+  const reading = certifyNodeSupport(context.db, data.nodeId, {
+    narrative: labels.includes(NARRATIVE_LABEL),
+  });
   const standing = proposalStanding(context.db, data.nodeId);
   if (reading.support !== 'unsupported') {
     return 'support_moved';

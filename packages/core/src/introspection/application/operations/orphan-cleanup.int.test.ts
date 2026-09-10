@@ -392,6 +392,36 @@ describe('orphan cleanup', () => {
     expect(await forgottenAt('insight-race')).toBeUndefined();
   });
 
+  /**
+   * The classification the guard re-derives, not the one the scan carried. A narrative the
+   * manifest binds nothing to has every source-side census established and empty by construction
+   * — nothing is extracted from a narrative and nothing is mentioned in one — so a suppression
+   * that let those counts settle the question would take the one compressed record of a session
+   * on an empty census. The label is what says which kind of node the emptiness is about.
+   */
+  it('refuses to suppress an unbound narrative on the emptiness of scopes it could never fill', async () => {
+    await writeStampedNode(harness.driver, {
+      label: 'Narrative',
+      id: 'unbound-legacy-account',
+      now: NOW,
+      properties: { text: 'the preserved account of a session nothing else records' },
+    });
+    certifyEmpty('unbound-legacy-account', NOW);
+
+    const outcome = await coordinator.publish({
+      kind: 'topology_update',
+      operationId: orphanSuppressionOperationId('unbound-legacy-account', MATURE),
+      payload: {
+        nodeId: 'unbound-legacy-account',
+        policyRevision: 0,
+        forgetBefore: new Date(MATURE.getTime() - DAY_MS).toISOString(),
+      },
+    });
+
+    expect(outcome).toMatchObject({ status: 'deferred' });
+    expect(await forgottenAt('unbound-legacy-account')).toBeUndefined();
+  });
+
   it('does not forget a node that stopped being an orphan since the scan read it', async () => {
     // The write re-derives the orphan test, so an association landing between the scan and the
     // forget saves the node. Nothing reopens a forget, so the decision has to be made at the

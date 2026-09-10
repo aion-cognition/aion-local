@@ -21,9 +21,44 @@ import { toGraphDateTime, toGraphInteger, type Row } from './values.js';
 
 export type OrphanNode = {
   readonly id: string;
+  /**
+   * Every label the graph carries on it, which is what says what kind of node this is.
+   *
+   * Optional because a caller may build one of these from a nomination that carried no labels; a
+   * reader takes an absent list as a classification it does not have rather than as an empty one.
+   */
+  readonly labels?: readonly string[];
   /** When the substrate learned the node, which is what the forget threshold measures against. */
   readonly txFrom?: Date;
 };
+
+/**
+ * The labels a node carries, read inside the caller's transaction.
+ *
+ * A guarded re-derivation cannot take the classification from the scan that nominated the node:
+ * a node relabelled since would be judged as what it used to be. Absent from the map is a node
+ * the transaction could not find at all.
+ */
+const NODE_LABELS = [
+  'UNWIND $ids AS id',
+  `MATCH (n:${BASE_NODE_LABEL} { id: id })`,
+  'RETURN n.id AS id, labels(n) AS labels',
+].join('\n');
+
+export async function nodeLabelsInTransaction(
+  tx: GraphTransaction,
+  ids: readonly string[],
+): Promise<Map<string, readonly string[]>> {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) {
+    return new Map();
+  }
+  const rows = await tx.run(NODE_LABELS, { ids: unique }, (row: Row) => ({
+    id: row.id as string,
+    labels: Array.isArray(row.labels) ? row.labels.map((label) => String(label)) : [],
+  }));
+  return new Map(rows.map((row) => [row.id, row.labels] as const));
+}
 
 /**
  * The orphan test itself, shared by the scan and the forget so the two cannot drift apart.
@@ -76,7 +111,10 @@ const FIND_ORPHAN_NODES = [
   `MATCH (n:${MEMORY_LABEL})`,
   `WHERE ${ORPHAN_PREDICATE}`,
   `  AND ${AFTER_POSITION}`,
-  `RETURN n.id AS id, n.${BITEMPORAL_PROPERTIES.txFrom} AS tx_from`,
+  // The labels travel with the row because what a node IS decides which records can speak for
+  // it, and only the graph knows. A reader that had to ask again per node would pay a round trip
+  // to learn something this match already had in hand.
+  `RETURN n.id AS id, labels(n) AS labels, n.${BITEMPORAL_PROPERTIES.txFrom} AS tx_from`,
   `ORDER BY n.${BITEMPORAL_PROPERTIES.txFrom}, n.id`,
   'LIMIT $limit',
 ].join('\n');
@@ -85,6 +123,7 @@ function mapOrphanNode(row: Row): OrphanNode {
   const txFrom = row.tx_from;
   return {
     id: row.id as string,
+    labels: Array.isArray(row.labels) ? row.labels.map((label) => String(label)) : [],
     ...(txFrom instanceof Date ? { txFrom } : {}),
   };
 }
