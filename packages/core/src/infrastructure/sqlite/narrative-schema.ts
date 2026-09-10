@@ -89,6 +89,7 @@ export const NARRATIVE_SCHEMA_STATEMENTS: readonly string[] = [
     last_failure_reason TEXT,
     attempt_policy_json TEXT,
     claim_expires_at TEXT,
+    blocked_context_json TEXT,
     PRIMARY KEY (chunk_id, revision_no)
   )`,
   /**
@@ -127,6 +128,7 @@ export const NARRATIVE_SCHEMA_STATEMENTS: readonly string[] = [
     last_failure_reason TEXT,
     attempt_policy_json TEXT,
     claim_expires_at TEXT,
+    blocked_context_json TEXT,
     PRIMARY KEY (family_key, revision_no)
   )`,
   /**
@@ -222,6 +224,7 @@ export const NARRATIVE_COLUMN_ADDITIONS: readonly ColumnAddition[] = [
   { table: 'chunk_revisions', column: 'last_failure_reason', definition: 'TEXT' },
   { table: 'chunk_revisions', column: 'attempt_policy_json', definition: 'TEXT' },
   { table: 'chunk_revisions', column: 'claim_expires_at', definition: 'TEXT' },
+  { table: 'chunk_revisions', column: 'blocked_context_json', definition: 'TEXT' },
   {
     table: 'overview_revisions',
     column: 'attempts',
@@ -232,6 +235,7 @@ export const NARRATIVE_COLUMN_ADDITIONS: readonly ColumnAddition[] = [
   { table: 'overview_revisions', column: 'last_failure_reason', definition: 'TEXT' },
   { table: 'overview_revisions', column: 'attempt_policy_json', definition: 'TEXT' },
   { table: 'overview_revisions', column: 'claim_expires_at', definition: 'TEXT' },
+  { table: 'overview_revisions', column: 'blocked_context_json', definition: 'TEXT' },
 ];
 
 export const NARRATIVE_INDEX_STATEMENTS: readonly string[] = [

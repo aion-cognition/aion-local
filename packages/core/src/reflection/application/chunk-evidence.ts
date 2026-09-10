@@ -155,6 +155,29 @@ export function memberScopesCounted(db: SqliteHandle, sourceIds: readonly string
 }
 
 /**
+ * Whether the EXACT scopes a refusal could not count are counted now.
+ *
+ * Asking about the frozen members instead asks a narrower question than the refusal did: a
+ * requirement the transitive walk reached is not a member of the chunk, so a chunk blocked on an
+ * external requirement's uncounted census reads as cleared, publishes nothing, and blocks again on
+ * the next run. The set the attempt recorded is the set the wakeup has to ask about.
+ */
+export function scopesCounted(
+  db: SqliteHandle,
+  scopes: readonly { readonly sourceId: string; readonly scope: string }[],
+): boolean {
+  return scopes.every(
+    (entry) =>
+      readRelationScope(db, {
+        kind: 'relation_scope',
+        endpointId: entry.sourceId,
+        scope: entry.scope,
+        empty: false,
+      }).status === 'verified',
+  );
+}
+
+/**
  * One batched read for a set of sources, classified per source.
  *
  * The dependency set travels with it: what a revision fences on is what its own read observed, and

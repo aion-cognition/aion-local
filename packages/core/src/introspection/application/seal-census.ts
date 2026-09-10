@@ -8,8 +8,10 @@ import {
   heldRemainderMembership,
   inputFullRemainderGroups,
   publishedChunkHeads,
+  type HeadCursor,
 } from '../../infrastructure/sqlite/chunk-nomination.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { getLedgerEntry, markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import { coordinatorControl } from '../../infrastructure/sqlite/publication-coordinator-store.js';
 import { NEUTRAL_SEAL_DEMAND, type SealDemand } from '../domain/health.js';
 
@@ -89,16 +91,48 @@ function readPending(db: SqliteHandle): { pending: boolean | undefined; reason?:
 }
 
 /**
- * Published heads that no longer rest on what stands, counted to the same ceiling as the rest.
+ * Published heads that no longer rest on what stands, counted over a MOVING bounded page.
  *
  * Invalidation is a property of the head's own stored dependency set, so the count is taken through
  * the verifier the publication itself uses rather than from a marker a write had to remember to
  * stamp. A head whose set will not parse is left out of the count: unreadable is not stale, and the
  * pass that would rewrite it declines it on the same reading.
+ *
+ * The page moves because a fixed one cannot discover anything. Verifying the first four heads every
+ * tick means five current heads in front of a stale sixth give relevance zero for ever, and the
+ * cursor the RUN advances is no help: the run is what relevance was supposed to select. So the
+ * collector carries its own position, advances it on every observation, and wraps at the end. It is
+ * a floor either way — what it reports is what this page found, not what the substrate holds.
  */
+const CENSUS_HEAD_CURSOR_KEY = 'narrative-seal:census-head-cursor';
+
+function readCensusCursor(db: SqliteHandle): HeadCursor | undefined {
+  const summary = getLedgerEntry(db, CENSUS_HEAD_CURSOR_KEY)?.summary;
+  if (typeof summary !== 'object' || summary === null) {
+    return undefined;
+  }
+  const { captureKey, chunkId } = summary as { captureKey?: unknown; chunkId?: unknown };
+  return typeof captureKey === 'string' && typeof chunkId === 'string' && chunkId !== ''
+    ? { captureKey, chunkId }
+    : undefined;
+}
+
 function invalidatedHeadCount(db: SqliteHandle, ceiling: number): number {
+  const resume = readCensusCursor(db);
+  let heads = publishedChunkHeads(db, ceiling, resume);
+  if (heads.length === 0 && resume !== undefined) {
+    heads = publishedChunkHeads(db, ceiling);
+  }
+  const last = heads.at(-1);
+  markLedgerApplied(
+    db,
+    CENSUS_HEAD_CURSOR_KEY,
+    heads.length < ceiling || last?.captureKey == null
+      ? {}
+      : { captureKey: last.captureKey, chunkId: last.chunkId },
+  );
   let stale = 0;
-  for (const head of publishedChunkHeads(db, ceiling)) {
+  for (const head of heads) {
     if (head.evidenceRevisionJson === null) {
       continue;
     }

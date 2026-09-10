@@ -246,6 +246,10 @@ export async function publishChunkNarrative(
       chunkId,
       allocation.revisionNo,
       plan.reason,
+      {
+        at: options.now.toISOString(),
+        uncountedScopes: [...members.unprovedScopes, ...transition.unprovedScopes],
+      },
     );
     recordAttemptPolicy(deps.db, CHUNK_REVISION_FAMILY, chunkId, allocation.revisionNo, {
       renderedInputAllowance: policy.renderedInputAllowance,
@@ -288,6 +292,10 @@ export async function publishChunkNarrative(
         chunkId,
         allocation.revisionNo,
         err.reason,
+        {
+          at: options.now.toISOString(),
+          uncountedScopes: [...members.unprovedScopes, ...transition.unprovedScopes],
+        },
       );
       recordAttemptPolicy(deps.db, CHUNK_REVISION_FAMILY, chunkId, allocation.revisionNo, {
         renderedInputAllowance: policy.renderedInputAllowance,

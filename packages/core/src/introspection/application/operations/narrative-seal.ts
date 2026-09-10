@@ -1,20 +1,16 @@
+import { reconsiderBlockedAttempts } from './seal-reconsider.js';
 import {
-  blockedAttempts,
   dueChunkGroups,
   dueRemainderGroups,
-  reconsiderableBlockedAttempts,
-  type BlockedAttempt,
   type RemainderCursor,
 } from '../../../infrastructure/sqlite/chunk-nomination.js';
 import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import {
-  clearRevisionBlock,
   deferRevisionAttempt,
   readNarrativeRevision,
   CHUNK_REVISION_FAMILY,
 } from '../../../infrastructure/sqlite/narrative-revisions.js';
 import { getLedgerEntry, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
-import { memberScopesCounted } from '../../../reflection/application/chunk-evidence.js';
 import {
   publishChunkNarrative,
   sealSessionChunk,
@@ -22,9 +18,7 @@ import {
 } from '../../../reflection/application/chunk-narrative.js';
 import { CHUNK_MAX_MEMBERS } from '../../../reflection/domain/chunk-boundary.js';
 import {
-  CENSUS_BLOCK_REASON,
   STANDING_HEAD_REASON,
-  SUPPRESSION_BLOCK_REASONS,
   SYNTHESIS_ATTEMPTED_REASONS,
 } from '../../../reflection/domain/chunk-outcome.js';
 import { narrativeSealRelevance } from '../../domain/narrative-seal.js';
@@ -329,39 +323,6 @@ function detailOf(
   );
 }
 
-/**
- * Clears the blocks whose recorded prerequisite no longer holds.
- *
- * Each reason is rechecked against the record its own prerequisite lives in. A suppression block
- * clears on a member that was proved forgotten and is not now; a census block clears when the
- * scopes it could not count are counted. Sharing one test between them would have done both
- * wrongs at once — leaving a censused chunk blocked forever, and offering a budget refusal that
- * merely shares a reason word with a suppression as though a forget had cleared.
- *
- * Clearing is not attempting: the revision goes back into the ordinary enumeration and takes its
- * turn there by capture position, so a reconsidered attempt cannot jump the older backlog either.
- */
-function reconsiderBlockedAttempts(ctx: OperationContext, limit: number): number {
-  const suppression = reconsiderableBlockedAttempts(ctx.db, {
-    reasons: SUPPRESSION_BLOCK_REASONS,
-    limit,
-  });
-  const census = blockedAttempts(ctx.db, { reasons: [CENSUS_BLOCK_REASON], limit }).filter(
-    (attempt: BlockedAttempt) => memberScopesCounted(ctx.db, attempt.members),
-  );
-  let cleared = 0;
-  for (const attempt of [...suppression, ...census]) {
-    if (clearRevisionBlock(ctx.db, CHUNK_REVISION_FAMILY, attempt.chunkId, attempt.revisionNo)) {
-      cleared += 1;
-      ctx.logger.info(
-        { chunkId: attempt.chunkId, revisionNo: attempt.revisionNo, reason: attempt.reason },
-        'narrative seal reconsidered a blocked attempt whose prerequisite moved',
-      );
-    }
-  }
-  return cleared;
-}
-
 function noop(detail: string): OperationOutcome {
   return { status: 'noop', itemsProcessed: 0, itemsAffected: 0, detail };
 }
@@ -423,7 +384,7 @@ async function runSeal(ctx: OperationContext, scales: SealScales): Promise<Opera
   // A block clears on its recorded prerequisite, re-derived, and never on the clock. Done before
   // nomination so an attempt whose members are readable again is in the same enumeration as
   // everything else that is due, rather than waiting a run for the cursor to come round.
-  const reconsidered = reconsiderBlockedAttempts(ctx, scales.batch);
+  const reconsidered = reconsiderBlockedAttempts(ctx, scales.batch, policyOf(scales));
 
   const seal = await sealDueTails(ctx, deps, scales);
   let tally: RunTally = {

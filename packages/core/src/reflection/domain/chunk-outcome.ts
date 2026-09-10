@@ -66,3 +66,16 @@ export const SUPPRESSION_BLOCK_REASONS: readonly string[] = [
  * the lifecycle's own union: renaming the reason there is a compile error here.
  */
 export const CENSUS_BLOCK_REASON: ChunkBlockReason = 'member_scope_census_missing';
+
+/**
+ * The blocks whose prerequisite is a BOUND rather than a state or a count.
+ *
+ * Both are refusals about how much an attempt was allowed to spend, and both clear on one thing:
+ * the bounds in force differing from the bounds the refusal recorded. `no_admissible_input` is in
+ * this set and in the suppression one, because the reason is shared and the cause is not — each
+ * test asks its own question of the records, and an attempt neither can answer stays blocked.
+ */
+export const POLICY_BLOCK_REASONS: readonly ChunkBlockReason[] = [
+  'no_admissible_input',
+  'member_over_resolver_budget',
+];

@@ -1,5 +1,14 @@
 import type { SqliteHandle } from './database.js';
 
+// The blocked-attempt reading moved out at this file's ceiling and is re-exported here, because
+// what a refusal recorded is asked of nomination by every caller that asks what is due.
+export {
+  blockedAttempts,
+  reconsiderableBlockedAttempts,
+  suppressionCleared,
+  type BlockedAttempt,
+} from './chunk-blocks.js';
+
 /**
  * What durable state says a seal run has to do, and what it is not allowed to count.
  *
@@ -255,105 +264,6 @@ export function heldRemainderMembership(db: SqliteHandle): HeldMembership {
     sources: row.sources,
     oldestAt: row.oldest_at ?? undefined,
   };
-}
-
-export type BlockedAttempt = {
-  readonly chunkId: string;
-  readonly revisionNo: number;
-  readonly reason: string;
-  readonly allocatedAt: string;
-  /** The chunk's frozen membership, which is what a prerequisite test is asked about. */
-  readonly members: readonly string[];
-};
-
-/**
- * Blocked attempts of the named reasons, with what a prerequisite test needs to decide them.
- *
- * The reason alone cannot establish a CAUSE. `no_admissible_input` is what a chunk answers when
- * every member is suppressed AND what it answers when no member fits the allowance, so a rule
- * that read the word as "suppression" would offer a budget refusal as though a forget had
- * cleared. This read therefore decides nothing: it returns the attempt, the moment it was taken,
- * and the membership, and the caller asks the records what actually happened.
- */
-export function blockedAttempts(
-  db: SqliteHandle,
-  input: { readonly reasons: readonly string[]; readonly limit: number },
-): readonly BlockedAttempt[] {
-  if (input.limit <= 0 || input.reasons.length === 0) {
-    return [];
-  }
-  const placeholders = input.reasons.map(() => '?').join(', ');
-  const rows = db
-    .prepare(
-      `SELECT b.chunk_id, b.revision_no, b.blocked_reason, b.allocated_at
-         FROM chunk_revisions b
-        WHERE b.state = 'allocated' AND b.blocked_reason IN (${placeholders})
-        ORDER BY b.chunk_id, b.revision_no
-        LIMIT ?`,
-    )
-    .all(...input.reasons, input.limit) as {
-    chunk_id: string;
-    revision_no: number;
-    blocked_reason: string;
-    allocated_at: string;
-  }[];
-  const members = db.prepare(
-    'SELECT source_id FROM chunk_members WHERE chunk_id = ? ORDER BY member_ordinal',
-  );
-  return rows.map((row) => ({
-    chunkId: row.chunk_id,
-    revisionNo: row.revision_no,
-    reason: row.blocked_reason,
-    allocatedAt: row.allocated_at,
-    members: (members.all(row.chunk_id) as { source_id: string }[]).map((m) => m.source_id),
-  }));
-}
-
-/**
- * Whether a member this attempt could once not read was suppressed THEN and is not now.
- *
- * The transition, not the state: a chunk blocked while a member was forgotten becomes runnable
- * when that member is restored, and a chunk that was never blocked over a suppression has no such
- * transition to find however many members are readable today. Both readings are of COMMITTED
- * states — a version whose operation the coordinator acknowledged — so a forget or a restore that
- * is prepared and unsettled moves nothing.
- */
-export function suppressionCleared(db: SqliteHandle, attempt: BlockedAttempt): boolean {
-  const newest = db.prepare(
-    `SELECT v.state_kind FROM source_state_versions v
-       JOIN publication_intents i ON i.operation_id = v.operation_id AND i.state = 'acknowledged'
-      WHERE v.source_id = ? AND v.known_from IS NOT NULL
-      ORDER BY v.version DESC LIMIT 1`,
-  );
-  const wasForgotten = db.prepare(
-    `SELECT 1 AS found FROM source_state_versions v
-       JOIN publication_intents i ON i.operation_id = v.operation_id AND i.state = 'acknowledged'
-      WHERE v.source_id = ? AND v.known_from IS NOT NULL
-        AND v.state_kind = 'forgotten' AND v.known_from <= ?
-      LIMIT 1`,
-  );
-  return attempt.members.some((sourceId) => {
-    if (wasForgotten.get(sourceId, attempt.allocatedAt) === undefined) {
-      return false;
-    }
-    const state = newest.get(sourceId) as { state_kind: string } | undefined;
-    return state?.state_kind !== 'forgotten';
-  });
-}
-
-/**
- * Blocked attempts whose recorded SUPPRESSION prerequisite has actually cleared.
- *
- * The reason names a class; the records name the cause. An attempt is offered again only where a
- * member it could not read was suppressed at the time it was taken and is not suppressed now —
- * so a budget refusal that happens to share the reason word is not offered, and a suppression
- * that is still standing is not either.
- */
-export function reconsiderableBlockedAttempts(
-  db: SqliteHandle,
-  input: { readonly reasons: readonly string[]; readonly limit: number },
-): readonly BlockedAttempt[] {
-  return blockedAttempts(db, input).filter((attempt) => suppressionCleared(db, attempt));
 }
 
 /**

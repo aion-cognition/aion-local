@@ -453,33 +453,11 @@ export function deferRevisionAttempt(
  * clearing it takes a changed prerequisite or a recorded reassessment of the policy the
  * attempt ran under, never the passage of time.
  */
-export function blockRevisionAttempt(
-  db: SqliteHandle,
-  family: RevisionFamily,
-  familyKey: string,
-  revisionNo: number,
-  reason: string,
-): boolean {
-  const result = db
-    .prepare(
-      `UPDATE ${family.revisionTable} SET blocked_reason = ?
-       WHERE ${family.keyColumn} = ? AND revision_no = ? AND state = 'allocated'`,
-    )
-    .run(reason, familyKey, revisionNo);
-  return result.changes === 1;
-}
 
-export function clearRevisionBlock(
-  db: SqliteHandle,
-  family: RevisionFamily,
-  familyKey: string,
-  revisionNo: number,
-): boolean {
-  const result = db
-    .prepare(
-      `UPDATE ${family.revisionTable} SET blocked_reason = NULL
-       WHERE ${family.keyColumn} = ? AND revision_no = ? AND blocked_reason IS NOT NULL`,
-    )
-    .run(familyKey, revisionNo);
-  return result.changes === 1;
-}
+// The block lifecycle moved out at this file's ceiling; every caller reads it here still.
+export {
+  blockRevisionAttempt,
+  clearRevisionBlock,
+  readBlockContext,
+  type RevisionBlockContext,
+} from './narrative-blocks.js';
