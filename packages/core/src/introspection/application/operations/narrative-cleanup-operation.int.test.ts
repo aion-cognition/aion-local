@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { narrativeCleanupOperation } from './narrative-cleanup-operation.js';
+import type { EvidenceResolver } from '../../../evidence/application/resolver.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import {
@@ -36,6 +37,8 @@ import {
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger } from '../../../infrastructure/logging/logger.js';
 import { refusingProvider } from '../../../infrastructure/providers/test-support/refusing-provider.fixture.js';
+import { PublicationCoordinator } from '../../../infrastructure/publication/coordinator.js';
+import type { PublicationBoundary } from '../../../infrastructure/publication/types.js';
 import { sealChunk } from '../../../infrastructure/sqlite/chunk-manifest.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import {
@@ -44,6 +47,7 @@ import {
   publishNarrativeRevision,
 } from '../../../infrastructure/sqlite/narrative-revisions.js';
 import { recordSourceRecord } from '../../../infrastructure/sqlite/source-identity.js';
+import { INSTALLED_PUBLICATION_HANDLERS } from '../../../reflection/application/installed-publications.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
 
@@ -57,6 +61,9 @@ import { healthFixture } from '../../domain/test-support/health.fixture.js';
 let harness: Neo4jHarness;
 let db: SqliteHandle;
 let dataDir: string;
+let coordinator: PublicationCoordinator;
+/** The boundary this run interrupts once, for the crash-recovery case. */
+let failAt: PublicationBoundary | undefined;
 
 const NOW = new Date('2026-08-29T12:00:00.000Z');
 
@@ -76,6 +83,21 @@ beforeAll(async () => {
   dataDir = mkdtempSync(join(tmpdir(), 'aion-narrative-cleanup-int-'));
   db = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
   await runGraphMigrations(harness.driver, db, { embedDimension: DEFAULTS.models.embedDimension });
+  // The real coordinator, over the whole installed set: the repair is a semantic write and the
+  // guard is what serializes it against the publication path it repairs after.
+  coordinator = new PublicationCoordinator({
+    driver: harness.driver,
+    db,
+    logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
+    handlers: [...INSTALLED_PUBLICATION_HANDLERS],
+    boundary: ({ boundary }) => {
+      if (boundary === failAt) {
+        failAt = undefined;
+        throw new Error(`interrupted at ${boundary}`);
+      }
+    },
+  });
+  await coordinator.initialize();
 }, 300_000);
 
 afterAll(async () => {
@@ -234,6 +256,9 @@ function contextFor(narrativeEdgeRepairBatch = 50): OperationContext {
   return {
     driver: harness.driver,
     db,
+    // The repair is a semantic write, so the sweep publishes it: what it is handed is the same
+    // coordinator every other writer on this substrate reaches.
+    narratives: { publications: coordinator, resolver: {} as EvidenceResolver },
     config: configWith(narrativeEdgeRepairBatch),
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     provider: refusingProvider,
@@ -476,4 +501,58 @@ describe('what a bounded run says it examined', () => {
     expect(outcome.detail).toContain('2 stale edge(s)');
     expect(outcome.detail).toContain(`backlog ${String(before.stale)} stale`);
   }, 120_000);
+});
+
+/**
+ * The two endpoints of every close are checked against the manifest, and the repair is settled by
+ * a receipt like any other publication.
+ */
+describe('the boundary the repair is published under', () => {
+  it('leaves a node carrying this family key that the records bind elsewhere', async () => {
+    await seedSession('impostor-session');
+    const family = sealOneSourceChunk('impostor-session', 'impostor-s1');
+    const stranger = sealOneSourceChunk('impostor-session', 'impostor-s2');
+    const head = publishRevision(family);
+    const strangerNode = publishRevision(stranger);
+    await seedChunkRevisionNode(head, 'impostor-session', family, 1);
+    // The graph says this node belongs to the family; the manifest says it is another chunk's
+    // acknowledged revision, and the manifest is what owns the question.
+    await seedChunkRevisionNode(strangerNode, 'impostor-session', family, 2);
+
+    await narrativeCleanupOperation().run(contextFor());
+
+    expect(
+      (await nodeProperties(harness.driver, strangerNode))[BITEMPORAL_PROPERTIES.validUntil],
+    ).toBeUndefined();
+    expect(
+      (await nodeProperties(harness.driver, head))[BITEMPORAL_PROPERTIES.validUntil],
+    ).toBeUndefined();
+  });
+
+  it('finishes a repair interrupted before its acknowledgment, exactly once', async () => {
+    await seedSession('interrupted-repair-session');
+    const family = sealOneSourceChunk('interrupted-repair-session', 'interrupted-s1');
+    const first = publishRevision(family);
+    const second = publishRevision(family);
+    await seedChunkRevisionNode(first, 'interrupted-repair-session', family, 1);
+    await seedChunkRevisionNode(second, 'interrupted-repair-session', family, 2);
+
+    failAt = 'before_ack';
+    // The sweep does not fail the tick over one family it could not settle: the family stays as
+    // it was and the run reports it, which is what leaves the pending operation to be recovered.
+    await narrativeCleanupOperation().run(contextFor());
+    expect(coordinator.hasPending()).toBe(true);
+
+    const recovered = await coordinator.recover();
+    expect(recovered?.status).toBe('acknowledged');
+    expect(coordinator.hasPending()).toBe(false);
+    expect(
+      (await nodeProperties(harness.driver, first))[BITEMPORAL_PROPERTIES.validUntil],
+    ).toBeDefined();
+    // The head it was closed against is untouched, and a second recovery adds nothing.
+    expect(
+      (await nodeProperties(harness.driver, second))[BITEMPORAL_PROPERTIES.validUntil],
+    ).toBeUndefined();
+    expect(await coordinator.recover()).toBeUndefined();
+  });
 });

@@ -20,6 +20,12 @@ export const PUBLICATION_KINDS = [
   'projection_rebuild',
   'episode_eviction',
   'topology_update',
+  // A narrative family whose graph currency disagrees with the manifest that owns it: the
+  // acknowledged head is right and an earlier revision's node is still standing beside it,
+  // which a crash between a publication's graph write and its supersession leaves behind.
+  // Its own kind rather than a variant of `narrative_publish`, because it allocates no
+  // revision and writes no output: it makes the graph agree with a decision already taken.
+  'narrative_family_repair',
 ] as const;
 export type PublicationKind = (typeof PUBLICATION_KINDS)[number];
 

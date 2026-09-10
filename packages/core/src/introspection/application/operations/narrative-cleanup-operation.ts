@@ -1,26 +1,24 @@
 import type { Driver } from 'neo4j-driver';
 
+import type { NarrativeMaintenanceDeps } from './narrative-seal.js';
 import { certifyNarrativeSupport } from '../../../evidence/application/narrative-support.js';
-import { supersedeInTransaction } from '../../../infrastructure/graph/bitemporal.js';
-import { inWriteTransaction } from '../../../infrastructure/graph/connection.js';
-import { lockNodeInTransaction } from '../../../infrastructure/graph/locks.js';
 import {
   findDuplicateChunkFamilies,
   findDuplicateNarrativeSessions,
   findOrphanedNarratives,
-  readOpenChunkRevisionsInTransaction,
 } from '../../../infrastructure/graph/narrative-cleanup-queries.js';
 import {
   closeStaleNarrativeEdges,
   countNarrativeEdges,
 } from '../../../infrastructure/graph/narrative-edge-queries.js';
-import { narrativeRevisionBinding } from '../../../infrastructure/sqlite/chunk-manifest.js';
+import { readCurrentCoverageContract } from '../../../infrastructure/sqlite/coverage-contract.js';
 import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
-import {
-  CHUNK_REVISION_FAMILY,
-  readPublishedRevision,
-} from '../../../infrastructure/sqlite/narrative-revisions.js';
-import type { IntrospectionOperation, OperationOutcome } from '../../domain/operation.js';
+import { narrativeFamilyRepairOperationId } from '../../../reflection/application/narrative-repair.js';
+import type {
+  IntrospectionOperation,
+  OperationContext,
+  OperationOutcome,
+} from '../../domain/operation.js';
 
 /**
  * The narrative pathologies that need no model call to repair, and the two that turned out not to
@@ -49,7 +47,6 @@ import type { IntrospectionOperation, OperationOutcome } from '../../domain/oper
 export const NARRATIVE_CLEANUP_OPERATION = 'narrative_cleanup';
 
 export const NARRATIVE_DUPLICATE_METHOD = 'introspection_narrative_duplicate';
-const NARRATIVE_DUPLICATE_SIGNALS = ['duplicate_narrative'];
 
 /**
  * Standing relevance, like `memory_decay`: neither pathology this operation repairs has a
@@ -60,9 +57,6 @@ const NARRATIVE_DUPLICATE_SIGNALS = ['duplicate_narrative'];
  * cannot move, and score every run against a metric it never had a hand in.
  */
 export const NARRATIVE_CLEANUP_STANDING_RELEVANCE = 0.15;
-
-/** States in which a revision node is an acknowledged version rather than an attempt in flight. */
-const ACKNOWLEDGED_STATES = new Set(['published', 'closed']);
 
 /**
  * Revision records one run reads across every family it visits.
@@ -87,20 +81,26 @@ type DuplicateReport = {
 /**
  * Closes the extra acknowledged revisions of one chunk against the head the manifest names.
  *
- * Three things this deliberately does not do. It does not choose a keeper: the published head is
- * read inside the write, so a publication landing between the scan and the close moves the keeper
- * rather than losing to it. It does not touch a revision the manifest still calls allocated or
- * prepared: that is an attempt in flight, and it is recovered by its own receipt rather than
- * suppressed as unwanted. And it does not act at all where no revision of the family has been
- * acknowledged, because then there is no keeper to close anything against.
+ * The scan nominates and the coordinator decides. What the graph shows is a claim about a moment
+ * that has passed: the head this close is taken against is a fact another writer can move, so the
+ * repair is published like every other semantic write, rechecked under the guard, and recorded
+ * with a receipt that makes an interrupted one recoverable rather than repeated.
+ *
+ * Three things it still does not do. It does not choose a keeper: the acknowledged head is read
+ * inside the guard. It does not touch a revision the manifest calls allocated or prepared: that
+ * is an attempt in flight, recovered by its own receipt. And it does not act where nothing of the
+ * family has been acknowledged, because then there is no keeper to close anything against.
  */
 async function closeExtraRevisions(
-  driver: Driver,
-  db: SqliteHandle,
+  ctx: OperationContext,
+  publications: NarrativeMaintenanceDeps['publications'],
   limit: number,
-  now: Date,
 ): Promise<{ families: number; examined: number; closed: number; unresolved: number }> {
-  const families = await findDuplicateChunkFamilies(driver, limit);
+  const families = await findDuplicateChunkFamilies(ctx.driver, limit);
+  const epoch = readCurrentCoverageContract(ctx.db)?.epoch;
+  if (epoch === undefined) {
+    return { families: families.length, examined: 0, closed: 0, unresolved: families.length };
+  }
   let examined = 0;
   let closed = 0;
   let unresolved = 0;
@@ -111,47 +111,37 @@ async function closeExtraRevisions(
       // this run does not reach are still there for the next.
       break;
     }
-    const outcome = await inWriteTransaction(driver, async (tx) => {
-      const head = readPublishedRevision(db, CHUNK_REVISION_FAMILY, family.chunkId);
-      if (head === undefined) {
-        return { examined: 0, closed: 0, resolved: false };
+    const outcome = await publications
+      .publish({
+        kind: 'narrative_family_repair',
+        operationId: narrativeFamilyRepairOperationId(family.chunkId, ctx.now),
+        payload: {
+          chunkId: family.chunkId,
+          coverageEpoch: epoch,
+          observedAt: ctx.now.toISOString(),
+        },
+      })
+      .catch((err: unknown) => {
+        ctx.logger.warn(
+          { err, chunkId: family.chunkId },
+          'narrative family repair could not publish; the family stays as it is',
+        );
+        return undefined;
+      });
+    // The records this run READ, which is the reading the repair took under the guard rather than
+    // the one the scan took outside it: the second is exactly what could have changed.
+    examined += family.versions.length;
+    if (outcome?.status !== 'acknowledged') {
+      if (outcome !== undefined) {
+        ctx.logger.info(
+          { chunkId: family.chunkId, status: outcome.status, reason: outcome.reason },
+          'narrative family repair did not land',
+        );
       }
-      await lockNodeInTransaction(tx, head.nodeId, now);
-      const versions = (await readOpenChunkRevisionsInTransaction(tx, family.chunkId)).slice(
-        0,
-        REVISION_SCAN_BUDGET - examined,
-      );
-      if (!versions.some((version) => version.id === head.nodeId)) {
-        // The head itself is not standing, or is past this run's remaining budget. Something
-        // other than this sweep is mid-flight on the family, and closing the rest against an
-        // absent keeper would leave the chunk with no current narrative at all.
-        return { examined: versions.length, closed: 0, resolved: false };
-      }
-      let here = 0;
-      for (const version of versions) {
-        if (version.id === head.nodeId) {
-          continue;
-        }
-        const binding = narrativeRevisionBinding(db, version.id);
-        if (binding === undefined || !ACKNOWLEDGED_STATES.has(binding.state)) {
-          continue;
-        }
-        await supersedeInTransaction(tx, {
-          oldId: version.id,
-          newId: head.nodeId,
-          now,
-          signals: NARRATIVE_DUPLICATE_SIGNALS,
-          provenance: [NARRATIVE_DUPLICATE_METHOD],
-        });
-        here += 1;
-      }
-      return { examined: versions.length, closed: here, resolved: true };
-    });
-    examined += outcome.examined;
-    closed += outcome.closed;
-    if (!outcome.resolved) {
       unresolved += 1;
+      continue;
     }
+    closed += (outcome.result as { closed?: number }).closed ?? 0;
   }
   return { families: families.length, examined, closed, unresolved };
 }
@@ -214,7 +204,10 @@ export function narrativeCleanupOperation(): IntrospectionOperation {
     relevance: () => NARRATIVE_CLEANUP_STANDING_RELEVANCE,
     run: async (ctx): Promise<OperationOutcome> => {
       const batch = ctx.config.maintenance.narrativeCleanupBatch;
-      const chunks = await closeExtraRevisions(ctx.driver, ctx.db, batch, ctx.now);
+      const chunks =
+        ctx.narratives === undefined
+          ? { families: 0, examined: 0, closed: 0, unresolved: 0 }
+          : await closeExtraRevisions(ctx, ctx.narratives.publications, batch);
       // The legacy family is counted and left alone. Its keeper cannot be read from a manifest
       // that never bound it, and the signed rule is explicit that a winner is not picked by
       // coverage, prose or graph timestamp; reconciling the preserved coverage and citation
