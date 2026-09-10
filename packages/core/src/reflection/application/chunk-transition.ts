@@ -1,12 +1,13 @@
 import {
   ChunkDependencySet,
   incomingStatementScopes,
+  relationScopeReadings,
   resolveChunkMembers,
   type ResolvedMembers,
   type UnprovedScope,
 } from './chunk-evidence.js';
 import type { EvidenceResolver } from '../../evidence/application/resolver.js';
-import type { DurableRole } from '../../evidence/domain/scopes.js';
+import { DURABLE_ROLES, nodeRoleScope, type DurableRole } from '../../evidence/domain/scopes.js';
 import type { EvidenceDependency } from '../../infrastructure/publication/preconditions.js';
 import {
   committedIncidenceForNode,
@@ -121,6 +122,12 @@ function currentStatementSources(
   return currentStatementFacts(db, endpointId, kinds).map((fact) => fact.fromId);
 }
 
+/** One incidence row that carries this endpoint now, named by the census that counts it. */
+type IncidenceFact = {
+  readonly sourceId: string;
+  readonly role: string;
+};
+
 /**
  * One endpoint's answer, with the records it was taken from.
  *
@@ -129,27 +136,77 @@ function currentStatementSources(
  * later reference token cannot certify the earlier selection any more than a later token could
  * certify a negative lookup. So the selected link versions and incidence rows travel with the
  * answer, and the boundary that follows asks the records whether they still say this.
+ *
+ * The incidence reader returns closed rows for the consumer to interpret, and interpreting them is
+ * this reader's job: a row that has lost currency is a statement about what USED to carry the
+ * endpoint. It is dropped from the selection and kept in the fingerprint, because a row going
+ * closed is exactly the move the boundary has to notice.
  */
 type EndpointSelection = {
   readonly sources: readonly string[];
+  /** The rows the answer rests on, current ones only. */
+  readonly incidence: readonly IncidenceFact[];
   readonly facts: string;
 };
 
 function sourcesBehind(db: SqliteHandle, endpointId: string): EndpointSelection {
   const carrying = committedIncidenceForNode(db, endpointId);
+  const current = carrying.filter((row) => row.currency === 'open');
   // The same committed reading the standing set uses, so one statement is not evidence here and
   // absent there. A statement whose operation nobody acknowledged is durable and invisible.
   const stating = currentStatementFacts(db, endpointId, STANDING_AND_DERIVATION);
-  const incidence = carrying.map((row) => [row.sourceId, row.role, row.linkId, row.linkVersion]);
+  const incidence = carrying.map((row) => [
+    row.sourceId,
+    row.role,
+    row.currency,
+    row.linkId,
+    row.linkVersion,
+  ]);
   const statements = stating.map((fact) => [fact.linkId, fact.fromId, fact.version]);
   return {
     sources: [
-      ...new Set([...carrying.map((row) => row.sourceId), ...stating.map((fact) => fact.fromId)]),
+      ...new Set([...current.map((row) => row.sourceId), ...stating.map((fact) => fact.fromId)]),
     ],
+    incidence: current.map((row) => ({ sourceId: row.sourceId, role: row.role })),
     facts: hashContent([
       [...incidence].sort((left, right) => String(left).localeCompare(String(right))),
       [...statements].sort((left, right) => String(left).localeCompare(String(right))),
     ]),
+  };
+}
+
+const DURABLE_ROLE_SET = new Set<string>(DURABLE_ROLES);
+
+/**
+ * The census scopes standing behind the incidence rows this endpoint's answer rests on.
+ *
+ * A local comparison dies with the call that made it, and the retirement that matters lands after
+ * it: the synthesis and the publication both run on a selection nothing is fencing. So each
+ * selected row contributes the scope its census is filed under, which the publication's own
+ * equality check reads back. A role the registry does not name is a fact whose census cannot be
+ * named either, so it is reported uncounted and withholds rather than passing unbound.
+ */
+type IncidenceBinding = {
+  readonly dependencies: readonly EvidenceDependency[];
+  readonly unproved: readonly UnprovedScope[];
+};
+
+function selectedIncidenceScopes(
+  db: SqliteHandle,
+  endpointId: string,
+  incidence: readonly IncidenceFact[],
+): IncidenceBinding {
+  const roles = [...new Set(incidence.map((row) => row.role))];
+  const named = roles.filter((role): role is DurableRole => DURABLE_ROLE_SET.has(role));
+  const reading = relationScopeReadings(db, endpointId, named.map(nodeRoleScope));
+  return {
+    dependencies: reading.dependencies,
+    unproved: [
+      ...reading.unproved,
+      ...roles
+        .filter((role) => !DURABLE_ROLE_SET.has(role))
+        .map((role) => ({ sourceId: endpointId, scope: `sqlite:${role}` })),
+    ],
   };
 }
 
@@ -298,6 +355,15 @@ export async function chunkTransitionEvidence(
       unresolved.push(endpointId);
       continue;
     }
+    // Only the rows that put an outsider in the required set: a member is read as a member, and
+    // its incidence is not what this requirement stands on.
+    const incidence = selectedIncidenceScopes(
+      deps.db,
+      endpointId,
+      selection.incidence.filter((row) => !members.has(row.sourceId)),
+    );
+    bound.addAll(incidence.dependencies);
+    unprovedScopes.push(...incidence.unproved);
     selected.set(endpointId, selection.facts);
     for (const sourceId of behind) {
       required.add(sourceId);

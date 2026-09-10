@@ -122,10 +122,29 @@ export function incomingStatementScopes(
   sourceId: string,
   roles: readonly DurableRole[] = INCOMING_STATEMENT_ROLES,
 ): IncomingScopeReading {
+  return relationScopeReadings(
+    db,
+    sourceId,
+    roles.map((role) => durableRoleScope(role, 'in')),
+  );
+}
+
+/**
+ * One endpoint's named populations, bound where a census has counted them.
+ *
+ * The scope names belong to the caller because direction is a registry question rather than a
+ * fixed one: an incoming statement is counted at `:in`, a claim's own extraction at `:out`. Every
+ * other term is the same, so the readers stay one predicate and one answer about whether a
+ * population is proved.
+ */
+export function relationScopeReadings(
+  db: SqliteHandle,
+  sourceId: string,
+  scopes: readonly string[],
+): IncomingScopeReading {
   const dependencies: EvidenceDependency[] = [];
   const unproved: UnprovedScope[] = [];
-  for (const role of roles) {
-    const scope = durableRoleScope(role, 'in');
+  for (const scope of scopes) {
     const reading = readRelationScope(db, {
       kind: 'relation_scope',
       endpointId: sourceId,
