@@ -109,11 +109,16 @@ describe('the chunk renderer', () => {
       ],
     };
 
+    /**
+     * 250 units buys two whole 100-unit parts, the two separators that join three ranges, and a
+     * 48-unit prefix of the third. The separator is charged before the range it joins, so the
+     * submission never spends a unit the selection had already committed.
+     */
     it('selects whole parts in their recorded order, then a prefix of the first that does not fit', () => {
       expect(selectSubmittedRanges(parts, 250)).toEqual([
         { address: 'part:s1:turn:0', start: 0, end: 100 },
         { address: 'part:s1:turn:1', start: 0, end: 100 },
-        { address: 'part:s1:turn:2', start: 0, end: 49 },
+        { address: 'part:s1:turn:2', start: 0, end: 48 },
       ]);
     });
 

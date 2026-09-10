@@ -10,7 +10,7 @@ import {
   type ChunkSealOptions,
   type ChunkSealReport,
 } from './chunk-seal.js';
-import { synthesizeChunk, type ChunkSynthesis } from './chunk-synthesis.js';
+import { ChunkInputRefused, synthesizeChunk, type ChunkSynthesis } from './chunk-synthesis.js';
 import { chunkTransitionEvidence } from './chunk-transition.js';
 import { verifyEvidenceRevision } from '../../evidence/application/dependencies.js';
 import type {
@@ -206,6 +206,20 @@ export async function publishChunkNarrative(
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
   } catch (err) {
+    // A refused input is not a failed attempt. Nothing was asked of a model and nothing will be
+    // until a prerequisite moves, so the revision is blocked with its reason rather than dated
+    // forward to try the same refusal again.
+    if (err instanceof ChunkInputRefused) {
+      blockRevisionAttempt(
+        deps.db,
+        CHUNK_REVISION_FAMILY,
+        chunkId,
+        allocation.revisionNo,
+        err.reason,
+      );
+      deps.logger.warn({ chunkId, reason: err.reason }, 'chunk revision input refused');
+      return { status: 'blocked', chunkId, revisionNo: allocation.revisionNo, reason: err.reason };
+    }
     recordRevisionAttemptFailure(deps.db, CHUNK_REVISION_FAMILY, {
       familyKey: chunkId,
       revisionNo: allocation.revisionNo,

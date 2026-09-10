@@ -76,6 +76,8 @@ export type ChunkInputPlan =
       readonly gaps: readonly CoverageGap[];
       /** Named when this chunk sealed around a member no allowance carries whole. */
       readonly boundedPartialOf?: string;
+      /** What that member's text may spend once every required whole input is reserved. */
+      readonly boundedPartialAllowance?: number;
     }
   | {
       readonly status: 'block';
@@ -222,16 +224,43 @@ export function planChunkInput(request: ChunkInputRequest): ChunkInputPlan {
   }
 
   const carried = transition.flatMap((entry) => (entry.text === undefined ? [] : [entry.text]));
-  // An oversized member is measured on what the render will actually submit, not on the text it
-  // could not carry, so it is excluded from the fit check that would otherwise always refuse it.
-  const fitted = [...rendered, ...carried].filter(
-    (member) => member.sourceId !== request.oversizedMember,
-  );
-  const units = fitted.map((member, index) => chunkMemberUnits(index, member));
-  if (request.oversizedMember === undefined && joinedUnits(units) > request.allowance) {
+
+  if (request.oversizedMember === undefined) {
+    const units = [...rendered, ...carried].map((member, index) => chunkMemberUnits(index, member));
+    if (joinedUnits(units) > request.allowance) {
+      return block(
+        'required_transition_evidence_unavailable',
+        `the required transition evidence does not fit beside ${String(rendered.length)} raw members`,
+      );
+    }
+    return {
+      status: 'render',
+      members: rendered,
+      transition: carried,
+      gaps,
+    };
+  }
+
+  // The bounded member is placed first and everything required beside it is placed whole, so the
+  // reservation is the whole render minus that member's own text: its envelope, every carried
+  // input at the position it will take, and the separators between them. Selecting the bounded
+  // subset against the FULL allowance was the defect — a required correction then pushed the
+  // submission past the bound it was supposed to be chosen inside.
+  const partial = rendered[0];
+  if (partial === undefined) {
+    return block('no_admissible_input', 'the bounded member is not among the rendered members');
+  }
+  const reserved = joinedUnits([
+    chunkMemberUnits(0, { ...partial, text: '' }),
+    ...carried.map((member, index) => chunkMemberUnits(index + 1, member)),
+  ]);
+  const boundedPartialAllowance = request.allowance - reserved;
+  if (boundedPartialAllowance <= 0) {
+    // Nothing of the member itself can be submitted. The signed answer is the no-input BLOCK, and
+    // the one thing that may never happen instead is trimming the required evidence to make room.
     return block(
-      'required_transition_evidence_unavailable',
-      `the required transition evidence does not fit beside ${String(rendered.length)} raw members`,
+      'no_admissible_input',
+      `no raw passage of ${partial.sourceId} fits beside the input this revision must submit`,
     );
   }
 
@@ -240,7 +269,8 @@ export function planChunkInput(request: ChunkInputRequest): ChunkInputPlan {
     members: rendered,
     transition: carried,
     gaps,
-    ...(request.oversizedMember === undefined ? {} : { boundedPartialOf: request.oversizedMember }),
+    boundedPartialOf: request.oversizedMember,
+    boundedPartialAllowance,
   };
 }
 

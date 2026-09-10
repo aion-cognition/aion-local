@@ -90,6 +90,21 @@ function gapsWithRanges(
   );
 }
 
+/**
+ * A render nobody may send: it carries no raw passage, or it is over the bound it was chosen
+ * inside. Both are refusals rather than a smaller call, and both are decided before a model is
+ * asked anything.
+ */
+export class ChunkInputRefused extends Error {
+  readonly reason: 'no_admitted_raw_passage' | 'rendered_input_over_allowance';
+
+  constructor(reason: ChunkInputRefused['reason'], detail: string) {
+    super(`chunk input refused: ${reason}, ${detail}`);
+    this.name = 'ChunkInputRefused';
+    this.reason = reason;
+  }
+}
+
 export async function synthesizeChunk(
   deps: ChunkSynthesisDeps,
   input: ChunkSynthesisInput,
@@ -103,7 +118,26 @@ export async function synthesizeChunk(
     ...(input.plan.boundedPartialOf === undefined
       ? {}
       : { boundedPartialOf: input.plan.boundedPartialOf }),
+    ...(input.plan.boundedPartialAllowance === undefined
+      ? {}
+      : { boundedPartialAllowance: input.plan.boundedPartialAllowance }),
   });
+
+  // The bound is enforced on the string that would be sent, not on the plan that chose it. A
+  // render over the allowance and a render carrying no raw passage are both answers this cut
+  // refuses to buy: generation happens after these, or not at all.
+  if (render.source.items.every((item) => item.text.length === 0)) {
+    throw new ChunkInputRefused(
+      'no_admitted_raw_passage',
+      `${String(members.length)} member(s) rendered to nothing inside ${String(input.allowance)} units`,
+    );
+  }
+  if (render.renderedUnits > input.allowance) {
+    throw new ChunkInputRefused(
+      'rendered_input_over_allowance',
+      `${String(render.renderedUnits)} rendered units exceed ${String(input.allowance)}`,
+    );
+  }
 
   const deadline = deadlineFor(input.timeoutMs ?? DEFAULT_TIMEOUT_MS, input.signal);
   let raw: unknown;

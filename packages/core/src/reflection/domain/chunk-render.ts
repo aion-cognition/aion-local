@@ -27,6 +27,9 @@ export const CHUNK_MEMBER_KIND = 'episode';
 /** Two newlines join the rendered items, which admission has to count as well. */
 const ITEM_SEPARATOR = '\n\n';
 
+/** One newline joins two submitted ranges of a bounded member. */
+const PART_SEPARATOR = '\n';
+
 export type ChunkMemberPart = {
   /** The citation address of the part, which is what a recorded range names. */
   readonly address: string;
@@ -117,17 +120,19 @@ export function selectSubmittedRanges(
   const ranges: SubmittedRange[] = [];
   let remaining = allowance;
   for (const part of parts) {
-    if (remaining <= 0) {
+    // The separator that would join this range to the one before it is charged BEFORE the range
+    // is chosen. Charging it afterwards spends a unit the selection had already committed, which
+    // is how a nine-unit budget submits ten units.
+    const separator = ranges.length === 0 ? 0 : PART_SEPARATOR.length;
+    if (remaining - separator <= 0) {
       break;
     }
-    const end = Math.min(part.text.length, remaining);
+    const end = Math.min(part.text.length, remaining - separator);
     if (end === 0) {
       continue;
     }
     ranges.push({ address: part.address, start: 0, end });
-    // The separator between two submitted parts is spent too, so a caller reconstructing the
-    // submission from these ranges rebuilds the same string the model was handed.
-    remaining -= end + (ranges.length > 1 ? 1 : 0);
+    remaining -= separator + end;
   }
   return ranges;
 }
@@ -141,7 +146,7 @@ function submittedText(member: ChunkMemberText, ranges: readonly SubmittedRange[
   );
   return ranges
     .map((range) => (byAddress.get(range.address) ?? '').slice(range.start, range.end))
-    .join('\n');
+    .join(PART_SEPARATOR);
 }
 
 export type ChunkRenderInput = {
@@ -154,6 +159,13 @@ export type ChunkRenderInput = {
    * sealed around a single member no allowance carries whole.
    */
   readonly boundedPartialOf?: string;
+  /**
+   * The units that member's TEXT may spend, once every required whole input beside it has been
+   * reserved. Absent, the render reserves only that member's own envelope, which is the right
+   * answer when it is the only thing being placed and the wrong one when a required correction
+   * has to fit as well.
+   */
+  readonly boundedPartialAllowance?: number;
 };
 
 /**
@@ -175,7 +187,10 @@ export function renderSealedChunk(input: ChunkRenderInput): ChunkRender {
       // The envelope is charged first: the allowance buys text, and the header naming the member
       // is not text the selection may spend.
       const envelope = chunkMemberUnits(index, { ...member, text: '' });
-      const ranges = selectSubmittedRanges(member, Math.max(0, input.allowance - envelope));
+      const ranges = selectSubmittedRanges(
+        member,
+        Math.max(0, input.boundedPartialAllowance ?? input.allowance - envelope),
+      );
       const text = submittedText(member, ranges);
       const item = memberItem(index, member, text);
       submitted.push(...ranges);
