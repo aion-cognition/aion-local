@@ -7,7 +7,7 @@ const seam = vi.hoisted(() => ({
   /** The signal a forced run's operation was actually handed. */
   capturedSignal: undefined as AbortSignal | undefined,
   /** The chunk-lifecycle deps a forced run composed and handed on. */
-  capturedNarratives: undefined,
+  capturedNarratives: undefined as { readonly resolver?: unknown } | undefined,
   /** The composition itself, so the test opens no store and initializes no coordinator. */
   composed: { resolver: 'resolver', publications: 'coordinator' },
 }));
@@ -28,7 +28,7 @@ vi.mock('@aion/core', async (importOriginal) => {
       narratives,
     }: {
       readonly signal: AbortSignal;
-      readonly narratives?: unknown;
+      readonly narratives?: { readonly resolver?: unknown };
     }) => {
       seam.capturedSignal = signal;
       seam.capturedNarratives = narratives;

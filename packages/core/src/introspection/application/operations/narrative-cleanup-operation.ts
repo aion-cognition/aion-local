@@ -64,8 +64,19 @@ export const NARRATIVE_CLEANUP_STANDING_RELEVANCE = 0.15;
 /** States in which a revision node is an acknowledged version rather than an attempt in flight. */
 const ACKNOWLEDGED_STATES = new Set(['published', 'closed']);
 
+/**
+ * Revision records one run reads across every family it visits.
+ *
+ * The bound the family limit gives is a bound on GROUPS, and one group can carry any number of
+ * standing versions, so a run bounded only by families does unbounded per-record work. This is
+ * the term the run reports as examined, which is what makes the two numbers comparable.
+ */
+const REVISION_SCAN_BUDGET = 200;
+
 type DuplicateReport = {
   readonly families: number;
+  /** Revision records this run actually read, keeper included: the denominator of its closes. */
+  readonly examined: number;
   readonly closed: number;
   /** Families whose keeper the records could not name, left standing and reported. */
   readonly unresolved: number;
@@ -88,23 +99,33 @@ async function closeExtraRevisions(
   db: SqliteHandle,
   limit: number,
   now: Date,
-): Promise<{ families: number; closed: number; unresolved: number }> {
+): Promise<{ families: number; examined: number; closed: number; unresolved: number }> {
   const families = await findDuplicateChunkFamilies(driver, limit);
+  let examined = 0;
   let closed = 0;
   let unresolved = 0;
   for (const family of families) {
+    if (examined >= REVISION_SCAN_BUDGET) {
+      // The family bound is not a write bound. One family can carry any number of standing
+      // versions, so a run bounded only by families is bounded by nothing per record; the ones
+      // this run does not reach are still there for the next.
+      break;
+    }
     const outcome = await inWriteTransaction(driver, async (tx) => {
       const head = readPublishedRevision(db, CHUNK_REVISION_FAMILY, family.chunkId);
       if (head === undefined) {
-        return { closed: 0, resolved: false };
+        return { examined: 0, closed: 0, resolved: false };
       }
       await lockNodeInTransaction(tx, head.nodeId, now);
-      const versions = await readOpenChunkRevisionsInTransaction(tx, family.chunkId);
+      const versions = (await readOpenChunkRevisionsInTransaction(tx, family.chunkId)).slice(
+        0,
+        REVISION_SCAN_BUDGET - examined,
+      );
       if (!versions.some((version) => version.id === head.nodeId)) {
-        // The head itself is not standing. Something other than this sweep is mid-flight on the
-        // family, and closing the rest against an absent keeper would leave the chunk with no
-        // current narrative at all.
-        return { closed: 0, resolved: false };
+        // The head itself is not standing, or is past this run's remaining budget. Something
+        // other than this sweep is mid-flight on the family, and closing the rest against an
+        // absent keeper would leave the chunk with no current narrative at all.
+        return { examined: versions.length, closed: 0, resolved: false };
       }
       let here = 0;
       for (const version of versions) {
@@ -124,14 +145,15 @@ async function closeExtraRevisions(
         });
         here += 1;
       }
-      return { closed: here, resolved: true };
+      return { examined: versions.length, closed: here, resolved: true };
     });
+    examined += outcome.examined;
     closed += outcome.closed;
     if (!outcome.resolved) {
       unresolved += 1;
     }
   }
-  return { families: families.length, closed, unresolved };
+  return { families: families.length, examined, closed, unresolved };
 }
 
 /**
@@ -213,18 +235,21 @@ export function narrativeCleanupOperation(): IntrospectionOperation {
         ctx.now,
       );
 
-      // One declared unit across the repairs: a record this run READ and could have changed. The
-      // stale-edge BACKLOG used to stand in for the edge term, which made a run that closed five
-      // hundred of forty thousand report forty thousand examined and a vanishing effect ratio.
-      // The backlog is a gauge in the detail; the subtallies are what a reader adds up.
-      const processed = duplicates.families + nominated.length + edges.examined;
+      // The stale-edge BACKLOG used to stand in for the edge term too, which made a run that
+      // closed five hundred of forty thousand report forty thousand examined and a vanishing
+      // effect ratio. The backlog is a gauge in the detail; the subtallies are what adds up.
+      // One declared unit: a record this run READ and could have changed. The duplicate term
+      // used to be FAMILIES against closes counted in REVISIONS, so a family of three closed two
+      // and reported one examined; calling both "records" did not make them comparable.
+      const processed = duplicates.examined + nominated.length + edges.examined;
       const affected = duplicates.closed + edges.closed;
       return {
         status: affected === 0 ? 'noop' : 'applied',
         itemsProcessed: processed,
         itemsAffected: affected,
         detail:
-          `examined ${String(duplicates.families)} chunk family/families, ` +
+          `examined ${String(duplicates.examined)} revision record(s) across ` +
+          `${String(duplicates.families)} chunk family/families, ` +
           `${String(nominated.length)} nominated narrative(s), ` +
           `${String(edges.examined)} stale edge(s); ` +
           `${String(duplicates.closed)} extra revision(s) superseded onto the acknowledged head, ` +

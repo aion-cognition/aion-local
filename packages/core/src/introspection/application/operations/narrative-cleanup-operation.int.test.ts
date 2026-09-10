@@ -454,6 +454,7 @@ describe('what a bounded run says it examined', () => {
 
   it('counts the bounded scan rather than the backlog behind it', async () => {
     const families = await findDuplicateChunkFamilies(harness.driver, 50);
+    const revisions = families.reduce((total, family) => total + family.versions.length, 0);
     const nominated = await findOrphanedNarratives(harness.driver, 50);
     const before = await countNarrativeEdges(harness.driver);
     expect(before.stale).toBeGreaterThanOrEqual(4);
@@ -469,7 +470,7 @@ describe('what a bounded run says it examined', () => {
     // The edge term is the batch this run reached, not the residue behind it. Read as the
     // remainder of the total once the two populations that were counted before the run are
     // taken out, so no other repair's arithmetic can stand in for the claim.
-    const edgeTerm = outcome.itemsProcessed - families.length - nominated.length;
+    const edgeTerm = outcome.itemsProcessed - revisions - nominated.length;
     expect(edgeTerm).toBe(2);
     expect(edgeTerm).toBeLessThan(before.stale);
     expect(outcome.detail).toContain('2 stale edge(s)');
