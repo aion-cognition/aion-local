@@ -24,6 +24,7 @@ import {
   recordAttemptPolicy,
   releaseNarrativeClaim,
 } from '../../infrastructure/sqlite/narrative-allocations.js';
+import type { RevisionBlockContext } from '../../infrastructure/sqlite/narrative-blocks.js';
 import {
   abandonNarrativeRevision,
   allocateNarrativeRevision,
@@ -160,6 +161,29 @@ function spanOf(members: readonly ChunkMemberText[], now: Date): { start?: Date;
  * takes the revision out of nomination with its reason rather than retrying on a timer: what
  * clears it is a changed prerequisite, and the passage of time is not one.
  */
+/**
+ * What a refusal knew, recorded with it.
+ *
+ * The suppressed set is READ rather than re-derived. Re-deriving it means asking the state records
+ * which state stood at the moment of the refusal, and a forget, a refusal and a restore landing in
+ * one instant carry the same stamp: the comparison then answers with whichever version sorts last,
+ * which is the restore, and the attempt that was genuinely blocked by the forget looks like a
+ * refusal about something else.
+ */
+function blockContext(
+  now: Date,
+  members: ResolvedMembers,
+  transition: ResolvedMembers,
+): RevisionBlockContext {
+  return {
+    at: now.toISOString(),
+    uncountedScopes: [...members.unprovedScopes, ...transition.unprovedScopes],
+    suppressedMembers: [...members.readings, ...transition.readings]
+      .filter((reading) => reading.reading === 'suppressed')
+      .map((reading) => reading.sourceId),
+  };
+}
+
 export async function publishChunkNarrative(
   deps: ChunkNarrativeDeps,
   chunkId: string,
@@ -246,10 +270,7 @@ export async function publishChunkNarrative(
       chunkId,
       allocation.revisionNo,
       plan.reason,
-      {
-        at: options.now.toISOString(),
-        uncountedScopes: [...members.unprovedScopes, ...transition.unprovedScopes],
-      },
+      blockContext(options.now, members, transition),
     );
     recordAttemptPolicy(deps.db, CHUNK_REVISION_FAMILY, chunkId, allocation.revisionNo, {
       renderedInputAllowance: policy.renderedInputAllowance,
@@ -292,10 +313,7 @@ export async function publishChunkNarrative(
         chunkId,
         allocation.revisionNo,
         err.reason,
-        {
-          at: options.now.toISOString(),
-          uncountedScopes: [...members.unprovedScopes, ...transition.unprovedScopes],
-        },
+        blockContext(options.now, members, transition),
       );
       recordAttemptPolicy(deps.db, CHUNK_REVISION_FAMILY, chunkId, allocation.revisionNo, {
         renderedInputAllowance: policy.renderedInputAllowance,

@@ -19,10 +19,16 @@ import type { RevisionFamily } from './narrative-revisions.js';
  * `uncountedScopes` is the exact set the refusal could not count, members and external requirement
  * sources alike, so the wakeup asks about the set that blocked it rather than about the members it
  * happens to know.
+ *
+ * `suppressedMembers` is what the refusal actually READ as suppressed. Re-deriving that afterwards
+ * from the state records means comparing timestamps, and a forget, a refusal and a restore inside
+ * the same instant order by nothing a comparison can see. What the attempt saw is not recoverable;
+ * it is only recordable.
  */
 export type RevisionBlockContext = {
   readonly at: string;
   readonly uncountedScopes?: readonly { readonly sourceId: string; readonly scope: string }[];
+  readonly suppressedMembers?: readonly string[];
 };
 
 export function blockRevisionAttempt(

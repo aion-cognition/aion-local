@@ -23,6 +23,8 @@ export type BlockedAttempt = {
   readonly members: readonly string[];
   /** The exact scopes the refusal could not count, external requirement sources included. */
   readonly uncountedScopes: readonly { readonly sourceId: string; readonly scope: string }[];
+  /** Which members the refusal actually READ as suppressed, where it recorded them. */
+  readonly suppressedMembers: readonly string[] | undefined;
   /** The bounds that attempt ran under, where it recorded them. */
   readonly policy: Record<string, number> | undefined;
 };
@@ -73,6 +75,9 @@ export function blockedAttempts(
       blockedAt: typeof context?.at === 'string' ? context.at : row.allocated_at,
       members: (members.all(row.chunk_id) as { source_id: string }[]).map((m) => m.source_id),
       uncountedScopes: readScopeList(context?.uncountedScopes),
+      suppressedMembers: Array.isArray(context?.suppressedMembers)
+        ? (context.suppressedMembers as string[])
+        : undefined,
       policy: readNumbers(parseObject(row.attempt_policy_json)),
     };
   });
@@ -124,6 +129,21 @@ function readNumbers(
  * so a forget or a restore that is prepared and unsettled moves nothing.
  */
 export function suppressionCleared(db: SqliteHandle, attempt: BlockedAttempt): boolean {
+  const newestNow = db.prepare(
+    `SELECT v.state_kind FROM source_state_versions v
+       JOIN publication_intents i ON i.operation_id = v.operation_id AND i.state = 'acknowledged'
+      WHERE v.source_id = ? AND v.known_from IS NOT NULL
+      ORDER BY v.known_from DESC, v.version DESC LIMIT 1`,
+  );
+  if (attempt.suppressedMembers !== undefined) {
+    // What the attempt SAW, which is the only reading that cannot be argued with. A member it read
+    // as suppressed and that nothing suppresses now is the prerequisite this attempt recorded,
+    // moved.
+    return attempt.suppressedMembers.some(
+      (sourceId) =>
+        (newestNow.get(sourceId) as { state_kind: string } | undefined)?.state_kind !== 'forgotten',
+    );
+  }
   const asOf = db.prepare(
     `SELECT v.state_kind FROM source_state_versions v
        JOIN publication_intents i ON i.operation_id = v.operation_id AND i.state = 'acknowledged'
