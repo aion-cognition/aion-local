@@ -13,6 +13,7 @@ import { closeNarrativeEdgesInTransaction } from '../../infrastructure/graph/nar
 import {
   DERIVES_FROM_TYPE,
   NARRATIVE_PROPERTIES,
+  presentNodeIds,
   SUMMARIZED_BY_TYPE,
 } from '../../infrastructure/graph/narrative-queries.js';
 import type { GraphProperties } from '../../infrastructure/graph/values.js';
@@ -233,7 +234,7 @@ export const narrativePublication = new PublicationOperation({
       ],
     });
   },
-  check(context, data, expected) {
+  async check(context, data, expected) {
     const chunk = readChunk(context.db, data.chunkId);
     if (chunk === undefined) {
       return Promise.resolve({ status: 'rejected', reason: 'chunk_not_sealed' } as const);
@@ -262,10 +263,21 @@ export const narrativePublication = new PublicationOperation({
       const state = residency?.state ?? 'resident';
       const generation = residency?.projectionGeneration ?? 0;
       if (state !== member.residency || generation !== member.projectionGeneration) {
-        return Promise.resolve({ status: 'deferred', reason: 'residency_moved' } as const);
+        return { status: 'deferred', reason: 'residency_moved' } as const;
       }
     }
-    return Promise.resolve({ status: 'valid' } as const);
+    // A member the records call resident with no node behind it is an inconsistency, and it is
+    // named here so the attempt releases the guard rather than holding it while a repair that
+    // nobody has started is waited for. The write still refuses if the projection goes between
+    // this reading and the edge: what is never allowed is the silent skip.
+    const expectedNodes = data.members
+      .filter((member) => member.residency !== 'evicted')
+      .map((member) => member.sourceId);
+    const present = new Set(await presentNodeIds(context.graph, expectedNodes));
+    if (expectedNodes.some((sourceId) => !present.has(sourceId))) {
+      return { status: 'deferred', reason: 'member_projection_missing' } as const;
+    }
+    return { status: 'valid' } as const;
   },
   async applyGraph(context, data: NarrativeData): Promise<NarrativeResult> {
     const { now } = context;

@@ -1,7 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 
 import { BITEMPORAL_PROPERTIES, closeFragment, currentOnly } from './bitemporal.js';
-import { runRead, runWrite, type GraphStatement } from './connection.js';
+import { runRead, runWrite, type GraphStatement, type GraphTransaction } from './connection.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from './episodes.js';
 import { BASE_NODE_LABEL, type NodeLabel } from './labels.js';
 import { readModeFragment, withCurrency } from './read-modes.js';
@@ -265,6 +265,29 @@ function sessionSourceNodesStatement(sessionId: string, reference?: Date): Graph
       ...episode.parameters,
     },
   };
+}
+
+/**
+ * Which of these ids the graph currently holds, read inside the caller's own transaction.
+ *
+ * A narrative writes a structural edge from every member whose projection is still there, and a
+ * member the records say is resident with no node behind it is an inconsistency rather than an
+ * edge to skip. Asked under the guard, the answer is one the write can be decided on.
+ */
+export async function presentNodeIds(
+  tx: GraphTransaction,
+  ids: readonly string[],
+): Promise<readonly string[]> {
+  if (ids.length === 0) {
+    return [];
+  }
+  return tx.run(
+    `UNWIND $ids AS id
+     MATCH (n:${BASE_NODE_LABEL} { id: id })
+     RETURN n.id AS id`,
+    { ids: [...ids] },
+    (row) => row.id as string,
+  );
 }
 
 export async function loadSessionSourceNodes(

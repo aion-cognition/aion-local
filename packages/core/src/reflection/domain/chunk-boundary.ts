@@ -59,9 +59,7 @@ export type ChunkCandidateAdmission =
   | {
       readonly status: 'isolated';
       readonly reason:
-        | 'oversized_member'
-        | 'member_over_resolver_budget'
-        | 'member_evidence_unreadable';
+        'oversized_member' | 'member_over_resolver_budget' | 'member_evidence_unreadable';
     };
 
 export type ChunkCandidate = {

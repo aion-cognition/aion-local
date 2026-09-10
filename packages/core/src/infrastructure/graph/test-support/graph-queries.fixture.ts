@@ -90,6 +90,34 @@ export async function countEdges(
   );
 }
 
+/**
+ * Edges of one type into a node that are still open, which is what a reader with no vantage sees.
+ * A superseded narrative keeps its rows and they stop being current, so a count that ignored
+ * `valid_until` could not tell a closed version from one still summarizing its session.
+ */
+export async function countOpenEdgesInto(
+  driver: Driver,
+  type: string,
+  targetId: string,
+): Promise<number> {
+  return count(
+    driver,
+    `MATCH ()-[r:${type}]->({ id: $targetId })
+     WHERE r.${BITEMPORAL_PROPERTIES.validUntil} IS NULL
+     RETURN count(r) AS c`,
+    { targetId },
+  );
+}
+
+/**
+ * Moves one node's id, which is how a test produces the state a records-say-resident source with
+ * no projection is in without removing anything. Reversible by moving it back, and there is no
+ * deletion in the workspace to reach for: closing and forgetting are what retire a node.
+ */
+export async function renameNodeId(driver: Driver, from: string, to: string): Promise<void> {
+  await runWrite(driver, `MATCH (n { id: $from }) SET n.id = $to`, { from, to }, () => undefined);
+}
+
 export async function countOutgoingEdges(
   driver: Driver,
   type: string,
