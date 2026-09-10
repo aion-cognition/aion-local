@@ -2,7 +2,12 @@ import type { Driver } from 'neo4j-driver';
 
 import { synthesizeGrounded } from './consolidation-synthesis.js';
 import { overviewOperationPrefix, OVERVIEW_NARRATIVE_FAMILY } from './overview-publication.js';
-import { closedWindows, writeMemberCursor, type Window } from './overview-windows.js';
+import {
+  closedWindows,
+  writeMemberCursor,
+  OVERVIEW_MEMBER_SCAN_LIMIT,
+  type Window,
+} from './overview-windows.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { findNarrativeBodies } from '../../infrastructure/graph/narrative-rollup-queries.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
@@ -84,9 +89,6 @@ export type OverviewRollupReport = {
   /** Published chunks no window could be derived for, so the gap is visible. */
   readonly unplaceable: number;
 };
-
-/** Members read per run, across every window. The bound on the scan, not on the attempts. */
-export const OVERVIEW_MEMBER_SCAN_LIMIT = 500;
 
 /** How long a claim holds its number without publishing. */
 export const OVERVIEW_CLAIM_LEASE_MS = 10 * 60 * 1000;
@@ -171,6 +173,13 @@ function reconsiderBlocked(db: SqliteHandle, familyKey: string, allowance: numbe
   return cleared;
 }
 
+/** Whether this family still carries a refusal, after the reconsideration had its say. */
+function standingBlock(db: SqliteHandle, familyKey: string): boolean {
+  return listAllocatedRevisions(db, OVERVIEW_REVISION_FAMILY, familyKey).some(
+    (row) => row.blockedReason !== null,
+  );
+}
+
 function toConsolidationMembers(
   members: readonly OverviewMember[],
   bodies: Map<
@@ -216,6 +225,12 @@ async function rollUpWindow(
   });
   const operationId = `${overviewOperationPrefix(familyKey)}${String(claim.revisionNo)}`;
   const policy = { renderedInputAllowance: options.renderedInputAllowance };
+  // The head this attempt is fenced against, bound HERE and not after the synthesis. Reading it
+  // afterwards means a slow actor picks up whatever a faster one published while it worked and
+  // offers that as its own expectation — an old computation relabelled against a new head, which
+  // is how the shared slot ends up holding an output nothing can acknowledge.
+  const expectedHead =
+    readPublishedRevision(deps.db, OVERVIEW_REVISION_FAMILY, familyKey)?.revisionNo ?? null;
 
   const refuse = (reason: string, detail: Record<string, unknown>): WindowOutcome => {
     recordAttemptPolicy(deps.db, OVERVIEW_REVISION_FAMILY, familyKey, claim.revisionNo, policy);
@@ -257,7 +272,6 @@ async function rollUpWindow(
     return 'failed';
   }
 
-  const head = readPublishedRevision(deps.db, OVERVIEW_REVISION_FAMILY, familyKey);
   const outcome = await publishOrFail(deps, familyKey, {
     kind: 'overview_publish',
     operationId,
@@ -280,7 +294,7 @@ async function rollUpWindow(
       spanEnd: window.end.toISOString(),
       occurredAt: window.end.toISOString(),
       coverageEpoch: epoch,
-      expectedHead: head?.revisionNo ?? null,
+      expectedHead,
     },
   });
   if (outcome?.status !== 'acknowledged') {
@@ -371,6 +385,12 @@ export async function rollUpOverviews(
     if (reconsiderBlocked(deps.db, familyKey, options.renderedInputAllowance)) {
       reconsidered += 1;
     }
+    if (standingBlock(deps.db, familyKey)) {
+      // A refusal the reconsideration did not clear is a prerequisite that has not moved. Claiming
+      // another number to reach the same refusal spends a revision per pass and asks nothing new.
+      blocked += 1;
+      continue;
+    }
     if (settled(deps.db, familyKey, window.members)) {
       settledWindows += 1;
       continue;
@@ -399,3 +419,4 @@ export async function rollUpOverviews(
 
 /** Re-exported so a reader of the graph can tell an overview from the two other families. */
 export { OVERVIEW_NARRATIVE_FAMILY };
+export { OVERVIEW_MEMBER_SCAN_LIMIT };

@@ -1,4 +1,3 @@
-import { OVERVIEW_MEMBER_SCAN_LIMIT } from './overview-rollup.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { getLedgerEntry, markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import {
@@ -9,6 +8,14 @@ import {
   type OverviewMember,
 } from '../../infrastructure/sqlite/overview-membership.js';
 import { isWindowClosed, pagedWindows, rollupWindow, type RollupScope } from '../domain/rollup.js';
+
+/** Members read per run, across every window. The bound on the scan, not on the attempts. */
+export const OVERVIEW_MEMBER_SCAN_LIMIT = 500;
+
+/** Pages one whole-window re-read may walk before it gives up proving completeness. */
+const WINDOW_PAGE_LIMIT = 8;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Which windows a run may act on, and where the next run picks up.
@@ -135,4 +142,66 @@ export function writeMemberCursor(
   cursor: MemberCursor | undefined,
 ): void {
   markLedgerApplied(db, memberCursorKey(scope), cursor === undefined ? {} : { ...cursor });
+}
+
+/**
+ * The WHOLE of one window's membership, re-read from the records.
+ *
+ * The fence an overview needs is not "is each member I chose still current": a chunk that arrives
+ * in a closed window while the window is being written changes nothing about the members already
+ * chosen, and a check that only walks the chosen list publishes a subset while claiming to cover
+ * the window whole. So the set is re-derived and compared as a set.
+ *
+ * Reading starts just before the window rather than at the front of the enumeration, and it gives
+ * up rather than guessing: `undefined` means the bound was reached before the window was passed,
+ * which is a completeness nobody proved and a publication that has to wait.
+ */
+export function windowMembers(
+  db: SqliteHandle,
+  scope: RollupScope,
+  window: { readonly key: string; readonly start: Date },
+): readonly OverviewMember[] | undefined {
+  const held: OverviewMember[] = [];
+  let cursor: MemberCursor | undefined = seedCursor(scope, window.start);
+  for (let page = 0; page < WINDOW_PAGE_LIMIT; page += 1) {
+    const rows = readMembers(db, scope, cursor);
+    for (const member of rows) {
+      const at = new Date(member.spanEnd);
+      if (Number.isNaN(at.getTime())) {
+        continue;
+      }
+      const { key } = rollupWindow(scope, at);
+      if (key === window.key) {
+        held.push(member);
+      } else if (key > window.key) {
+        // Past the window in the read's own order, so the set is complete.
+        return held;
+      }
+    }
+    if (rows.length < OVERVIEW_MEMBER_SCAN_LIMIT) {
+      return held;
+    }
+    const last = rows[rows.length - 1];
+    if (last === undefined) {
+      return held;
+    }
+    cursor = { spanEnd: last.spanEnd, familyKey: last.familyKey };
+  }
+  return undefined;
+}
+
+/**
+ * Where to start reading for one window, so a late window costs a page rather than the archive.
+ *
+ * A day's members are chunks ordered by span end, so the window's own start is the position. A
+ * week's members are day overviews ordered by family key, so the position is the key of the day
+ * before it — the read resumes strictly after the cursor, and the first day of the week must not
+ * be the one it skips.
+ */
+function seedCursor(scope: RollupScope, start: Date): MemberCursor {
+  if (scope === 'day') {
+    return { spanEnd: start.toISOString(), familyKey: '' };
+  }
+  const before = new Date(start.getTime() - DAY_MS).toISOString().slice(0, 10);
+  return { spanEnd: '', familyKey: `day:${before}` };
 }

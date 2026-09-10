@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+import { windowMembers } from './overview-windows.js';
+import { verifyEvidenceRevision } from '../../evidence/application/dependencies.js';
+import { NARRATIVE_SCOPES, durableRoleScope } from '../../evidence/domain/scopes.js';
 import {
   supersedeInTransaction,
   writeStampedDerivedNodeInTransaction,
@@ -14,10 +17,22 @@ import {
 import { ROLLUP_WINDOW_PROPERTY } from '../../infrastructure/graph/narrative-rollup-queries.js';
 import type { GraphProperties } from '../../infrastructure/graph/values.js';
 import { PublicationOperation } from '../../infrastructure/publication/operation.js';
-import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
+import {
+  buildEvidenceRevision,
+  type EvidenceDependency,
+  type EvidenceRevision,
+} from '../../infrastructure/publication/preconditions.js';
 import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { abandonStaleAllocations } from '../../infrastructure/sqlite/narrative-allocations.js';
+import {
+  acknowledgeScopeAdvance,
+  prepareScopeAdvance,
+  rejectScopeAdvance,
+} from '../../infrastructure/sqlite/evidence-scope.js';
+import {
+  abandonStaleAllocations,
+  listAllocatedRevisions,
+} from '../../infrastructure/sqlite/narrative-allocations.js';
 import {
   recordRevisionCitations,
   recordRevisionDependencies,
@@ -31,6 +46,7 @@ import {
 } from '../../infrastructure/sqlite/narrative-revisions.js';
 import { overviewWindowOf } from '../../infrastructure/sqlite/overview-membership.js';
 import { NARRATIVE_GROUNDING } from '../domain/narrative.js';
+import type { RollupScope } from '../domain/rollup.js';
 
 /**
  * A calendar overview's own publication.
@@ -62,14 +78,6 @@ const OVERVIEW_PROVENANCE = ['narrative_overview'];
 
 /** The extraction method the node records, kept distinct from the legacy rollup's. */
 export const OVERVIEW_EXTRACTION_METHOD = 'narrative_overview';
-
-/**
- * The relation class an overview's dependency on one member is filed under.
- *
- * Its own name because it is its own question: not what a source said, but which revision of a
- * family this window was written over. A member that republishes moves the version this records.
- */
-export const OVERVIEW_MEMBER_SCOPE = 'narrative:overview_member';
 
 const Member = z.strictObject({
   /** The member's own family key: a chunk id, or a child overview's `scope:window`. */
@@ -142,23 +150,118 @@ function overviewProperties(data: OverviewData): GraphProperties {
   };
 }
 
+/** A member key that names a window is a child overview; anything else is a chunk. */
+function familyOf(familyKey: string) {
+  return overviewWindowOf(familyKey) === undefined
+    ? CHUNK_REVISION_FAMILY
+    : OVERVIEW_REVISION_FAMILY;
+}
+
+const CITATION_SCOPE = NARRATIVE_SCOPES[0];
+
+/** The node's own outbound populations, which a durable walk asks about before crossing it. */
+const NODE_OWN_SCOPES = [CITATION_SCOPE, durableRoleScope('extraction', 'out')];
+
 /**
- * The window's membership as the records hold it NOW, compared against what the caller cited.
+ * What this overview actually rests on: everything its children rest on, and the children.
  *
- * Not a count: a member that republished between the render and the guard has a different head
- * node, and an overview that went ahead would cite a revision the family has replaced while
- * claiming to cover the window whole.
+ * A token naming the member's revision number is not a dependency — nothing produces that scope,
+ * so it verifies `unverifiable` for ever and the fence it looks like is not one. The dependencies
+ * an overview reads are the ones its members were published on, and the signed invalidation is
+ * recursive: a correction under a chunk makes that chunk's set stale, and this set holds that
+ * chunk's set, so the overview goes stale with it.
+ *
+ * A member's own citation population is deliberately NOT in here, though it is the obvious
+ * candidate: this publication ADVANCES that population by citing the member, so a token taken
+ * before the write is stale the moment the write lands. What a member republishing changes is the
+ * window's membership, and the membership fence is what answers for that.
+ *
+ * A member whose own set cannot be read contributes nothing here and is refused by the check; a
+ * publication is never built on a reading nobody took.
+ */
+function memberEvidence(
+  db: SqliteHandle,
+  members: readonly { readonly familyKey: string; readonly nodeId: string }[],
+): EvidenceRevision {
+  const dependencies: EvidenceDependency[] = [];
+  for (const member of members) {
+    const head = readPublishedRevision(db, familyOf(member.familyKey), member.familyKey);
+    const stored = parseEvidence(head?.evidenceRevisionJson ?? null);
+    if (stored !== undefined) {
+      dependencies.push(...stored.dependencies);
+    }
+  }
+  return buildEvidenceRevision(dependencies);
+}
+
+function parseEvidence(json: string | null): EvidenceRevision | undefined {
+  if (json === null) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(json) as EvidenceRevision;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Every citation population this publication changes.
+ *
+ * The targets it cites move, and the node's own outbound populations move — a durable lineage walk
+ * asks about the second before it will cross this overview to what it rests on, and an author that
+ * declared none left the walk stopping here with no roots and `complete: false`.
+ */
+function citationScopes(data: OverviewData): readonly { endpointId: string; scope: string }[] {
+  const targets = new Set(data.citations);
+  targets.delete(data.nodeId);
+  return [
+    ...[...targets].sort().map((endpointId) => ({ endpointId, scope: CITATION_SCOPE })),
+    ...NODE_OWN_SCOPES.map((scope) => ({ endpointId: data.nodeId, scope })),
+  ];
+}
+
+/**
+ * Whether the number this output was written against is still this operation's to publish.
+ *
+ * The handler used to look at neither. A slower actor returning after a newer one published and
+ * ABANDONED its row would write its output against a revision the manifest had already closed, and
+ * the acknowledgment that then failed left the shared slot occupied. Ordinary concurrency, ordinary
+ * unexpired claims, and nothing about it needs an expired lease.
+ */
+function allocationHeld(db: SqliteHandle, data: OverviewData, operationId: string): boolean {
+  const row = listAllocatedRevisions(db, OVERVIEW_REVISION_FAMILY, data.familyKey).find(
+    (held) => held.revisionNo === data.revisionNo,
+  );
+  return row !== undefined && (row.operationId === null || row.operationId === operationId);
+}
+
+/**
+ * The window's membership as the records hold it NOW, compared as a SET against what was cited.
+ *
+ * Not each cited member in turn: a chunk that arrives in a closed window while it is being written
+ * changes nothing about the members already chosen, and a check that walked only the chosen list
+ * published a subset of the window while storing a coverage of 1 over the whole of it.
  */
 function membershipMoved(db: SqliteHandle, data: OverviewData): boolean {
-  return data.members.some((member) => {
-    // A member key that names a window is a child overview; anything else is a chunk. The two
-    // families keep their own tables, and which one a key belongs to is readable from the key.
-    const family =
-      overviewWindowOf(member.familyKey) === undefined
-        ? CHUNK_REVISION_FAMILY
-        : OVERVIEW_REVISION_FAMILY;
-    const head = readPublishedRevision(db, family, member.familyKey);
-    return head?.nodeId !== member.nodeId;
+  const whole = windowMembers(db, data.scope as RollupScope, {
+    key: data.windowKey,
+    start: new Date(data.spanStart),
+  });
+  if (whole === undefined) {
+    return true;
+  }
+  const now = whole.map((member) => `${member.familyKey}\u0000${member.nodeId}`).sort();
+  const cited = data.members.map((member) => `${member.familyKey}\u0000${member.nodeId}`).sort();
+  return now.join('|') !== cited.join('|');
+}
+
+/** Whether every member still stands on evidence that verifies. */
+function childEvidenceHolds(db: SqliteHandle, data: OverviewData): boolean {
+  return data.members.every((member) => {
+    const head = readPublishedRevision(db, familyOf(member.familyKey), member.familyKey);
+    const stored = parseEvidence(head?.evidenceRevisionJson ?? null);
+    return stored !== undefined && verifyEvidenceRevision(db, stored).status === 'current';
   });
 }
 
@@ -183,21 +286,16 @@ export const overviewPublication = new PublicationOperation({
       data,
       expected: {
         coverageEpoch: payload.coverageEpoch,
-        // What the overview rests on, at the tokens the records report. Where nothing has counted
-        // a member's citation scope the token is absent, which the verifier reads as unverifiable
-        // rather than as fresh — missing dependencies do not look fresh.
-        evidence: buildEvidenceRevision(
-          payload.members.map((member) => ({
-            kind: 'node' as const,
-            id: member.nodeId,
-            scope: OVERVIEW_MEMBER_SCOPE,
-            version: String(member.revisionNo),
-          })),
-        ),
+        // What the overview rests on, read from the records rather than named after them.
+        evidence: memberEvidence(context.db, payload.members),
         sources: [],
         heads: [{ chunkId: payload.familyKey, publishedRevisionNo: payload.expectedHead }],
       },
-      scopes: [],
+      scopes: citationScopes(data).map((entry) => ({
+        kind: 'relation_scope' as const,
+        id: entry.endpointId,
+        scope: entry.scope,
+      })),
       effects: [
         {
           kind: OVERVIEW_PUBLISH_EFFECT,
@@ -214,8 +312,14 @@ export const overviewPublication = new PublicationOperation({
     if (data.members.length === 0) {
       return Promise.resolve({ status: 'rejected', reason: 'empty_window' } as const);
     }
+    if (!allocationHeld(context.db, data, context.operationId)) {
+      return Promise.resolve({ status: 'rejected', reason: 'allocation_not_current' } as const);
+    }
     if (membershipMoved(context.db, data)) {
       return Promise.resolve({ status: 'deferred', reason: 'window_membership_moved' } as const);
+    }
+    if (!childEvidenceHolds(context.db, data)) {
+      return Promise.resolve({ status: 'deferred', reason: 'member_evidence_stale' } as const);
     }
     return Promise.resolve({ status: 'valid' } as const);
   },
@@ -274,13 +378,29 @@ export const overviewPublication = new PublicationOperation({
     };
   },
   prepareSqlite(context, data) {
-    prepareNarrativeRevision(
-      context.db,
-      OVERVIEW_REVISION_FAMILY,
-      data.familyKey,
-      data.revisionNo,
-      context.operationId,
-    );
+    // A preparation that changed no row is a revision this operation does not hold: bind nothing,
+    // and say so rather than carrying on to write an output against somebody else's number.
+    if (
+      !prepareNarrativeRevision(
+        context.db,
+        OVERVIEW_REVISION_FAMILY,
+        data.familyKey,
+        data.revisionNo,
+        context.operationId,
+      )
+    ) {
+      throw new Error(
+        `overview_revisions ${data.familyKey}/${String(data.revisionNo)} is not allocated to this operation`,
+      );
+    }
+    for (const entry of citationScopes(data)) {
+      prepareScopeAdvance(context.db, {
+        endpointId: entry.endpointId,
+        relationClass: entry.scope,
+        operationId: context.operationId,
+        updatedAt: new Date(data.occurredAt),
+      });
+    }
     return undefined;
   },
   acknowledgeSqlite(context, data) {
@@ -288,40 +408,34 @@ export const overviewPublication = new PublicationOperation({
       familyKey: data.familyKey,
       revisionNo: data.revisionNo,
       operationId: context.operationId,
-      evidenceRevisionJson: JSON.stringify(
-        buildEvidenceRevision(
-          data.members.map((member) => ({
-            kind: 'node' as const,
-            id: member.nodeId,
-            scope: OVERVIEW_MEMBER_SCOPE,
-            version: String(member.revisionNo),
-          })),
-        ),
-      ),
+      evidenceRevisionJson: JSON.stringify(memberEvidence(context.db, data.members)),
       knownFrom: context.knownFrom,
       observedAckAt: context.observedAckAt,
       publishedAt: new Date(context.knownFrom),
       coverageGapsJson: '[]',
     });
-    // The members, as the retained nodes this revision rests on. A lineage walk crossing one
-    // reaches its own citations, which is how a week reaches a chunk's sources through the day.
+    // What the grounded output SUPPORTS, which is not the same population as what the window
+    // covers. Coverage membership is the window's set and lives on the node and in the dependency
+    // set; a citation is a sentence resting on one retained node, and a durable citation row that
+    // named every member said the prose stood on things it never mentioned.
     recordRevisionCitations(
       context.db,
       data.nodeId,
-      data.members.map((member) => ({ targetId: member.nodeId, targetKind: 'retained_node' })),
+      data.citations.map((targetId) => ({ targetId, targetKind: 'retained_node' })),
     );
-    recordRevisionDependencies(
-      context.db,
-      data.nodeId,
-      buildEvidenceRevision(
-        data.members.map((member) => ({
-          kind: 'node' as const,
-          id: member.nodeId,
-          scope: OVERVIEW_MEMBER_SCOPE,
-          version: String(member.revisionNo),
-        })),
-      ),
-    );
+    recordRevisionDependencies(context.db, data.nodeId, memberEvidence(context.db, data.members));
+    for (const entry of citationScopes(data)) {
+      acknowledgeScopeAdvance(context.db, {
+        endpointId: entry.endpointId,
+        relationClass: entry.scope,
+        operationId: context.operationId,
+        updatedAt: new Date(context.knownFrom),
+        // The overview's own outbound populations are counted by this write and by nothing else,
+        // so this is where their census is established. A cited target's population MOVED; whether
+        // anyone has counted it is that target's own question.
+        ...(entry.endpointId === data.nodeId ? { censusStatus: 'established' as const } : {}),
+      });
+    }
     abandonStaleAllocations(
       context.db,
       OVERVIEW_REVISION_FAMILY,
@@ -331,7 +445,15 @@ export const overviewPublication = new PublicationOperation({
     );
     return undefined;
   },
-  discardSqlite() {
+  discardSqlite(context, data) {
+    for (const entry of citationScopes(data)) {
+      rejectScopeAdvance(context.db, {
+        endpointId: entry.endpointId,
+        relationClass: entry.scope,
+        operationId: context.operationId,
+        updatedAt: new Date(data.occurredAt),
+      });
+    }
     return undefined;
   },
 });

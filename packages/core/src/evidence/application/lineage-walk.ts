@@ -250,7 +250,17 @@ class Frontier {
   }
 }
 
-/** The bounded parent walk over the stated records, from one node's own source occurrences. */
+/**
+ * The bounded parent walk over the stated records, from one node's own source occurrences.
+ *
+ * What an id IS decides which store its first hop is read from, and the records answer that. An id
+ * the manifest calls a published revision node is a retained interpretation, so it enters as one
+ * and the walk reads its extraction origins and the targets it cited. Entering every id as a raw
+ * capture asked the stated-derivation scope of a node that has no stated derivations and no census
+ * for that scope, which ended the branch at the node it started from — a walk from a narrative
+ * could never reach anything. No new step kind and no new qualifier: this is the retained-node
+ * route the walk already crosses when it arrives from a source.
+ */
 export function walkLineage(
   db: SqliteHandle,
   sourceIds: readonly string[],
@@ -259,7 +269,8 @@ export function walkLineage(
 ): Walk {
   const frontier = new Frontier(db, at, budget);
   for (const id of new Set(sourceIds)) {
-    frontier.walk({ id, kind: 'source' }, new Set(), 0);
+    const kind: StepKind = isNarrativeRevisionNode(db, id, at) ? 'retained_node' : 'source';
+    frontier.walk({ id, kind }, new Set(), 0);
   }
   return {
     roots: [...frontier.roots].sort(),
