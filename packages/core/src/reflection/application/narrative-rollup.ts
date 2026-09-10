@@ -1,29 +1,18 @@
-import type { Driver } from 'neo4j-driver';
-
 import { synthesizeGrounded } from './consolidation-synthesis.js';
-import { attachContentVectors } from './vectors.js';
+import {
+  attachVector,
+  closeInto,
+  recordBlockedWindow,
+  writeRollup,
+  type RollupWriteDeps,
+} from './rollup-write.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import {
-  supersedeInTransaction,
-  writeStampedDerivedNodeInTransaction,
-} from '../../infrastructure/graph/bitemporal.js';
-import { inWriteTransaction } from '../../infrastructure/graph/connection.js';
-import { upsertEdgeInTransaction } from '../../infrastructure/graph/edges.js';
-import { MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
-import { closeNarrativeEdgesInTransaction } from '../../infrastructure/graph/narrative-edge-queries.js';
-import {
-  NARRATIVE_PROPERTIES,
-  SUMMARIZED_BY_TYPE,
-} from '../../infrastructure/graph/narrative-queries.js';
-import {
   findRollupMembers,
   findWindowRollups,
-  ROLLUP_WINDOW_PROPERTY,
   type WindowNarrative,
 } from '../../infrastructure/graph/narrative-rollup-queries.js';
-import type { GraphProperties } from '../../infrastructure/graph/values.js';
-import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import {
   buildRollupMessages,
@@ -32,7 +21,7 @@ import {
   type ConsolidationMember,
 } from '../domain/consolidation.js';
 import { narrativeScale } from '../domain/narrative-scale.js';
-import { decideSessionNarrative, narrativeSpan, NARRATIVE_GROUNDING } from '../domain/narrative.js';
+import { decideSessionNarrative, narrativeSpan } from '../domain/narrative.js';
 import {
   groupRollupWindows,
   isWindowClosed,
@@ -55,11 +44,6 @@ import {
  * to writes a version the next session close immediately makes incomplete.
  */
 
-export const ROLLUP_EXTRACTION_METHOD = 'narrative_rollup';
-
-const ROLLUP_SIGNALS = ['compression'];
-const ROLLUP_PROVENANCE = [ROLLUP_EXTRACTION_METHOD];
-
 /** Members read per run. A day of sessions and a week of days both sit far inside this. */
 export const DEFAULT_ROLLUP_MEMBER_LIMIT = 200;
 
@@ -70,11 +54,7 @@ export const DEFAULT_ROLLUP_MEMBER_LIMIT = 200;
  */
 export const DEFAULT_ROLLUP_WINDOW_LIMIT = 2;
 
-export type RollupDeps = {
-  readonly driver: Driver;
-  readonly provider: Provider;
-  readonly logger: Logger;
-};
+export type RollupDeps = RollupWriteDeps;
 
 export type RollupOptions = {
   readonly scope: RollupScope;
@@ -84,6 +64,11 @@ export type RollupOptions = {
   readonly windowLimit?: number;
   /** The knob group the synthesis is sized out of; the resolved route picks inside it. */
   readonly reflection?: Config['reflection'];
+  /**
+   * What the whole window's rendered input is allowed to be. The same allowance a chunk's own
+   * synthesis is admitted under, applied to the other renderer C0 has to measure.
+   */
+  readonly renderedInputAllowance?: number;
   readonly now?: Date;
   readonly signal?: AbortSignal;
 };
@@ -96,6 +81,8 @@ export type RollupReport = {
   readonly skipped: number;
   readonly vetoed: number;
   readonly failed: number;
+  /** Windows V1 refused: the required input did not fit, or the membership was not complete. */
+  readonly blocked: number;
   /** Member narratives this run closed into a rollup. */
   readonly absorbed: number;
 };
@@ -106,8 +93,9 @@ type RollupSettings = {
   readonly timeoutMs: number;
   readonly memberLimit: number;
   readonly windowLimit: number;
-  readonly maxMemberChars: number;
   readonly maxSentences: number;
+  /** The rendered input one overview synthesis is allowed, in UTF-16 code units. */
+  readonly renderedInputAllowance: number;
   readonly now: Date;
   readonly signal?: AbortSignal;
 };
@@ -128,8 +116,9 @@ function settingsOf(options: RollupOptions, provider: Provider): RollupSettings 
     timeoutMs: options.timeoutMs ?? DEFAULTS.reflection.stageTimeoutMs,
     memberLimit: options.memberLimit ?? DEFAULT_ROLLUP_MEMBER_LIMIT,
     windowLimit: options.windowLimit ?? DEFAULT_ROLLUP_WINDOW_LIMIT,
-    maxMemberChars: scale.episodeChars,
     maxSentences: scale.maxSentences,
+    renderedInputAllowance:
+      options.renderedInputAllowance ?? DEFAULTS.maintenance.chunkRenderedInputAllowance,
     now: options.now ?? new Date(),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   };
@@ -144,136 +133,31 @@ function toMembers(window: RollupWindow, memberScope: string): readonly Consolid
   }));
 }
 
-type RollupWrite = {
-  readonly rollupId: string;
-  readonly scope: RollupScope;
-  readonly windowKey: string;
-  readonly version: number;
-  readonly coverageKey: string;
-  readonly memberIds: readonly string[];
-  readonly summary: string;
-  readonly narrative: string;
-  readonly citations: readonly string[];
-  readonly sentenceCount: number;
-  readonly spanStart?: Date;
-  readonly spanEnd?: Date;
-  readonly occurredAt: Date;
-  readonly now: Date;
+type WindowOutcome = 'created' | 'skipped' | 'vetoed' | 'failed' | 'blocked';
+
+type WindowResult = {
+  readonly outcome: WindowOutcome;
+  readonly absorbed: number;
+  /** Why V1 refused the window, where it did. */
+  readonly blockedReason?: string;
 };
 
-function rollupProperties(input: RollupWrite): GraphProperties {
-  return {
-    [MEMORY_PROPERTIES.summary]: input.summary,
-    [MEMORY_PROPERTIES.text]: input.narrative,
-    [MEMORY_PROPERTIES.extractionMethod]: ROLLUP_EXTRACTION_METHOD,
-    [NARRATIVE_PROPERTIES.citations]: [...input.citations],
-    [NARRATIVE_PROPERTIES.sentenceCount]: input.sentenceCount,
-    [NARRATIVE_PROPERTIES.grounding]: NARRATIVE_GROUNDING,
-    [NARRATIVE_PROPERTIES.scope]: input.scope,
-    [ROLLUP_WINDOW_PROPERTY]: input.windowKey,
-    [NARRATIVE_PROPERTIES.version]: input.version,
-    [NARRATIVE_PROPERTIES.coverageKey]: input.coverageKey,
-    [NARRATIVE_PROPERTIES.coverageCount]: input.memberIds.length,
-    // Every member of the window is rendered, and a window the member read may have cut short
-    // is not rolled up at all, so a stored rollup saw the whole of what it claims to cover.
-    [NARRATIVE_PROPERTIES.coverage]: 1,
-    [NARRATIVE_PROPERTIES.spanStart]: input.spanStart,
-    [NARRATIVE_PROPERTIES.spanEnd]: input.spanEnd,
-  };
-}
-
 /**
- * The node and the member edges in one transaction, mirroring a session narrative's own write:
- * `(member)-[:SUMMARIZED_BY]->(rollup)`, counted zero because a structural fact repeated is not
- * an observation repeated.
- */
-async function writeRollup(deps: RollupDeps, input: RollupWrite): Promise<void> {
-  await inWriteTransaction(deps.driver, async (tx) => {
-    await writeStampedDerivedNodeInTransaction(tx, {
-      label: 'Narrative',
-      id: input.rollupId,
-      now: input.now,
-      occurredAt: input.occurredAt,
-      properties: rollupProperties(input),
-    });
-
-    for (const memberId of input.memberIds) {
-      await upsertEdgeInTransaction(tx, {
-        type: SUMMARIZED_BY_TYPE,
-        sourceId: memberId,
-        targetId: input.rollupId,
-        strength: 1,
-        confidence: 1,
-        signals: ROLLUP_SIGNALS,
-        provenance: ROLLUP_PROVENANCE,
-        count: 0,
-        now: input.now,
-      });
-    }
-  });
-}
-
-/**
- * Closing what the rollup absorbed, and any earlier version of the rollup itself. Both go
- * through supersession, so both are reversible by `aion unsupersede` and both stay readable
- * through `as_of`. `validUntil` is the world time the rollup covers up to rather than the moment
- * the sweep ran.
+ * What the whole window would render to, with nothing clipped.
  *
- * The absorbed members' own summarization edges close in the same transaction, the way a
- * session close ends the ones into the version it replaces. A rollup absorbs a whole day of
- * session narratives at once, so leaving those edges open would make this the largest producer
- * of exactly the residue the write path stopped creating, and the episodes underneath would go
- * on traversing to a narrative the rollup has already replaced.
+ * The renderer's per-member clip is what V1 refuses to rely on: a clipped member is a partial
+ * overview claiming to cover the window whole, and the coverage number it stores says 1. So the
+ * required input is measured unclipped, and a window that does not fit is refused rather than
+ * trimmed until it does.
  */
-async function closeInto(
-  deps: RollupDeps,
-  rollupId: string,
-  ids: readonly string[],
-  now: Date,
-  validUntil: Date,
-): Promise<number> {
-  const absorbed = ids.filter((oldId) => oldId !== rollupId);
-  if (absorbed.length === 0) {
-    return 0;
-  }
-
-  await inWriteTransaction(deps.driver, async (tx) => {
-    for (const oldId of absorbed) {
-      await supersedeInTransaction(tx, {
-        oldId,
-        newId: rollupId,
-        now,
-        validUntil,
-        signals: ROLLUP_SIGNALS,
-        provenance: ROLLUP_PROVENANCE,
-      });
-    }
-    await closeNarrativeEdgesInTransaction(tx, {
-      narrativeIds: absorbed,
-      validUntil,
-      txUntil: now,
-    });
-  });
-
-  return absorbed.length;
-}
-
-async function attachVector(deps: RollupDeps, rollupId: string, text: string): Promise<void> {
-  try {
-    await attachContentVectors(deps.driver, deps.provider, [{ id: rollupId, text }]);
-  } catch (err) {
-    deps.logger.warn({ err, rollupId }, 'rollup vector deferred; the rollup is stored');
-  }
-}
-
-type WindowOutcome = 'created' | 'skipped' | 'vetoed' | 'failed';
+const UNCLIPPED = Number.MAX_SAFE_INTEGER;
 
 async function rollUpWindow(
   deps: RollupDeps,
   settings: RollupSettings,
   window: RollupWindow,
   existing: readonly WindowNarrative[],
-): Promise<{ outcome: WindowOutcome; absorbed: number }> {
+): Promise<WindowResult> {
   const memberScope = rollupMemberScope(settings.scope);
   const decision = decideSessionNarrative(
     window.members.map((member) => ({
@@ -300,9 +184,30 @@ async function rollUpWindow(
 
   const source = renderConsolidationSource(
     toMembers(window, memberScope),
-    settings.maxMemberChars,
+    UNCLIPPED,
     settings.maxSentences,
   );
+  if (source.text.length > settings.renderedInputAllowance) {
+    // V1 BLOCKS. No provider call, no publication, and the members stand exactly where they
+    // were: a partial overview is worse than none, because the one it wrote would claim the
+    // window whole. The measured size travels with the reason so a person can see what would
+    // have to change, and an unchanged window blocks again here without generating anything.
+    const reason =
+      `blocked_window_capacity: ${String(source.text.length)} rendered units over an ` +
+      `allowance of ${String(settings.renderedInputAllowance)} across ` +
+      `${String(window.members.length)} member(s)`;
+    deps.logger.warn(
+      {
+        scope: settings.scope,
+        window: window.key,
+        requiredUnits: source.text.length,
+        allowance: settings.renderedInputAllowance,
+        members: window.members.map((member) => member.id),
+      },
+      'narrative rollup blocked: the window does not fit the rendered input allowance',
+    );
+    return { outcome: 'blocked', absorbed: 0, blockedReason: reason };
+  }
   const synthesis = await synthesizeGrounded(
     deps.provider,
     source,
@@ -389,18 +294,21 @@ export async function rollUpNarratives(
     limit: settings.memberLimit,
   });
 
-  const grouped = groupRollupWindows(members, settings.scope).filter((window) =>
+  const closed = groupRollupWindows(members, settings.scope).filter((window) =>
     isWindowClosed(window, settings.now),
   );
   // The member read is capped across every window at once, so a read that came back full may
-  // have cut its newest window short. A rollup asserts it saw the whole of what it covers, so
-  // that window waits for a run whose read reaches all of it.
-  const closed = members.length < settings.memberLimit ? grouped : grouped.slice(0, -1);
+  // have cut its newest window short. That window's membership is not something this run can
+  // enumerate completely, and an overview asserts it saw the whole of what it covers, so it is
+  // BLOCKED with its reason rather than quietly dropped from the list.
+  const truncated =
+    members.length < settings.memberLimit ? undefined : closed[closed.length - 1]?.key;
 
   let created = 0;
   let skipped = 0;
   let vetoed = 0;
   let failed = 0;
+  let blocked = 0;
   let absorbed = 0;
   let examined = 0;
 
@@ -412,6 +320,17 @@ export async function rollUpNarratives(
       break;
     }
     examined += 1;
+    if (window.key === truncated) {
+      blocked += 1;
+      recordBlockedWindow(deps, {
+        scope: settings.scope,
+        window,
+        reason: 'window_enumeration_incomplete',
+        allowance: settings.renderedInputAllowance,
+        now: settings.now,
+      });
+      continue;
+    }
     const existing = await findWindowRollups(deps.driver, settings.scope, window.key);
     const result = await rollUpWindow(deps, settings, window, existing);
     absorbed += result.absorbed;
@@ -421,10 +340,19 @@ export async function rollUpNarratives(
       skipped += 1;
     } else if (result.outcome === 'vetoed') {
       vetoed += 1;
+    } else if (result.outcome === 'blocked') {
+      blocked += 1;
+      recordBlockedWindow(deps, {
+        scope: settings.scope,
+        window,
+        reason: result.blockedReason ?? 'blocked',
+        allowance: settings.renderedInputAllowance,
+        now: settings.now,
+      });
     } else {
       failed += 1;
     }
-    if (created + vetoed + failed >= settings.windowLimit) {
+    if (created + vetoed + failed + blocked >= settings.windowLimit) {
       break;
     }
   }
@@ -436,6 +364,7 @@ export async function rollUpNarratives(
     skipped,
     vetoed,
     failed,
+    blocked,
     absorbed,
   };
 }

@@ -17,7 +17,10 @@ import {
   NARRATIVE_PROPERTIES,
   SUMMARIZED_BY_TYPE,
 } from '../../../infrastructure/graph/narrative-queries.js';
-import { ROLLUP_WINDOW_PROPERTY } from '../../../infrastructure/graph/narrative-rollup-queries.js';
+import {
+  findRollupMembers,
+  ROLLUP_WINDOW_PROPERTY,
+} from '../../../infrastructure/graph/narrative-rollup-queries.js';
 import { asOf, withCurrency } from '../../../infrastructure/graph/read-modes.js';
 import { fulltextSeeds } from '../../../infrastructure/graph/seed-queries.js';
 import {
@@ -36,6 +39,7 @@ import { unsupersedeNode } from '../../../infrastructure/graph/unsupersede.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import type { Provider } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import { getLedgerEntry } from '../../../infrastructure/sqlite/ops-ledger.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
 
@@ -96,6 +100,9 @@ const SESSIONS = [
  * verdict the test asked for. Nothing here reads the draft: the point is which path the
  * operation takes on each verdict, not whether a model can spot an invention.
  */
+/** Every synthesis prompt the run reached a provider with, so "asked no model" is a fact. */
+const generated: string[] = [];
+
 function stubProvider(verdict: 'unanimous' | 'vetoed'): Provider {
   return {
     embed: (texts) =>
@@ -109,6 +116,7 @@ function stubProvider(verdict: 'unanimous' | 'vetoed'): Provider {
             : { unsupported: false, reason: 'every sentence stays inside its citations' },
         );
       }
+      generated.push(prompt);
       const handles = [...new Set(prompt.match(/\[S\d+\]/g) ?? [])].map((tag) => tag.slice(1, -1));
       return Promise.resolve({
         sentences: [
@@ -247,6 +255,74 @@ describe('narrative rollups against a live substrate', () => {
         SESSIONS[0]!.id,
       ),
     ).toBeUndefined();
+  });
+
+  /**
+   * V1's capacity rule. A window whose required input does not fit is refused whole: no provider
+   * call, no overview, and every member exactly where it was. The alternative the renderer
+   * offered was a clipped input published with a coverage of 1, which is an overview claiming a
+   * day it never read.
+   */
+  it('blocks a window it cannot render inside the allowance, and asks no model', async () => {
+    const tiny: Config = {
+      ...armed,
+      maintenance: { ...armed.maintenance, chunkRenderedInputAllowance: 40 },
+    };
+    const before = generated.length;
+
+    const outcome = await dayNarrativeRollupOperation().run(context(tiny));
+
+    expect(outcome.status).toBe('noop');
+    expect(outcome.itemsAffected).toBe(0);
+    expect(outcome.detail).toContain('blocked for capacity');
+    expect(generated).toHaveLength(before);
+
+    // The reason and the measurement a later allowance decision is made against.
+    const entry = getLedgerEntry(db, 'narrative-rollup:blocked:day:2026-04-02');
+    expect((entry?.summary as { reason?: string } | undefined)?.reason).toContain(
+      'blocked_window_capacity',
+    );
+
+    // The constituent narratives are untouched and still discoverable.
+    for (const seed of [SESSIONS[0]!, SESSIONS[1]!]) {
+      const properties = await nodeProperties(harness.driver, seed.id);
+      expect(properties[BITEMPORAL_PROPERTIES.validUntil]).toBeUndefined();
+      expect(properties[BITEMPORAL_PROPERTIES.forgottenAt]).toBeUndefined();
+    }
+
+    // Unchanged, it blocks again on the same measurement rather than generating over it.
+    await dayNarrativeRollupOperation().run(context(tiny));
+    expect(generated).toHaveLength(before);
+  });
+
+  /**
+   * A chunk revision is a memory of its own, not a version of the session it came out of, and a
+   * calendar window must never take one as a member it would then close.
+   */
+  it('never takes a chunk revision as a member of a calendar window', async () => {
+    await writeStampedNode(harness.driver, {
+      label: 'Narrative',
+      id: 'chunk-revision-node',
+      now: new Date(SESSIONS[0]!.occurredAt),
+      occurredAt: new Date(SESSIONS[0]!.occurredAt),
+      properties: {
+        [MEMORY_PROPERTIES.text]: 'what one sealed member set said',
+        [NARRATIVE_PROPERTIES.scope]: 'chunk',
+        [NARRATIVE_PROPERTIES.family]: 'chunk',
+        [NARRATIVE_PROPERTIES.chunkId]: 'chunk-abc',
+        [NARRATIVE_PROPERTIES.revisionNo]: 1,
+        [NARRATIVE_PROPERTIES.version]: 1,
+        [NARRATIVE_PROPERTIES.coverageKey]: 'chunk-abc',
+        [NARRATIVE_PROPERTIES.coverageCount]: 1,
+      },
+    });
+
+    const members = await findRollupMembers(harness.driver, {
+      scope: 'session',
+      rollupScope: 'day',
+      limit: 200,
+    });
+    expect(members.map((member) => member.id)).not.toContain('chunk-revision-node');
   });
 
   it('compresses each closed day into one narrative citing its sessions', async () => {

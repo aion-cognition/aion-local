@@ -56,13 +56,14 @@ function narrativeRollupOperation(
       }
 
       const report = await rollUpNarratives(
-        { driver: ctx.driver, provider: ctx.provider, logger: ctx.logger },
+        { driver: ctx.driver, db: ctx.db, provider: ctx.provider, logger: ctx.logger },
         {
           scope,
           model: ctx.config.models.reflect,
           timeoutMs: ctx.config.reflection.stageTimeoutMs,
           reflection: ctx.config.reflection,
           windowLimit: ctx.config.maintenance.narrativeRollupWindows,
+          renderedInputAllowance: ctx.config.maintenance.chunkRenderedInputAllowance,
           now: ctx.now,
           signal: ctx.signal,
         },
@@ -75,6 +76,7 @@ function narrativeRollupOperation(
         detail:
           `${String(report.windows)} closed ${scope} window(s): ${String(report.created)} rolled up ` +
           `over ${String(report.absorbed)} member narrative(s), ${String(report.skipped)} already covered, ` +
+          `${String(report.blocked)} blocked for capacity or incomplete membership, ` +
           `${String(report.vetoed)} vetoed by review, ${String(report.failed)} generation failure(s)`,
       };
     },
