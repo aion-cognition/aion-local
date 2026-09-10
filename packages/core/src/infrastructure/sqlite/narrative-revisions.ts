@@ -174,6 +174,45 @@ export function abandonNarrativeRevision(
   return result.changes === 1;
 }
 
+/**
+ * Binds an allocated revision to the operation that is about to publish it.
+ *
+ * The row is what makes the attempt discoverable after a restart: the durable intent carries the
+ * output, and this says which revision number that intent was prepared against. It moves only
+ * from `allocated`, so a second operation cannot take a revision another one is already holding.
+ */
+export function prepareNarrativeRevision(
+  db: SqliteHandle,
+  family: RevisionFamily,
+  familyKey: string,
+  revisionNo: number,
+  operationId: string,
+): boolean {
+  const result = db
+    .prepare(
+      `UPDATE ${family.revisionTable} SET state = 'prepared', operation_id = ?
+       WHERE ${family.keyColumn} = ? AND revision_no = ? AND state = 'allocated'`,
+    )
+    .run(operationId, familyKey, revisionNo);
+  return result.changes === 1;
+}
+
+/** Returns a prepared revision to `allocated` so a fresh attempt can take it. */
+export function releaseNarrativeRevision(
+  db: SqliteHandle,
+  family: RevisionFamily,
+  familyKey: string,
+  revisionNo: number,
+): boolean {
+  const result = db
+    .prepare(
+      `UPDATE ${family.revisionTable} SET state = 'allocated', operation_id = NULL
+       WHERE ${family.keyColumn} = ? AND revision_no = ? AND state = 'prepared'`,
+    )
+    .run(familyKey, revisionNo);
+  return result.changes === 1;
+}
+
 export type NarrativePublication = {
   readonly familyKey: string;
   readonly revisionNo: number;
@@ -273,6 +312,47 @@ export function readPublishedHead(
     )
     .get(familyKey) as { head: number | null } | undefined;
   return row?.head ?? undefined;
+}
+
+export type PublishedNarrativeRevision = {
+  readonly revisionNo: number;
+  readonly nodeId: string;
+  /** The dependency set the head was published on, which is what invalidation is judged against. */
+  readonly evidenceRevisionJson: string | null;
+  readonly coverageGapsJson: string | null;
+  readonly knownFrom: string | null;
+};
+
+/** The head itself, with the evidence and coverage it published under. */
+export function readPublishedRevision(
+  db: SqliteHandle,
+  family: RevisionFamily,
+  familyKey: string,
+): PublishedNarrativeRevision | undefined {
+  const row = db
+    .prepare(
+      `SELECT revision_no, node_id, evidence_revision_json, coverage_gaps_json, known_from
+       FROM ${family.revisionTable}
+       WHERE ${family.keyColumn} = ? AND state = 'published'`,
+    )
+    .get(familyKey) as
+    | {
+        revision_no: number;
+        node_id: string;
+        evidence_revision_json: string | null;
+        coverage_gaps_json: string | null;
+        known_from: string | null;
+      }
+    | undefined;
+  return row === undefined
+    ? undefined
+    : {
+        revisionNo: row.revision_no,
+        nodeId: row.node_id,
+        evidenceRevisionJson: row.evidence_revision_json,
+        coverageGapsJson: row.coverage_gaps_json,
+        knownFrom: row.known_from,
+      };
 }
 
 export function readNarrativeRevision(
