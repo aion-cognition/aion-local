@@ -69,13 +69,10 @@ export type ChunkCandidate = {
   /** World time: what the member says happened, which is not the same as when it arrived. */
   readonly occurredAt: Date;
   /**
-   * When the substrate accepted it.
+   * When the substrate accepted it, which is the clock the span trigger ages on.
    *
-   * Carried and not yet decided on. The span trigger below still ages on world time, and the
-   * signed C3 §2 nomination ages on ARRIVAL — so a captured source dated to next year is due to a
-   * scheduler that will never see this decision fire. Reconciling the two axes is a T10b
-   * integration finding with C2 uptake; the clock it needs is here so that uptake is one line in
-   * `sealAge` rather than a change to every caller.
+   * Optional because a caller that has no acceptance record for a member falls back to world
+   * time; every production caller reads it from the source record and supplies it.
    */
   readonly arrivalAt?: Date;
   readonly admission: ChunkCandidateAdmission;
@@ -144,13 +141,19 @@ function seal(
 }
 
 /**
- * The clock the span trigger ages a tail on.
+ * The clock the span trigger ages a tail on: ARRIVAL, not world time.
  *
- * One place, deliberately: this is the axis the C3 seam disagrees with, and the reconciliation
- * lands here rather than being spread across the decision.
+ * Signed C3 §2 is explicit — the span measures elapsed capture and arrival age, not a backdated
+ * `occurredAt` — and the scheduler that nominates a tail ages it the same way. Reading world time
+ * here made the two disagree in both directions: a conversation about last year was permanently
+ * overdue and never nominated, and a plan stated for next year was nominated as mature and then
+ * refused by this decision forever. World time keeps every other job it has, the narrative's own
+ * span and the calendar window among them; it is not what says a tail has been standing too long.
+ *
+ * One place, deliberately, so the two axes cannot drift apart again.
  */
 function sealAge(candidate: ChunkCandidate): Date {
-  return candidate.occurredAt;
+  return candidate.arrivalAt ?? candidate.occurredAt;
 }
 
 /** Which bound closed the chunk, said in the terms the manifest records against the seal. */

@@ -435,3 +435,23 @@ it('publishes the older due chunk before the tail it sealed in the same run', as
   await runSeal(later, { ...ONE_MEMBER, batch: 1 });
   expect(readPublishedHead(store.db, CHUNK_REVISION_FAMILY, newerChunk)).toBe(1);
 });
+
+/**
+ * The other direction of the arrival clock. A conversation about last year arrives now, and the
+ * span trigger measures how long the tail has been standing rather than what it says happened —
+ * so a backdated source is a fresh tail and waits like any other.
+ */
+it('leaves a freshly arrived tail alone however far back its subject reaches', async () => {
+  await drain(NOW);
+  const source = await accept('session-backdated', 'backdated', NOW);
+  store.db
+    .prepare('UPDATE source_records SET occurred_at = ? WHERE source_id = ?')
+    .run(new Date(NOW.getTime() - 400 * DAY_MS).toISOString(), source);
+  prompts = [];
+
+  const outcome = await runSeal(NOW);
+
+  expect(chunkOfSource(store.db, source)).toBeUndefined();
+  expect(prompts).toEqual([]);
+  expect(outcome.detail).toContain('tail(s) inside every trigger');
+});

@@ -127,6 +127,8 @@ type SealPass = {
   readonly sealed: number;
   readonly members: number;
   readonly refused: number;
+  /** Tails the seal decision looked at and found inside every trigger. */
+  readonly waiting: number;
 };
 
 /**
@@ -146,14 +148,21 @@ async function sealDueTails(
   const chunkIds: string[] = [];
   let members = 0;
   let refused = 0;
+  let waiting = 0;
   let cursor = readCursor(ctx.db);
   let wrapped = cursor === undefined;
-  for (let page = 0; page < 2 && chunkIds.length + refused < scales.batch; page += 1) {
+  for (let page = 0; page < 2 && chunkIds.length + refused + waiting < scales.batch; page += 1) {
     const groups = dueRemainderGroups(ctx.db, {
       now: ctx.now,
       maxSpanMs: scales.maxSpanMs,
       maxMembers: CHUNK_MAX_MEMBERS,
-      limit: scales.batch - chunkIds.length - refused,
+      limit: scales.batch - chunkIds.length - refused - waiting,
+      // Every tail, not only the ones durable state can prove due. The rendered-input trigger is
+      // knowable to the seal decision and to nothing else, so a nomination that pre-filtered on
+      // the two visible triggers would never offer a single oversized source to the one component
+      // that can admit it. A tail that has reached nothing answers `waiting` and costs its own
+      // evidence read; the page and the cursor bound how many of those a run pays for.
+      reach: 'any',
       ...(cursor === undefined ? {} : { after: cursor }),
     });
     if (groups.length === 0) {
@@ -179,7 +188,9 @@ async function sealDueTails(
       if (report.status === 'sealed') {
         chunkIds.push(report.chunkId);
         members += report.members.length;
-      } else if (report.status === 'refused') {
+      } else if (report.status === 'waiting') {
+        waiting += 1;
+      } else {
         refused += 1;
         ctx.logger.warn(
           { sessionId: group.sessionId, reason: report.reason },
@@ -192,7 +203,7 @@ async function sealDueTails(
     }
   }
   writeCursor(ctx.db, cursor);
-  return { chunkIds, sealed: chunkIds.length, members, refused };
+  return { chunkIds, sealed: chunkIds.length, members, refused, waiting };
 }
 
 /**
@@ -300,7 +311,8 @@ function detailOf(
   return (
     `${String(tally.published)} of ${String(tally.attempted)} chunk publication attempt(s) ` +
     `acknowledged, ${String(tally.synthesized)} reached synthesis; ` +
-    `${String(seal.sealed)} membership(s) sealed over ${String(seal.members)} source(s); ` +
+    `${String(seal.sealed)} membership(s) sealed over ${String(seal.members)} source(s), ` +
+    `${String(seal.waiting)} tail(s) inside every trigger; ` +
     `${String(tally.standing)} standing head(s), ${String(tally.held)} held head(s), ` +
     `${String(tally.blocked)} blocked attempt(s) ` +
     `over ${String(blockedSources)} held source(s), ${String(seal.refused)} refused tail(s), ` +

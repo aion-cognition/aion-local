@@ -8,12 +8,16 @@ import type { SqliteHandle } from './database.js';
  * none of those and a demand number a tick cannot take is a demand number nobody acts on. What
  * that costs is stated rather than hidden: the rendered-input trigger is invisible here (it needs
  * the evidence read the run itself performs), so a session whose tail is only over the allowance
- * reaches this as no demand and is sealed by the run that visits it for another reason.
+ * is no DEMAND, and the run reaches it by offering the tail to the seal decision anyway.
  *
  * Two groups exist and they are counted apart. A GROUP TO SEAL is a session whose unsealed tail
  * has reached the count or span trigger; a GROUP TO PUBLISH is a sealed chunk whose head is
  * unpublished and whose next attempt is due. Both consume one bounded unit of a run, which is why
  * a caller may add them, and both are reported separately so nothing divides a mixed total.
+ *
+ * What a census may COUNT and what a run may OFFER are different questions, which is what `reach`
+ * below separates: the third seal trigger is the rendered input, and only the seal decision can
+ * evaluate it.
  */
 
 /** A source is admitted to a chunk only on a verified identity, so the two states are named. */
@@ -114,12 +118,24 @@ export type DueRemainderGroup = {
 };
 
 /**
- * Sessions whose unsealed tail has reached a trigger durable state can see: the member count, or
- * the elapsed arrival age of its oldest unsealed source.
+ * Sessions carrying an unsealed tail, in capture order.
+ *
+ * `reach` is which question is being asked, and the two callers ask different ones.
+ *
+ * `due` is provable demand: the tail has reached a trigger durable state can SEE — the member
+ * count, or the elapsed arrival age of its oldest unsealed source. That is what a demand census
+ * may count, because it is what a run could act on with no further reading.
+ *
+ * `any` is nomination. The third signed trigger is the rendered input, and no query can evaluate
+ * it: what a member renders to is an evidence read, which the seal decision performs and this
+ * does not. A nomination limited to the two visible triggers therefore never offers a single
+ * oversized source to the one component that can admit it, and that source is never narrated. So
+ * the operation offers the oldest tails whether or not durable state can prove them due, bounded
+ * by the same page and the same cursor, and the seal answers `waiting` for the ones that are not.
  *
  * `created_at` is the substrate's own clock for the acceptance, which is what the span trigger
- * measures. `occurred_at` is the world time the caller stated, and a source backdated to last
- * year would otherwise make every tail it lands in permanently overdue.
+ * measures on both sides of the seam. `occurred_at` is the world time the caller stated, and a
+ * source backdated to last year would otherwise make every tail it lands in permanently overdue.
  */
 export function dueRemainderGroups(
   db: SqliteHandle,
@@ -128,6 +144,8 @@ export function dueRemainderGroups(
     readonly maxSpanMs: number;
     readonly maxMembers: number;
     readonly limit: number;
+    /** `due` counts what is provably due; `any` offers every tail to the seal decision. */
+    readonly reach?: 'due' | 'any';
     /** Resume strictly past this group, so a session a run cannot seal stops holding the front. */
     readonly after?: RemainderCursor;
   },
@@ -147,7 +165,7 @@ export function dueRemainderGroups(
         WHERE ${REMAINDER_PREDICATE}
           AND r.verification_status = '${VERIFIED}'
         GROUP BY r.session_id
-       HAVING (COUNT(*) >= ? OR MIN(r.created_at) <= ?)
+       HAVING (? = 1 OR COUNT(*) >= ? OR MIN(r.created_at) <= ?)
           AND (? = ''
                OR MIN(r.capture_order_value) > ?
                OR (MIN(r.capture_order_value) = ? AND r.session_id > ?))
@@ -155,6 +173,7 @@ export function dueRemainderGroups(
         LIMIT ?`,
     )
     .all(
+      input.reach === 'any' ? 1 : 0,
       input.maxMembers,
       cutoff,
       after.captureKey,
