@@ -5,6 +5,8 @@ import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
 
 import { narrativeSealOperation, type SealScales } from './narrative-seal.js';
 import { EvidenceResolver } from '../../../evidence/application/resolver.js';
+import { durableRoleScope } from '../../../evidence/domain/scopes.js';
+import { establishScope } from '../../../evidence/test-support/evidence.fixture.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { bootstrapBackbone } from '../../../infrastructure/graph/backbone.js';
@@ -117,6 +119,13 @@ async function accept(session: string, marker: string, now = NOW): Promise<strin
     { observations: [body(marker)] },
     { identity: session, now },
   );
+  // The incoming-statement census a publication requires before it may rest on "nothing corrects
+  // this", established here the way the cohort seal establishes it at scale. Without it the
+  // revision holds rather than publishing, which is the C2 evidence contract rather than a
+  // scheduling question.
+  for (const role of ['stated_correction', 'stated_confirmation'] as const) {
+    establishScope(store.db, result.episode_id, durableRoleScope(role, 'in'), now);
+  }
   return result.episode_id;
 }
 
