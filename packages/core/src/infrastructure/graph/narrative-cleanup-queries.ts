@@ -123,11 +123,11 @@ const FIND_DUPLICATE_CHUNK_FAMILIES = [
   `WITH n.${NARRATIVE_PROPERTIES.chunkId} AS chunk_id,`,
   `     collect({ id: n.id, revision_no: n.${NARRATIVE_PROPERTIES.revisionNo} }) AS all_versions`,
   'WHERE size(all_versions) > 1',
-  // The version array is truncated HERE, in the read, because a bound applied after the rows
-  // are in hand is not a read bound: one family carrying two hundred standing versions
-  // materializes all of them before any caller can decline. What the caller does with the page
-  // is choose a family; the repair re-reads the family's standing revisions under the guard and
-  // bounds that reading itself, so a truncated page loses no correctness.
+  // The version array is truncated in the query, so what the page RETURNS is bounded whatever the
+  // family holds. The collect above still builds the whole array server-side, so this is a bound on
+  // the returned records and on what the caller materializes, and not a bound on server memory.
+  // What the caller does with a page is choose a family; the repair re-reads that family's standing
+  // revisions under the guard and bounds its own reading, so a truncated page loses no correctness.
   'WITH chunk_id, all_versions[0..$versionLimit] AS versions',
   'RETURN chunk_id, versions',
   'ORDER BY chunk_id',
@@ -177,26 +177,58 @@ export async function findDuplicateChunkFamilies(
 const READ_STANDING_FAMILY_REVISIONS = [
   `MATCH (n:Narrative { ${NARRATIVE_PROPERTIES.chunkId}: $chunkId })`,
   `WHERE ${currentOnly('n')}`,
+  `  AND ($after = '' OR n.id > $after)`,
   'RETURN n.id AS id',
   'ORDER BY n.id',
   'LIMIT $limit',
 ].join('\n');
 
 /**
- * The family's standing revision nodes, read inside a caller's transaction and bounded there.
+ * One page of the family's standing revision nodes, read inside a caller's transaction.
  *
  * The scan that nominated the family ran outside every lock, so what it saw is a claim about a
  * moment that has passed. This is the reading a guarded repair acts on, and the bound is on the
  * read rather than on what the caller does with it.
+ *
+ * It resumes, because a family's standing nodes are ordered by id and nothing says the ones a
+ * repair can act on sort first. A fixed front page of ids the manifest binds to nothing hides
+ * every legitimate target behind it, in a family a cursor over FAMILIES can never step inside.
  */
 export async function standingFamilyRevisionsInTransaction(
   tx: GraphTransaction,
   chunkId: string,
   limit: number,
+  after?: string,
 ): Promise<string[]> {
-  return tx.run(READ_STANDING_FAMILY_REVISIONS, { chunkId, limit: toGraphInteger(limit) }, (row) =>
+  return tx.run(
+    READ_STANDING_FAMILY_REVISIONS,
+    { chunkId, limit: toGraphInteger(limit), after: after ?? '' },
+    (row) => String(row.id),
+  );
+}
+
+const READ_STANDING_FAMILY_NODE = [
+  `MATCH (n:Narrative { ${NARRATIVE_PROPERTIES.chunkId}: $chunkId })`,
+  `WHERE ${currentOnly('n')} AND n.id = $nodeId`,
+  'RETURN n.id AS id',
+].join('\n');
+
+/**
+ * Whether ONE named node is a standing revision of this family.
+ *
+ * The keeper is named by the manifest, so proving it stands is a question about that one node.
+ * Asking it of a bounded page instead makes the answer depend on how the family's other ids happen
+ * to sort, and a keeper the page did not reach reads as a keeper that does not exist.
+ */
+export async function standsInFamilyInTransaction(
+  tx: GraphTransaction,
+  chunkId: string,
+  nodeId: string,
+): Promise<boolean> {
+  const rows = await tx.run(READ_STANDING_FAMILY_NODE, { chunkId, nodeId }, (row) =>
     String(row.id),
   );
+  return rows.length > 0;
 }
 
 const READ_OPEN_CHUNK_REVISIONS = [

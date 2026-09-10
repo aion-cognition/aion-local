@@ -105,13 +105,17 @@ async function closeExtraRevisions(
   closedEdges: number;
   unresolved: number;
 }> {
-  // The per-family version bound distributes the run's record budget across the families the
-  // page may return, so the page cannot materialize more records than the run may examine.
+  // The record budget is split between the two bounds, and BOTH have to give. Two versions is the
+  // floor on the per-family bound, because a family with one standing version is not a duplicate
+  // family at all — so at a configured batch above half the budget the family count is what has to
+  // come down. Distributing the budget by the batch alone left 150 families of 2 versions each
+  // returning 300 records against a 200-record bound.
   const versionLimit = Math.max(2, Math.floor(REVISION_SCAN_BUDGET / Math.max(1, limit)));
+  const familyLimit = Math.max(1, Math.min(limit, Math.floor(REVISION_SCAN_BUDGET / versionLimit)));
+  const page = { limit: familyLimit, versionLimit };
   const cursor = readRepairCursor(ctx.db);
   let families = await findDuplicateChunkFamilies(ctx.driver, {
-    limit,
-    versionLimit,
+    ...page,
     ...(cursor === undefined ? {} : { after: cursor }),
   });
   if (families.length === 0 && cursor !== undefined) {
@@ -119,7 +123,7 @@ async function closeExtraRevisions(
     // from the front is what makes the cursor a position and not a discharge: a family an earlier
     // page could not repair is visited again, and a run that resumed near the tail still spends
     // its page.
-    families = await findDuplicateChunkFamilies(ctx.driver, { limit, versionLimit });
+    families = await findDuplicateChunkFamilies(ctx.driver, page);
   }
   const epoch = readCurrentCoverageContract(ctx.db)?.epoch;
   if (epoch === undefined) {

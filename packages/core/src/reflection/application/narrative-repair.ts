@@ -2,7 +2,11 @@ import { z } from 'zod';
 
 import { GRAPH_NODE_SCOPE } from '../../evidence/domain/scopes.js';
 import { supersedeInTransaction } from '../../infrastructure/graph/bitemporal.js';
-import { standingFamilyRevisionsInTransaction } from '../../infrastructure/graph/narrative-cleanup-queries.js';
+import type { GraphTransaction } from '../../infrastructure/graph/connection.js';
+import {
+  standingFamilyRevisionsInTransaction,
+  standsInFamilyInTransaction,
+} from '../../infrastructure/graph/narrative-cleanup-queries.js';
 import { closeNarrativeEdgesInTransaction } from '../../infrastructure/graph/narrative-edge-queries.js';
 import { PublicationOperation } from '../../infrastructure/publication/operation.js';
 import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
@@ -49,6 +53,12 @@ const ACKNOWLEDGED_STATES = new Set(['published', 'closed']);
  */
 export const REPAIR_TARGET_LIMIT = 32;
 
+/**
+ * Standing nodes one attempt looks at while finding those targets. Protected and unbound ids cost
+ * a look and no write, and the search steps past them; this is what stops it stepping forever.
+ */
+export const REPAIR_SCAN_LIMIT = 128;
+
 const Payload = z.strictObject({
   chunkId: z.string().min(1),
   /** The caller's own epoch, so a registry that moved defers this rather than being re-read. */
@@ -86,6 +96,51 @@ function repairable(db: SqliteHandle, chunkId: string, nodeId: string): boolean 
   );
 }
 
+/**
+ * Standing nodes this repair may close, found by continuing past the ones it may not.
+ *
+ * Both endpoints of every close are checked against the manifest family: a node carrying this
+ * chunk's property that the records bind to another family, or to no revision at all, is not this
+ * family's to close, and is stepped OVER rather than stopping the search. A page of ids the
+ * manifest binds to nothing used to end the discovery, so a family whose legitimate target sorted
+ * behind thirty-three unbound ids was never repaired however many runs it got: the cursor over
+ * families cannot step inside one.
+ *
+ * Two bounds, both on the read. At most `REPAIR_TARGET_LIMIT` targets are collected, and at most
+ * `REPAIR_SCAN_LIMIT` standing nodes are looked at to find them.
+ */
+async function repairableTargets(
+  context: { readonly graph: GraphTransaction; readonly db: SqliteHandle },
+  chunkId: string,
+  keeperNodeId: string,
+): Promise<{ targets: string[]; examined: number }> {
+  const targets: string[] = [];
+  let examined = 0;
+  let after: string | undefined;
+  while (targets.length < REPAIR_TARGET_LIMIT && examined < REPAIR_SCAN_LIMIT) {
+    const page = await standingFamilyRevisionsInTransaction(
+      context.graph,
+      chunkId,
+      Math.min(REPAIR_TARGET_LIMIT, REPAIR_SCAN_LIMIT - examined),
+      after,
+    );
+    if (page.length === 0) {
+      break;
+    }
+    examined += page.length;
+    after = page[page.length - 1];
+    for (const nodeId of page) {
+      if (targets.length >= REPAIR_TARGET_LIMIT) {
+        break;
+      }
+      if (nodeId !== keeperNodeId && repairable(context.db, chunkId, nodeId)) {
+        targets.push(nodeId);
+      }
+    }
+  }
+  return { targets, examined };
+}
+
 export const narrativeFamilyRepairPublication = new PublicationOperation({
   kind: 'narrative_family_repair',
   effectKinds: [NARRATIVE_FAMILY_REPAIR_EFFECT],
@@ -97,33 +152,25 @@ export const narrativeFamilyRepairPublication = new PublicationOperation({
       throw new Error('a narrative family cannot be repaired before the coverage registry exists');
     }
     const head = readPublishedRevision(context.db, CHUNK_REVISION_FAMILY, payload.chunkId);
-    const standing = await standingFamilyRevisionsInTransaction(
-      context.graph,
-      payload.chunkId,
-      REPAIR_TARGET_LIMIT + 1,
-    );
-    // Both endpoints of every close are checked against the manifest family: a node carrying this
-    // chunk's property that the records bind to another family, or to no revision at all, is not
-    // this family's to close.
     // The keeper has to be STANDING, not merely named by the manifest. A head something else
     // closed in the graph is not a keeper: closing the survivors onto it would leave the family
     // with no current narrative at all, which is the one outcome this repair exists to prevent.
-    const keeper = head !== undefined && standing.includes(head.nodeId) ? head : undefined;
-    const targets =
+    // It is proved by its own name, not by turning up in a page of the family's other ids.
+    const keeper =
+      head !== undefined &&
+      (await standsInFamilyInTransaction(context.graph, payload.chunkId, head.nodeId))
+        ? head
+        : undefined;
+    const found =
       keeper === undefined
-        ? []
-        : standing
-            .filter(
-              (nodeId) =>
-                nodeId !== keeper.nodeId && repairable(context.db, payload.chunkId, nodeId),
-            )
-            .slice(0, REPAIR_TARGET_LIMIT);
+        ? { targets: [], examined: 0 }
+        : await repairableTargets(context, payload.chunkId, keeper.nodeId);
     const data: RepairData = {
       ...payload,
       headNodeId: keeper?.nodeId ?? '',
       headRevisionNo: head?.revisionNo ?? 1,
-      targets,
-      examined: standing.length,
+      targets: found.targets,
+      examined: found.examined,
     };
     return {
       data,
@@ -140,7 +187,7 @@ export const narrativeFamilyRepairPublication = new PublicationOperation({
       effects: [
         {
           kind: NARRATIVE_FAMILY_REPAIR_EFFECT,
-          detail: { chunkId: payload.chunkId, targets: targets.length },
+          detail: { chunkId: payload.chunkId, targets: found.targets.length },
         },
       ],
     };
