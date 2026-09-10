@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { certifyNarrativeSupport } from './narrative-support.js';
 import { certifyNodeSupport } from './node-support.js';
-import { recordRevisionCitations, sealChunk } from '../../infrastructure/sqlite/chunk-manifest.js';
+import { sealChunk } from '../../infrastructure/sqlite/chunk-manifest.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
+import { recordRevisionCitations } from '../../infrastructure/sqlite/narrative-citations.js';
 import {
   allocateNarrativeRevision,
   CHUNK_REVISION_FAMILY,

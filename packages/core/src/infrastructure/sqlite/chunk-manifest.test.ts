@@ -9,14 +9,17 @@ import {
   markChunkPublished,
   readChunk,
   readRemainderMembers,
-  recordRevisionCitations,
-  recordRevisionDependencies,
-  revisionsDependingOn,
   sealChunk,
   unorderedSessionSources,
 } from './chunk-manifest.js';
 import { SqliteStore } from './database.js';
-import { readCitationsFrom, readCitationsOf } from './narrative-citations.js';
+import {
+  readCitationsFrom,
+  readCitationsOf,
+  recordRevisionCitations,
+  recordRevisionDependencies,
+  revisionsDependingOn,
+} from './narrative-citations.js';
 import { recordSourceRecord } from './source-identity.js';
 import { captureOrderValue, touchSessionRemainder } from './source-lifecycle.js';
 import { buildEvidenceRevision } from '../publication/preconditions.js';
@@ -47,6 +50,21 @@ function accept(sourceId: string, position: number, sessionId = SESSION): void {
     captureOrderBasis: 'archive_acceptance',
   });
   touchSessionRemainder(store.db, sessionId, captureOrderValue(position), NOW);
+}
+
+/** An acceptance with a stated world time, which is what an overlap is measured on. */
+function accepted(sourceId: string, position: number, occurredAt: string): void {
+  recordSourceRecord(store.db, {
+    sourceId,
+    sessionId: SESSION,
+    verificationStatus: 'verified',
+    occurredAt,
+    createdAt: NOW,
+    archive: { ...ARCHIVE_PROOF, canonicalArchiveId: `archive-${sourceId}` },
+    captureOrderValue: captureOrderValue(position),
+    captureOrderBasis: 'archive_acceptance',
+  });
+  touchSessionRemainder(store.db, SESSION, captureOrderValue(position), NOW);
 }
 
 beforeEach(() => {
@@ -116,6 +134,48 @@ describe('sealing', () => {
       first.chunkId,
     ]);
     expect(chunkOfSource(store.db, 's2')).toBeUndefined();
+  });
+
+  /**
+   * F13 D6: a backdated arrival joins the remainder and seals into a LATER chunk. Sealed history
+   * is append-only at the chunk grain, so the only record that the two describe the same stretch
+   * of time is the annotation the later seal writes.
+   */
+  it('records the earlier chunk a backdated arrival overlaps, and moves nothing about it', () => {
+    accepted('early', 1, '2026-09-09T09:00:00.000Z');
+    accepted('late', 2, '2026-09-09T11:00:00.000Z');
+    const first = sealChunk(store.db, {
+      sessionId: SESSION,
+      sourceIds: ['early', 'late'],
+      sealedAt: NOW,
+    });
+    expect(readChunk(store.db, first.chunkId)?.overlaps).toEqual([]);
+
+    // Arrives now, happened inside the sealed chunk's span.
+    accepted('backdated', 3, '2026-09-09T10:00:00.000Z');
+    const second = sealChunk(store.db, {
+      sessionId: SESSION,
+      sourceIds: ['backdated'],
+      sealedAt: new Date(NOW.getTime() + 60_000),
+    });
+    expect(second.chunkId).not.toBe(first.chunkId);
+    expect(readChunk(store.db, second.chunkId)?.overlaps).toEqual([first.chunkId]);
+    // The old chunk is untouched: same membership, same annotation, same identity.
+    expect(listChunkMembers(store.db, first.chunkId)).toEqual(['early', 'late']);
+    expect(readChunk(store.db, first.chunkId)?.overlaps).toEqual([]);
+  });
+
+  it('records no overlap for an arrival after every sealed span', () => {
+    accepted('early', 1, '2026-09-09T09:00:00.000Z');
+    const first = sealChunk(store.db, { sessionId: SESSION, sourceIds: ['early'], sealedAt: NOW });
+    accepted('later', 2, '2026-09-09T12:00:00.000Z');
+    const second = sealChunk(store.db, {
+      sessionId: SESSION,
+      sourceIds: ['later'],
+      sealedAt: new Date(NOW.getTime() + 60_000),
+    });
+    expect(readChunk(store.db, second.chunkId)?.overlaps).toEqual([]);
+    expect(readChunk(store.db, first.chunkId)?.overlaps).toEqual([]);
   });
 
   it('moves the chunk state when its first revision publishes', () => {

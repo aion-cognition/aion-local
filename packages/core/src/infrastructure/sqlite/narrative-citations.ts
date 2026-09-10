@@ -1,4 +1,5 @@
 import type { SqliteHandle } from './database.js';
+import type { EvidenceRevision } from '../publication/preconditions.js';
 
 /**
  * What the published narrative revisions cite, in both directions, selected at the vantage the
@@ -147,4 +148,80 @@ export function isNarrativeRevisionNode(db: SqliteHandle, nodeId: string, at?: D
       )
       .get(nodeId, ...selection.parameters) !== undefined
   );
+}
+
+/**
+ * The reverse index from an endpoint to the narrative revisions that rested on it.
+ *
+ * The authoritative dependency set is the revision's own stored `EvidenceRevision`, which carries
+ * the record kind as well; these rows exist so a writer that changed one endpoint can find the
+ * revisions to re-check without reading every revision's JSON. The scope name determines the
+ * store and the record class on its own, so nothing is lost by keying on it.
+ */
+export function recordRevisionDependencies(
+  db: SqliteHandle,
+  narrativeNodeId: string,
+  revision: EvidenceRevision,
+): void {
+  const statement = db.prepare(
+    `INSERT INTO revision_dependencies (endpoint_id, relation_class, narrative_node_id, version_token)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT (endpoint_id, relation_class, narrative_node_id)
+       DO UPDATE SET version_token = excluded.version_token`,
+  );
+  for (const dependency of revision.dependencies) {
+    statement.run(dependency.id, dependency.scope, narrativeNodeId, dependency.version);
+  }
+}
+
+export type RevisionDependencyRow = {
+  readonly endpointId: string;
+  readonly relationClass: string;
+  readonly narrativeNodeId: string;
+  readonly versionToken: string;
+};
+
+/** Which revisions rested on this endpoint, which is what an invalidation sweep nominates from. */
+export function revisionsDependingOn(
+  db: SqliteHandle,
+  endpointId: string,
+): readonly RevisionDependencyRow[] {
+  const rows = db
+    .prepare(
+      `SELECT endpoint_id, relation_class, narrative_node_id, version_token
+       FROM revision_dependencies WHERE endpoint_id = ?
+       ORDER BY relation_class, narrative_node_id`,
+    )
+    .all(endpointId) as {
+    endpoint_id: string;
+    relation_class: string;
+    narrative_node_id: string;
+    version_token: string;
+  }[];
+  return rows.map((row) => ({
+    endpointId: row.endpoint_id,
+    relationClass: row.relation_class,
+    narrativeNodeId: row.narrative_node_id,
+    versionToken: row.version_token,
+  }));
+}
+
+export type RevisionCitation = {
+  readonly targetId: string;
+  readonly targetKind: string;
+};
+
+/** What the published revision cited. Written in the transaction that acknowledges it. */
+export function recordRevisionCitations(
+  db: SqliteHandle,
+  narrativeNodeId: string,
+  citations: readonly RevisionCitation[],
+): void {
+  const statement = db.prepare(
+    `INSERT OR IGNORE INTO revision_citations (narrative_node_id, target_id, target_kind)
+     VALUES (?, ?, ?)`,
+  );
+  for (const citation of citations) {
+    statement.run(narrativeNodeId, citation.targetId, citation.targetKind);
+  }
 }

@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 
 import type { SqliteHandle } from './database.js';
-import type { EvidenceRevision } from '../publication/preconditions.js';
 
 /**
  * The chunk half of the narrative manifest: which sources sealed together, what the unsealed tail
@@ -37,6 +36,9 @@ export function chunkIdentity(
     .digest('hex');
 }
 
+/** How many earlier chunks one seal records an overlap against. A bound, not a survey. */
+export const CHUNK_OVERLAP_LIMIT = 16;
+
 export type SealedChunk = {
   readonly chunkId: string;
   readonly sessionId: string;
@@ -46,6 +48,8 @@ export type SealedChunk = {
   readonly publishedRevisionNo: number | null;
   readonly memberCount: number;
   readonly createdAt: string;
+  /** F13 D6: earlier chunks of this session whose world-time span holds this one's earliest member. */
+  readonly overlaps: readonly string[] | undefined;
 };
 
 type ChunkRowData = {
@@ -57,10 +61,11 @@ type ChunkRowData = {
   published_revision_no: number | null;
   member_count: number;
   created_at: string;
+  overlaps_json: string | null;
 };
 
 const SELECT_CHUNK = `SELECT chunk_id, session_id, partition_policy_version, state, sealed_at,
-    published_revision_no, member_count, created_at
+    published_revision_no, member_count, created_at, overlaps_json
   FROM chunks`;
 
 function toChunk(row: ChunkRowData): SealedChunk {
@@ -73,7 +78,37 @@ function toChunk(row: ChunkRowData): SealedChunk {
     publishedRevisionNo: row.published_revision_no,
     memberCount: row.member_count,
     createdAt: row.created_at,
+    overlaps: row.overlaps_json === null ? undefined : (JSON.parse(row.overlaps_json) as string[]),
   };
+}
+
+/**
+ * Earlier chunks of this session whose members' world-time span holds `earliest`.
+ *
+ * The condition is F13 D6's: an arrival whose world time falls inside a sealed chunk's span does
+ * not repartition it. Both bounds are compared against the same moment, so a chunk is named only
+ * when the new membership genuinely starts inside it rather than merely before it ended.
+ */
+function overlappingChunks(
+  db: SqliteHandle,
+  sessionId: string,
+  earliest: string,
+  limit: number,
+): readonly string[] {
+  const rows = db
+    .prepare(
+      `SELECT c.chunk_id
+         FROM chunks c
+         JOIN chunk_members m ON m.chunk_id = c.chunk_id
+         JOIN source_records r ON r.source_id = m.source_id
+        WHERE c.session_id = ?
+        GROUP BY c.chunk_id
+       HAVING MIN(r.occurred_at) <= ? AND MAX(r.occurred_at) >= ?
+        ORDER BY c.sealed_at, c.chunk_id
+        LIMIT ?`,
+    )
+    .all(sessionId, earliest, earliest, limit) as { chunk_id: string }[];
+  return rows.map((row) => row.chunk_id);
 }
 
 export function readChunk(db: SqliteHandle, chunkId: string): SealedChunk | undefined {
@@ -101,6 +136,20 @@ export function chunkOfSource(db: SqliteHandle, sourceId: string): string | unde
   const row = db.prepare('SELECT chunk_id FROM chunk_members WHERE source_id = ?').get(sourceId) as
     { chunk_id: string } | undefined;
   return row?.chunk_id;
+}
+
+/** The earliest world time in a membership, which is where an overlap is measured from. */
+function earliestMemberWorldTime(
+  db: SqliteHandle,
+  sourceIds: readonly string[],
+): string | undefined {
+  const placeholders = new Array(sourceIds.length).fill('?').join(', ');
+  const row = db
+    .prepare(
+      `SELECT MIN(occurred_at) AS earliest FROM source_records WHERE source_id IN (${placeholders})`,
+    )
+    .get(...sourceIds) as { earliest: string | null };
+  return row.earliest ?? undefined;
 }
 
 export type ChunkSealInput = {
@@ -143,11 +192,26 @@ export function sealChunk(db: SqliteHandle, input: ChunkSealInput): ChunkSealOut
         return { chunkId, created: false };
       }
       const sealedAt = input.sealedAt.toISOString();
+      // Computed inside the seal's own transaction, over the chunks that were already sealed when
+      // this membership froze. Membership stays append-only: nothing about them moves.
+      const earliest = earliestMemberWorldTime(db, input.sourceIds);
+      const overlaps =
+        earliest === undefined
+          ? []
+          : overlappingChunks(db, input.sessionId, earliest, CHUNK_OVERLAP_LIMIT);
       db.prepare(
         `INSERT INTO chunks (chunk_id, session_id, partition_policy_version, state, sealed_at,
-           member_count, created_at)
-         VALUES (?, ?, ?, 'sealed', ?, ?, ?)`,
-      ).run(chunkId, input.sessionId, policy, sealedAt, input.sourceIds.length, sealedAt);
+           member_count, created_at, overlaps_json)
+         VALUES (?, ?, ?, 'sealed', ?, ?, ?, ?)`,
+      ).run(
+        chunkId,
+        input.sessionId,
+        policy,
+        sealedAt,
+        input.sourceIds.length,
+        sealedAt,
+        JSON.stringify(overlaps),
+      );
       const member = db.prepare(
         'INSERT INTO chunk_members (chunk_id, source_id, member_ordinal) VALUES (?, ?, ?)',
       );
@@ -301,82 +365,6 @@ export function heldSessionSources(db: SqliteHandle, sessionId: string): readonl
     verificationReason: row.verification_reason,
     captureOrderBasis: row.capture_order_basis,
   }));
-}
-
-/**
- * The reverse index from an endpoint to the narrative revisions that rested on it.
- *
- * The authoritative dependency set is the revision's own stored `EvidenceRevision`, which carries
- * the record kind as well; these rows exist so a writer that changed one endpoint can find the
- * revisions to re-check without reading every revision's JSON. The scope name determines the
- * store and the record class on its own, so nothing is lost by keying on it.
- */
-export function recordRevisionDependencies(
-  db: SqliteHandle,
-  narrativeNodeId: string,
-  revision: EvidenceRevision,
-): void {
-  const statement = db.prepare(
-    `INSERT INTO revision_dependencies (endpoint_id, relation_class, narrative_node_id, version_token)
-     VALUES (?, ?, ?, ?)
-     ON CONFLICT (endpoint_id, relation_class, narrative_node_id)
-       DO UPDATE SET version_token = excluded.version_token`,
-  );
-  for (const dependency of revision.dependencies) {
-    statement.run(dependency.id, dependency.scope, narrativeNodeId, dependency.version);
-  }
-}
-
-export type RevisionDependencyRow = {
-  readonly endpointId: string;
-  readonly relationClass: string;
-  readonly narrativeNodeId: string;
-  readonly versionToken: string;
-};
-
-/** Which revisions rested on this endpoint, which is what an invalidation sweep nominates from. */
-export function revisionsDependingOn(
-  db: SqliteHandle,
-  endpointId: string,
-): readonly RevisionDependencyRow[] {
-  const rows = db
-    .prepare(
-      `SELECT endpoint_id, relation_class, narrative_node_id, version_token
-       FROM revision_dependencies WHERE endpoint_id = ?
-       ORDER BY relation_class, narrative_node_id`,
-    )
-    .all(endpointId) as {
-    endpoint_id: string;
-    relation_class: string;
-    narrative_node_id: string;
-    version_token: string;
-  }[];
-  return rows.map((row) => ({
-    endpointId: row.endpoint_id,
-    relationClass: row.relation_class,
-    narrativeNodeId: row.narrative_node_id,
-    versionToken: row.version_token,
-  }));
-}
-
-export type RevisionCitation = {
-  readonly targetId: string;
-  readonly targetKind: string;
-};
-
-/** What the published revision cited. Written in the transaction that acknowledges it. */
-export function recordRevisionCitations(
-  db: SqliteHandle,
-  narrativeNodeId: string,
-  citations: readonly RevisionCitation[],
-): void {
-  const statement = db.prepare(
-    `INSERT OR IGNORE INTO revision_citations (narrative_node_id, target_id, target_kind)
-     VALUES (?, ?, ?)`,
-  );
-  for (const citation of citations) {
-    statement.run(narrativeNodeId, citation.targetId, citation.targetKind);
-  }
 }
 
 export type NarrativeRevisionBinding = {

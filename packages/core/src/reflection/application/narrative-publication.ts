@@ -24,8 +24,6 @@ import {
   listChunkMembers,
   markChunkPublished,
   readChunk,
-  recordRevisionCitations,
-  recordRevisionDependencies,
 } from '../../infrastructure/sqlite/chunk-manifest.js';
 import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
@@ -34,7 +32,11 @@ import {
   prepareScopeAdvance,
   rejectScopeAdvance,
 } from '../../infrastructure/sqlite/evidence-scope.js';
-import { readCitationsFrom } from '../../infrastructure/sqlite/narrative-citations.js';
+import {
+  readCitationsFrom,
+  recordRevisionCitations,
+  recordRevisionDependencies,
+} from '../../infrastructure/sqlite/narrative-citations.js';
 import {
   CHUNK_REVISION_FAMILY,
   prepareNarrativeRevision,

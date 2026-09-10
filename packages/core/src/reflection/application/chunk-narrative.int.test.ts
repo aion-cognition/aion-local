@@ -43,11 +43,7 @@ import type { StructuredRequest, Provider } from '../../infrastructure/providers
 import { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
 import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
 import type { PublicationBoundary } from '../../infrastructure/publication/types.js';
-import {
-  listChunkMembers,
-  readChunk,
-  revisionsDependingOn,
-} from '../../infrastructure/sqlite/chunk-manifest.js';
+import { listChunkMembers, readChunk } from '../../infrastructure/sqlite/chunk-manifest.js';
 import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import {
@@ -62,6 +58,7 @@ import { listAllocatedRevisions } from '../../infrastructure/sqlite/narrative-al
 import {
   readCitationsFrom,
   readCitationsOf,
+  revisionsDependingOn,
 } from '../../infrastructure/sqlite/narrative-citations.js';
 import {
   allocateNarrativeRevision,

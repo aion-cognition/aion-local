@@ -10,6 +10,12 @@ export const NARRATIVE_SCHEMA_STATEMENTS: readonly string[] = [
   /**
    * A chunk is a sealed set of sources under one partition policy. `published_revision_no` is
    * the head: null until a first publication lands, and moved only by one that succeeds.
+   *
+   * `overlaps_json` is F13 D6's annotation: the earlier chunks of this session whose world-time
+   * span contains this one's earliest member. A backdated arrival joins the remainder and seals
+   * into a later chunk rather than repartitioning history, so the overlap is the only record that
+   * the two describe the same stretch of time. Null and empty differ as they do everywhere here:
+   * null means nobody computed it, an empty array means it was computed and there was none.
    */
   `CREATE TABLE IF NOT EXISTS chunks (
     chunk_id TEXT PRIMARY KEY,
@@ -19,7 +25,8 @@ export const NARRATIVE_SCHEMA_STATEMENTS: readonly string[] = [
     sealed_at TEXT NOT NULL,
     published_revision_no INTEGER,
     member_count INTEGER NOT NULL CHECK (member_count > 0),
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    overlaps_json TEXT
   )`,
   /**
    * Frozen membership. A source seals into exactly one chunk and never moves, which is what
@@ -183,6 +190,7 @@ export const NARRATIVE_SCHEMA_STATEMENTS: readonly string[] = [
  * which is what makes a fresh file and a retrofitted one the same table.
  */
 export const NARRATIVE_COLUMN_ADDITIONS: readonly ColumnAddition[] = [
+  { table: 'chunks', column: 'overlaps_json', definition: 'TEXT' },
   { table: 'chunk_revisions', column: 'coverage_gaps_json', definition: 'TEXT' },
   {
     table: 'chunk_revisions',
