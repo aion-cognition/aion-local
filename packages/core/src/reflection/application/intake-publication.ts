@@ -5,6 +5,7 @@ import {
   acknowledgeSourceCensus,
   discardSourceCensus,
   prepareSourceCensus,
+  sourceCensusScopes,
 } from './accepted-source-census.js';
 import { projectEpisodeInTransaction } from './experience-store.js';
 import { enqueueSourceWork } from './intake-queue.js';
@@ -343,7 +344,11 @@ export const intakePublication = new PublicationOperation({
             : [],
         heads: [],
       },
-      scopes: [{ kind: 'source', id: data.identityHash, scope: 'sqlite:source_occurrence' }],
+      scopes: [
+        { kind: 'source', id: data.identityHash, scope: 'sqlite:source_occurrence' },
+        // The counters this acknowledgment publishes, where it mints the identity.
+        ...(data.decision === 'new' ? sourceCensusScopes(data.sourceId) : []),
+      ],
       effects: acceptanceEffects(data),
     };
   },

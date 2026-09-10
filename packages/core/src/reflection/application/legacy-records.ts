@@ -1,3 +1,4 @@
+import { INCOMING_STATEMENT_SCOPES } from './chunk-evidence.js';
 import { NODE_SUPPORT_ROLE_SCOPES } from '../../evidence/application/node-support.js';
 import {
   durableRoleScope,
@@ -266,8 +267,28 @@ export function isNodeEndpoint(db: SqliteHandle, endpointId: string): boolean {
 }
 
 /**
+ * Whether the identity records hold this endpoint as a SOURCE, and therefore one a reader asks the
+ * incoming-statement question about.
+ *
+ * A records question, the same kind `isNodeEndpoint` asks of the link rows. A correction or a
+ * confirmation names a source, so a source carries those two populations whether or not anything
+ * has ever landed in them; an id these records do not hold is not a source, and counting a source
+ * population for it would file a count under a name no reader asks.
+ *
+ * A migrated member has this row before any seal reads it: the walk's own acknowledgment writes it
+ * through `applySourceVerification`, and the seal runs only once every member has been walked.
+ */
+export function isSourceEndpoint(db: SqliteHandle, endpointId: string): boolean {
+  const row = db
+    .prepare('SELECT count(*) AS n FROM source_records WHERE source_id = ?')
+    .get(endpointId) as { n: number };
+  return row.n > 0;
+}
+
+/**
  * The scopes a seal may CONSIDER for one endpoint: the ones this migration's own records place on
- * it, plus — for a node endpoint — the incidence roles a repair sweep reads.
+ * it, plus — for a node endpoint — the incidence roles a repair sweep reads, and — for a source —
+ * the incoming statement populations a member read rests on.
  *
  * Derived from the link rows the walk wrote, never from the scope table. A scope row is a counter
  * somebody moved, and whoever moved it may have enumerated nothing: adopting the rows an endpoint
@@ -279,6 +300,13 @@ export function isNodeEndpoint(db: SqliteHandle, endpointId: string): boolean {
  * hides: leaving it out would establish three of four censuses and let the fourth keep the whole
  * support answer unknown forever. Whether the absence is a proved zero is decided by the coverage
  * proof over the endpoint's graph population, not here.
+ *
+ * The source branch is the same argument on the other side. An acceptance counts those two
+ * populations for the sources it mints, and nothing counted them for a source accepted before it
+ * existed: that source has no correction row and no confirmation row, so without this branch there
+ * is nothing for the seal to consider and its members stay unreadable forever. Considering them is
+ * not counting them — the population comes from the endpoint's own graph walk, every contributor
+ * has to be a verified member of this cohort, and a walk that filled its bound proves nothing.
  *
  * Graph-authority scopes are never touched. Their counter lives in the other store, and this side
  * holds only a mirror of what it said at some moment.
@@ -302,6 +330,11 @@ export function endpointCensusScopes(db: SqliteHandle, endpointId: string): read
   }
   if (isNodeEndpoint(db, endpointId)) {
     for (const scope of NODE_SUPPORT_ROLE_SCOPES) {
+      scopes.add(scope);
+    }
+  }
+  if (isSourceEndpoint(db, endpointId)) {
+    for (const scope of INCOMING_STATEMENT_SCOPES) {
       scopes.add(scope);
     }
   }

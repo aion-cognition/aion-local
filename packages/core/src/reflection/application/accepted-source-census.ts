@@ -1,4 +1,5 @@
 import { INCOMING_STATEMENT_SCOPES } from './chunk-evidence.js';
+import type { EvidenceScope } from '../../infrastructure/publication/preconditions.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   acknowledgeScopeAdvance,
@@ -29,6 +30,20 @@ import {
  * own acceptance answered, and counting here would publish a number for a population this write
  * never looked at.
  */
+
+/**
+ * What this operation's acknowledgment counts, for the affected-scope list its intent records.
+ *
+ * Declared by the plan that mints the identity and by no other: a reused occurrence counts
+ * nothing here, so it has nothing to declare.
+ */
+export function sourceCensusScopes(sourceId: string): readonly EvidenceScope[] {
+  return INCOMING_STATEMENT_SCOPES.map((scope) => ({
+    kind: 'relation_scope' as const,
+    id: sourceId,
+    scope,
+  }));
+}
 
 /** Parks a number on each scope inside the acceptance's durable prepare. */
 export function prepareSourceCensus(
