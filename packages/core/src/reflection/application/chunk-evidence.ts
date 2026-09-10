@@ -2,6 +2,7 @@ import { readRelationScope } from '../../evidence/application/dependencies.js';
 import type { EvidenceResolver } from '../../evidence/application/resolver.js';
 import type { SourceEvidence } from '../../evidence/application/sources.js';
 import { idAddress, evidenceRequestKey } from '../../evidence/domain/address.js';
+import type { RequestBudget } from '../../evidence/domain/budget.js';
 import type { EvidenceIssue, EvidenceResult } from '../../evidence/domain/result.js';
 import { durableRoleScope } from '../../evidence/domain/scopes.js';
 import type { EvidenceDependency } from '../../infrastructure/publication/preconditions.js';
@@ -137,6 +138,7 @@ export async function resolveChunkMembers(
   db: SqliteHandle,
   sourceIds: readonly string[],
   context: CheckedReadContext,
+  budget?: RequestBudget,
 ): Promise<ResolvedMembers> {
   if (sourceIds.length === 0) {
     return { readings: [], dependencies: [], unprovedScopes: [] };
@@ -145,7 +147,7 @@ export async function resolveChunkMembers(
     sourceIds.map(idAddress),
     context,
     NARRATIVE_MEMBER_USE,
-    { required: true },
+    { required: true, ...(budget === undefined ? {} : { budget }) },
   );
   const readings = sourceIds.map((sourceId): ChunkMemberEvidence => {
     const result = batch.results.get(evidenceRequestKey(idAddress(sourceId)));
@@ -166,6 +168,40 @@ export async function resolveChunkMembers(
 }
 
 /**
+ * One request's dependency set, folded from every read that contributed to it.
+ *
+ * Two readings of one scope that disagree are not a set to merge. The later one is not "fresher":
+ * they are two moments, and a revision fenced on either alone claims a coherence it never had. The
+ * disagreement is recorded against the endpoint it names so the caller can fail that reading
+ * instead of publishing on a token it picked.
+ */
+export class ChunkDependencySet {
+  readonly #held = new Map<string, EvidenceDependency>();
+  readonly #conflicts = new Set<string>();
+
+  addAll(dependencies: readonly EvidenceDependency[]): void {
+    for (const dependency of dependencies) {
+      const key = `${dependency.kind}|${dependency.id}|${dependency.scope}`;
+      const held = this.#held.get(key);
+      if (held !== undefined && held.version !== dependency.version) {
+        this.#conflicts.add(dependency.id);
+        continue;
+      }
+      this.#held.set(key, dependency);
+    }
+  }
+
+  /** Whether any scope on this endpoint was read two ways. */
+  conflicted(id: string): boolean {
+    return this.#conflicts.has(id);
+  }
+
+  list(): readonly EvidenceDependency[] {
+    return [...this.#held.values()];
+  }
+}
+
+/**
  * The same read for one source, in an allowance of its own.
  *
  * A batch that ran out of room reports `budget_limit` for every address it could not reach, which
@@ -173,24 +209,16 @@ export async function resolveChunkMembers(
  * turns on is exactly that question, so it is asked one source at a time: a source that answers
  * completely in its own allowance is one the resolver can serve whole, and one that does not is
  * the block class no bounded submission is defined for.
+ *
+ * It returns the whole reading, dependencies and unproved scopes included. Taking only the text
+ * was the defect: an address the batch never reached acquires its source dependencies HERE, and a
+ * revision that kept the batch's set alone was fenced on nothing for that member.
  */
 export async function resolveChunkMemberAlone(
   resolver: EvidenceResolver,
+  db: SqliteHandle,
   sourceId: string,
   context: CheckedReadContext,
-): Promise<ChunkMemberEvidence> {
-  const batch = await resolver.resolveSources(
-    [idAddress(sourceId)],
-    context,
-    NARRATIVE_MEMBER_USE,
-    {
-      required: true,
-      budget: resolver.newBudget(),
-    },
-  );
-  const result = batch.results.get(evidenceRequestKey(idAddress(sourceId)));
-  const reading = readingOf(result);
-  return reading === 'complete' && result?.value !== undefined
-    ? { sourceId, reading, text: memberTextOf(result.value) }
-    : { sourceId, reading };
+): Promise<ResolvedMembers> {
+  return resolveChunkMembers(resolver, db, [sourceId], context, resolver.newBudget());
 }

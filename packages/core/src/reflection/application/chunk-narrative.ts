@@ -1,6 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 
 import {
+  ChunkDependencySet,
   resolveChunkMemberAlone,
   resolveChunkMembers,
   type ResolvedMembers,
@@ -97,7 +98,8 @@ async function admissionOf(
 ): Promise<ChunkCandidate['admission'] & { readonly text?: ChunkMemberText }> {
   const settled =
     member.reading === 'over_budget'
-      ? await resolveChunkMemberAlone(deps.resolver, member.sourceId, context)
+      ? ((await resolveChunkMemberAlone(deps.resolver, deps.db, member.sourceId, context))
+          .readings[0] ?? member)
       : member;
   if (settled.reading === 'suppressed') {
     return { status: 'suppressed' };
@@ -451,15 +453,33 @@ async function settledMembers(
   context: CheckedReadContext,
 ): Promise<ResolvedMembers> {
   const batch = await resolveChunkMembers(deps.resolver, deps.db, frozen, context);
+  const dependencies = new ChunkDependencySet();
+  dependencies.addAll(batch.dependencies);
+  const unprovedScopes = [...batch.unprovedScopes];
   const readings: ChunkMemberEvidence[] = [];
   for (const member of batch.readings) {
-    readings.push(
-      member.reading === 'over_budget'
-        ? await resolveChunkMemberAlone(deps.resolver, member.sourceId, context)
-        : member,
-    );
+    if (member.reading !== 'over_budget') {
+      readings.push(member);
+      continue;
+    }
+    const again = await resolveChunkMemberAlone(deps.resolver, deps.db, member.sourceId, context);
+    // The reread's OWN dependency set, folded in: an address the batch never reached acquires its
+    // source, part and negative-scope tokens here and nowhere else.
+    dependencies.addAll(again.dependencies);
+    unprovedScopes.push(...again.unprovedScopes);
+    readings.push(again.readings[0] ?? { sourceId: member.sourceId, reading: 'unreadable' });
   }
-  return { readings, dependencies: batch.dependencies, unprovedScopes: batch.unprovedScopes };
+  return {
+    // Two readings of one scope that disagree are two moments, not a set: the member they name is
+    // a reading that did not settle rather than a token to choose between.
+    readings: readings.map((member) =>
+      dependencies.conflicted(member.sourceId)
+        ? { sourceId: member.sourceId, reading: 'unreadable' as const }
+        : member,
+    ),
+    dependencies: dependencies.list(),
+    unprovedScopes,
+  };
 }
 
 /**
