@@ -2,6 +2,7 @@ import type { Driver } from 'neo4j-driver';
 
 import { synthesizeGrounded } from './consolidation-synthesis.js';
 import { overviewOperationPrefix, OVERVIEW_NARRATIVE_FAMILY } from './overview-publication.js';
+import { closedWindows, writeMemberCursor, type Window } from './overview-windows.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { findNarrativeBodies } from '../../infrastructure/graph/narrative-rollup-queries.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
@@ -24,17 +25,12 @@ import {
   readNarrativeRevision,
   readPublishedRevision,
 } from '../../infrastructure/sqlite/narrative-revisions.js';
-import { getLedgerEntry, markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import {
   overviewFamilyKey,
-  publishedChunkSpans,
-  publishedOverviewSpans,
-  unplaceableChunks,
-  type MemberCursor,
   type OverviewMember,
 } from '../../infrastructure/sqlite/overview-membership.js';
 import { renderConsolidationSource, type ConsolidationMember } from '../domain/consolidation.js';
-import { isWindowClosed, pagedWindows, rollupWindow, type RollupScope } from '../domain/rollup.js';
+import type { RollupScope } from '../domain/rollup.js';
 
 /**
  * The calendar overview pass, over the manifest rather than over the graph.
@@ -133,125 +129,6 @@ const UNCLIPPED = Number.MAX_SAFE_INTEGER;
 
 const CAPACITY_BLOCK = 'blocked_window_capacity';
 const UNREADABLE_BLOCK = 'blocked_window_member_unreadable';
-
-type Window = {
-  readonly key: string;
-  readonly start: Date;
-  readonly end: Date;
-  readonly members: readonly OverviewMember[];
-};
-
-/** Every member of the scope below, grouped into the closed windows of this scope. */
-function readMembers(
-  db: SqliteHandle,
-  scope: RollupScope,
-  after?: MemberCursor,
-): readonly OverviewMember[] {
-  return scope === 'day'
-    ? publishedChunkSpans(db, OVERVIEW_MEMBER_SCAN_LIMIT, after)
-    : publishedOverviewSpans(db, 'day', OVERVIEW_MEMBER_SCAN_LIMIT, after);
-}
-
-function closedWindows(
-  db: SqliteHandle,
-  scope: RollupScope,
-  now: Date,
-): {
-  readonly windows: readonly Window[];
-  readonly unplaceable: number;
-  readonly next: MemberCursor | undefined;
-} {
-  const cursor = readMemberCursor(db, scope);
-  let members = readMembers(db, scope, cursor);
-  if (members.length === 0 && cursor !== undefined) {
-    // The end of the enumeration, reached inside this run. Starting from the front again is what
-    // makes the position a position rather than a discharge.
-    members = readMembers(db, scope);
-  }
-  const grouped = new Map<
-    string,
-    { bounds: ReturnType<typeof rollupWindow>; rows: OverviewMember[] }
-  >();
-  for (const member of members) {
-    const at = new Date(member.spanEnd);
-    if (Number.isNaN(at.getTime())) {
-      continue;
-    }
-    const bounds = rollupWindow(scope, at);
-    const entry = grouped.get(bounds.key);
-    if (entry === undefined) {
-      grouped.set(bounds.key, { bounds, rows: [member] });
-      continue;
-    }
-    entry.rows.push(member);
-  }
-  const all = [...grouped.values()]
-    .map((entry) => ({
-      key: entry.bounds.key,
-      start: entry.bounds.start,
-      end: entry.bounds.end,
-      members: [...entry.rows].sort((left, right) => left.spanEnd.localeCompare(right.spanEnd)),
-    }))
-    .sort((left, right) => left.key.localeCompare(right.key));
-  // A full page may have stopped in the middle of its newest window, and an overview asserts it
-  // saw the whole of what it covers. That window is not offered for publication at all, and the
-  // position never rests inside it: the next page either reads it whole from its own beginning, or
-  // — when one window filled the page by itself and never can be read whole at this bound — steps
-  // past its calendar end so the windows behind it are reached.
-  const paged = pagedWindows(all, members.length >= OVERVIEW_MEMBER_SCAN_LIMIT);
-  const windows = paged.whole.filter((window) => isWindowClosed(window, now));
-  return {
-    windows,
-    unplaceable: scope === 'day' ? unplaceableChunks(db) : 0,
-    next: nextMemberCursor(members, paged),
-  };
-}
-
-/** Where the next page starts, which is only ever a window boundary. */
-function nextMemberCursor(
-  members: readonly OverviewMember[],
-  paged: { readonly whole: readonly Window[]; readonly cut: Window | undefined },
-): MemberCursor | undefined {
-  if (members.length < OVERVIEW_MEMBER_SCAN_LIMIT) {
-    return undefined;
-  }
-  const lastWhole = paged.whole[paged.whole.length - 1];
-  if (lastWhole !== undefined) {
-    const stopAt = lastWhole.members[lastWhole.members.length - 1];
-    return stopAt === undefined
-      ? undefined
-      : { spanEnd: stopAt.spanEnd, familyKey: stopAt.familyKey };
-  }
-  if (paged.cut !== undefined) {
-    return { spanEnd: paged.cut.end.toISOString(), familyKey: '' };
-  }
-  const last = members[members.length - 1];
-  return last === undefined ? undefined : { spanEnd: last.spanEnd, familyKey: last.familyKey };
-}
-
-/** Where the last pass of one scope stopped reading members. */
-function memberCursorKey(scope: RollupScope): string {
-  return `narrative-overview:member-cursor:${scope}`;
-}
-
-function readMemberCursor(db: SqliteHandle, scope: RollupScope): MemberCursor | undefined {
-  const summary = getLedgerEntry(db, memberCursorKey(scope))?.summary;
-  if (typeof summary !== 'object' || summary === null) {
-    return undefined;
-  }
-  const { spanEnd, familyKey } = summary as { spanEnd?: unknown; familyKey?: unknown };
-  return typeof spanEnd === 'string' && typeof familyKey === 'string' && familyKey !== ''
-    ? { spanEnd, familyKey }
-    : undefined;
-}
-
-function writeMemberCursor(
-  db: SqliteHandle,
-  scope: RollupScope,
-  cursor: MemberCursor | undefined,
-): void {
-  markLedgerApplied(db, memberCursorKey(scope), cursor === undefined ? {} : { ...cursor });
-}
 
 /** Whether the standing head already cites exactly this membership. */
 function settled(db: SqliteHandle, familyKey: string, members: readonly OverviewMember[]): boolean {
