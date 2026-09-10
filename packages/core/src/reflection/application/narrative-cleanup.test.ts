@@ -3,8 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { cleanupNarratives } from './narrative-cleanup.js';
-import type { NarrativeDeps } from './narratives.js';
+import { cleanupNarratives, type NarrativeCleanupDeps } from './narrative-cleanup.js';
 import { BITEMPORAL_PROPERTIES } from '../../infrastructure/graph/bitemporal.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
 import {
@@ -14,6 +13,14 @@ import {
 import { coerceGraphValue } from '../../infrastructure/graph/values.js';
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider, Vector } from '../../infrastructure/providers/types.js';
+import { sealChunk } from '../../infrastructure/sqlite/chunk-manifest.js';
+import { SqliteStore } from '../../infrastructure/sqlite/database.js';
+import {
+  allocateNarrativeRevision,
+  CHUNK_REVISION_FAMILY,
+  publishNarrativeRevision,
+} from '../../infrastructure/sqlite/narrative-revisions.js';
+import { recordSourceRecord } from '../../infrastructure/sqlite/source-identity.js';
 import { NARRATIVE_GROUNDING } from '../domain/narrative.js';
 import { NarrativeFakeGraph } from '../test-support/narrative-graph.fixture.js';
 
@@ -30,7 +37,8 @@ let graph: NarrativeFakeGraph;
 let dataDir: string;
 let logger: Logger;
 let generate: ReturnType<typeof vi.fn>;
-let deps: NarrativeDeps;
+let store: SqliteStore;
+let deps: NarrativeCleanupDeps;
 
 function fakeVectors(texts: readonly string[]): Vector[] {
   return texts.map(() => [1, 0, 0, 0]);
@@ -77,8 +85,10 @@ beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), 'aion-narrative-cleanup-'));
   logger = openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' });
   generate = vi.fn(() => Promise.resolve(OUTPUT));
+  store = new SqliteStore({ filePath: ':memory:' });
   deps = {
     driver: graph.driver,
+    db: store.db,
     provider: {
       embed: vi.fn((texts: readonly string[]) => Promise.resolve(fakeVectors(texts))),
       generate,
@@ -88,8 +98,48 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  store.close();
   rmSync(dataDir, { recursive: true, force: true });
 });
+
+/**
+ * A published chunk revision over one frozen member, and the graph node it wrote. The manifest
+ * is what holds this narrative up; the session it derives from holds no Episode at all, which is
+ * the state an evicted session is in.
+ */
+function publishChunkRevisionFor(sessionId: string): string {
+  recordSourceRecord(store.db, {
+    sourceId: 'chunk-source',
+    sessionId,
+    verificationStatus: 'verified',
+    archive: {
+      canonicalArchiveId: 'archive-chunk-source',
+      archiveSchemaVersion: 1,
+      identityHash: 'identity-chunk-source',
+      verifiedContentDigest: 'digest-chunk-source',
+      verificationPolicyVersion: 1,
+      archivedAt: NOW.toISOString(),
+    },
+    occurredAt: NOW.toISOString(),
+    createdAt: NOW,
+  });
+  const { chunkId } = sealChunk(store.db, {
+    sessionId,
+    sourceIds: ['chunk-source'],
+    sealedAt: NOW,
+  });
+  const allocation = allocateNarrativeRevision(store.db, CHUNK_REVISION_FAMILY, chunkId, NOW);
+  publishNarrativeRevision(store.db, CHUNK_REVISION_FAMILY, {
+    familyKey: chunkId,
+    revisionNo: allocation.revisionNo,
+    operationId: 'op-chunk-1',
+    evidenceRevisionJson: '{"dependencies":[]}',
+    knownFrom: NOW.toISOString(),
+    observedAckAt: NOW.toISOString(),
+    publishedAt: NOW,
+  });
+  return allocation.nodeId;
+}
 
 describe('narrative cleanup', () => {
   it('regenerates the narrative of a session that still holds episodes', async () => {
@@ -102,7 +152,8 @@ describe('narrative cleanup', () => {
       examined: 1,
       sessions: 1,
       regenerated: 1,
-      forgotten: 0,
+      held: 0,
+      withheld: 0,
       failed: 0,
     });
 
@@ -134,17 +185,42 @@ describe('narrative cleanup', () => {
     expect(graph.edgesOfType('SUPERSEDES').map((edge) => edge.targetId)).toEqual(['old-narrative']);
   });
 
-  it('forgets a narrative whose session can no longer ground one', async () => {
+  /**
+   * The branch that used to forget. A session with no Episode left says nothing about whether
+   * the records still hold the narrative up, and this one they cannot speak for at all.
+   */
+  it('withholds a narrative nothing accounts for rather than forgetting it', async () => {
     seedOldNarrative('orphan-narrative', EMPTY_SESSION_ID);
 
     const report = await cleanupNarratives(deps, { now: NOW });
 
-    expect(report.forgotten).toBe(1);
+    expect(report.withheld).toBe(1);
+    expect(report.held).toBe(0);
     expect(report.regenerated).toBe(0);
     expect(generate).not.toHaveBeenCalled();
     const orphan = graph.nodes.get('orphan-narrative');
-    expect(coerceGraphValue(orphan?.properties[BITEMPORAL_PROPERTIES.forgottenAt])).toEqual(NOW);
-    expect(coerceGraphValue(orphan?.properties[BITEMPORAL_PROPERTIES.validUntil])).toEqual(NOW);
+    expect(orphan?.properties[BITEMPORAL_PROPERTIES.forgottenAt]).toBeUndefined();
+    expect(orphan?.properties[BITEMPORAL_PROPERTIES.validUntil]).toBeUndefined();
+    expect(narrativesStanding().map((node) => node.id)).toEqual(['orphan-narrative']);
+  });
+
+  /**
+   * The case the old branch destroyed: every raw container of the session is gone and the chunk
+   * revision written from them is the only record of what they said. Its frozen membership is
+   * what holds it up, and no Episode is required for that.
+   */
+  it('leaves a chunk revision standing when its session holds no episode at all', async () => {
+    const nodeId = publishChunkRevisionFor(EMPTY_SESSION_ID);
+    seedOldNarrative(nodeId, EMPTY_SESSION_ID);
+
+    const report = await cleanupNarratives(deps, { now: NOW });
+
+    expect(report.held).toBe(1);
+    expect(report.withheld).toBe(0);
+    expect(generate).not.toHaveBeenCalled();
+    const chunk = graph.nodes.get(nodeId);
+    expect(chunk?.properties[BITEMPORAL_PROPERTIES.forgottenAt]).toBeUndefined();
+    expect(narrativesStanding().map((node) => node.id)).toEqual([nodeId]);
   });
 
   it('leaves a narrative already written under the current grounding revision alone', async () => {

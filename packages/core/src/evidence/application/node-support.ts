@@ -1,3 +1,4 @@
+import { certifyNarrativeSupport } from './narrative-support.js';
 import {
   countCommittedIncidenceForNode,
   countCommittedStatedLinksTo,
@@ -117,6 +118,27 @@ export function certifyNodeSupport(db: SqliteHandle, nodeId: string): NodeSuppor
   }
   if (readCitationsOf(db, nodeId).length > 0) {
     return { support: 'supported', reason: 'cited by a narrative revision', evidenceRevision };
+  }
+  // The node may BE a narrative revision rather than a target of one. Nothing above can see that:
+  // a chunk's narrative is produced by no source and named by no statement, so every source-side
+  // census over it is established and empty by construction, and a reading that stopped here
+  // would certify the one record of what an evicted session said as holding nothing up. What
+  // holds a narrative up is its frozen membership and its citations, which is what C3's predicate
+  // asks. An id the manifest does not bind is not answered here, because that is silence.
+  const narrative = certifyNarrativeSupport(db, nodeId);
+  if (narrative.support === 'supported') {
+    return {
+      support: 'supported',
+      reason: `a published narrative revision: ${narrative.reason}`,
+      evidenceRevision,
+    };
+  }
+  if (narrative.support === 'unknown') {
+    return {
+      support: 'unknown',
+      reason: `a narrative revision the manifest cannot account for: ${narrative.reason}`,
+      evidenceRevision,
+    };
   }
 
   const uncounted = SUPPORT_ROLES.filter(

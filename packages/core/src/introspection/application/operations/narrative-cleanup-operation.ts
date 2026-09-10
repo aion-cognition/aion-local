@@ -1,38 +1,49 @@
 import type { Driver } from 'neo4j-driver';
 
+import { certifyNarrativeSupport } from '../../../evidence/application/narrative-support.js';
 import { supersedeInTransaction } from '../../../infrastructure/graph/bitemporal.js';
 import { inWriteTransaction } from '../../../infrastructure/graph/connection.js';
 import { lockNodeInTransaction } from '../../../infrastructure/graph/locks.js';
 import {
+  findDuplicateChunkFamilies,
   findDuplicateNarrativeSessions,
   findOrphanedNarratives,
-  readOpenNarrativeVersionsInTransaction,
-  type DuplicateNarrativeGroup,
-  type DuplicateNarrativeVersion,
+  readOpenChunkRevisionsInTransaction,
 } from '../../../infrastructure/graph/narrative-cleanup-queries.js';
 import {
   closeStaleNarrativeEdges,
   countNarrativeEdges,
 } from '../../../infrastructure/graph/narrative-edge-queries.js';
-import { forgetNarrative } from '../../../infrastructure/graph/narrative-queries.js';
+import { narrativeRevisionBinding } from '../../../infrastructure/sqlite/chunk-manifest.js';
+import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import {
+  CHUNK_REVISION_FAMILY,
+  readPublishedRevision,
+} from '../../../infrastructure/sqlite/narrative-revisions.js';
 import type { IntrospectionOperation, OperationOutcome } from '../../domain/operation.js';
 
 /**
- * The three narrative pathologies that need no model call to repair. A duplicate is two open
- * narratives left standing after a crash landed between a write and its supersession, and an
- * orphan is an open narrative whose session has since had every one of its episodes forgotten.
- * Neither is rare enough on a long-running substrate to leave for the next session close: a
- * session that stopped being written to stops triggering the ordinary repair path too.
+ * The narrative pathologies that need no model call to repair, and the two that turned out not to
+ * be pathologies at all.
  *
- * The third is the summarization-edge backlog. The write path now closes those edges with the
- * narrative they point at, so what is left is what earlier closes left behind, plus the rollup's
- * own absorbs, which take a member narrative without touching the episode edges into it. Bounded
- * per run and idempotent, so the backlog drains at a fixed pace and a repaired substrate costs
- * one scan.
+ * An extra standing revision of ONE chunk is a crash between a publication and the close of the
+ * head it replaced, and closing it is arithmetic: the manifest says which revision the substrate
+ * acknowledged, so the keeper is read rather than chosen. What used to be grouped here was the
+ * SESSION, which made two distinct chunks of one conversation duplicates of each other and picked
+ * the survivor by coverage count — prose beating the record.
  *
- * The grounding-stale regeneration path (`reflection/application/narrative-cleanup.ts`) is out
- * of scope here because it calls a model to rewrite the narrative body, which none of these
- * three repairs needs. `narrative_regrounding` is the operation that drives that path.
+ * The orphan repair is now a report. A narrative whose session holds no live Episode was treated
+ * as ungrounded and forgotten, which deleted the compressed record of exactly the sessions whose
+ * raw containers had been evicted. Eviction is storage and support is evidence: what holds a
+ * narrative up is its frozen membership and its citations, both of which outlive the raw text.
+ * Where the records prove support the narrative stands; where they prove nothing the run withholds
+ * and says so, because a suppression has no reopen path and silence is not absence.
+ *
+ * The third repair is unchanged: the summarization-edge backlog, bounded per run and idempotent.
+ *
+ * The grounding-stale regeneration path (`reflection/application/narrative-cleanup.ts`) is out of
+ * scope here because it calls a model to rewrite the narrative body. `narrative_regrounding` is
+ * the operation that drives that path.
  */
 
 export const NARRATIVE_CLEANUP_OPERATION = 'narrative_cleanup';
@@ -50,61 +61,102 @@ const NARRATIVE_DUPLICATE_SIGNALS = ['duplicate_narrative'];
  */
 export const NARRATIVE_CLEANUP_STANDING_RELEVANCE = 0.15;
 
-/** Highest coverage wins; version breaks a tie the same coverage could otherwise leave open; id is the last resort. */
-function keepNewest(versions: readonly DuplicateNarrativeVersion[]): DuplicateNarrativeVersion {
-  const [newest] = [...versions].sort(
-    (left, right) =>
-      right.coverageCount - left.coverageCount ||
-      right.version - left.version ||
-      left.id.localeCompare(right.id),
-  );
-  if (newest === undefined) {
-    // The caller only reaches here with a duplicate group, and a duplicate group is
-    // never fewer than two versions (the query that finds one requires it).
-    throw new Error('keepNewest requires at least one version');
-  }
-  return newest;
-}
+/** States in which a revision node is an acknowledged version rather than an attempt in flight. */
+const ACKNOWLEDGED_STATES = new Set(['published', 'closed']);
 
-async function closeDuplicates(
+type DuplicateReport = {
+  readonly families: number;
+  readonly closed: number;
+  /** Families whose keeper the records could not name, left standing and reported. */
+  readonly unresolved: number;
+  /** Legacy session families carrying more than one standing narrative. */
+  readonly legacy: number;
+};
+
+/**
+ * Closes the extra acknowledged revisions of one chunk against the head the manifest names.
+ *
+ * Three things this deliberately does not do. It does not choose a keeper: the published head is
+ * read inside the write, so a publication landing between the scan and the close moves the keeper
+ * rather than losing to it. It does not touch a revision the manifest still calls allocated or
+ * prepared: that is an attempt in flight, and it is recovered by its own receipt rather than
+ * suppressed as unwanted. And it does not act at all where no revision of the family has been
+ * acknowledged, because then there is no keeper to close anything against.
+ */
+async function closeExtraRevisions(
   driver: Driver,
+  db: SqliteHandle,
   limit: number,
   now: Date,
-): Promise<{ sessions: number; closed: number }> {
-  const groups: readonly DuplicateNarrativeGroup[] = await findDuplicateNarrativeSessions(
-    driver,
-    limit,
-  );
+): Promise<{ families: number; closed: number; unresolved: number }> {
+  const families = await findDuplicateChunkFamilies(driver, limit);
   let closed = 0;
-  for (const group of groups) {
-    // One transaction per session, session locked first, group re-read under the lock. The
-    // keeper is chosen from what is open at write time, so a concurrent close of the version
-    // this scan liked cannot leave the session with every version closed.
-    closed += await inWriteTransaction(driver, async (tx) => {
-      await lockNodeInTransaction(tx, group.sessionId, now);
-      const versions = await readOpenNarrativeVersionsInTransaction(tx, group.sessionId);
-      if (versions.length < 2) {
-        return 0;
+  let unresolved = 0;
+  for (const family of families) {
+    const outcome = await inWriteTransaction(driver, async (tx) => {
+      const head = readPublishedRevision(db, CHUNK_REVISION_FAMILY, family.chunkId);
+      if (head === undefined) {
+        return { closed: 0, resolved: false };
       }
-      const keep = keepNewest(versions);
-      let closedHere = 0;
+      await lockNodeInTransaction(tx, head.nodeId, now);
+      const versions = await readOpenChunkRevisionsInTransaction(tx, family.chunkId);
+      if (!versions.some((version) => version.id === head.nodeId)) {
+        // The head itself is not standing. Something other than this sweep is mid-flight on the
+        // family, and closing the rest against an absent keeper would leave the chunk with no
+        // current narrative at all.
+        return { closed: 0, resolved: false };
+      }
+      let here = 0;
       for (const version of versions) {
-        if (version.id === keep.id) {
+        if (version.id === head.nodeId) {
+          continue;
+        }
+        const binding = narrativeRevisionBinding(db, version.id);
+        if (binding === undefined || !ACKNOWLEDGED_STATES.has(binding.state)) {
           continue;
         }
         await supersedeInTransaction(tx, {
           oldId: version.id,
-          newId: keep.id,
+          newId: head.nodeId,
           now,
           signals: NARRATIVE_DUPLICATE_SIGNALS,
           provenance: [NARRATIVE_DUPLICATE_METHOD],
         });
-        closedHere += 1;
+        here += 1;
       }
-      return closedHere;
+      return { closed: here, resolved: true };
     });
+    closed += outcome.closed;
+    if (!outcome.resolved) {
+      unresolved += 1;
+    }
   }
-  return { sessions: groups.length, closed };
+  return { families: families.length, closed, unresolved };
+}
+
+/**
+ * Narratives the structural scan nominates, and what the records say about each.
+ *
+ * The no-Episode read stays as a cheap NOMINATION and is no longer the decision: it says which
+ * narratives are worth asking about, and the manifest says whether anything holds them up. A
+ * chunk revision over evicted sources answers `supported` on its frozen membership and is left
+ * exactly as it is; a legacy narrative the manifest never bound answers `unbound`, which is a
+ * repair obligation rather than a licence, so nothing here forgets it.
+ */
+function certifyNominated(
+  db: SqliteHandle,
+  ids: readonly string[],
+): { supported: number; withheld: number } {
+  let supported = 0;
+  let withheld = 0;
+  for (const id of ids) {
+    if (certifyNarrativeSupport(db, id).support === 'supported') {
+      supported += 1;
+      continue;
+    }
+    withheld += 1;
+  }
+  return { supported, withheld };
 }
 
 /**
@@ -140,15 +192,19 @@ export function narrativeCleanupOperation(): IntrospectionOperation {
     relevance: () => NARRATIVE_CLEANUP_STANDING_RELEVANCE,
     run: async (ctx): Promise<OperationOutcome> => {
       const batch = ctx.config.maintenance.narrativeCleanupBatch;
-      const duplicates = await closeDuplicates(ctx.driver, batch, ctx.now);
+      const chunks = await closeExtraRevisions(ctx.driver, ctx.db, batch, ctx.now);
+      // The legacy family is counted and left alone. Its keeper cannot be read from a manifest
+      // that never bound it, and the signed rule is explicit that a winner is not picked by
+      // coverage, prose or graph timestamp; reconciling the preserved coverage and citation
+      // records is the cutover's work, not a sweep's.
+      const legacy = await findDuplicateNarrativeSessions(ctx.driver, batch);
+      const duplicates: DuplicateReport = { ...chunks, legacy: legacy.length };
 
-      const orphans = await findOrphanedNarratives(ctx.driver, batch);
-      let forgotten = 0;
-      for (const orphan of orphans) {
-        if (await forgetNarrative(ctx.driver, orphan.id, ctx.now)) {
-          forgotten += 1;
-        }
-      }
+      const nominated = await findOrphanedNarratives(ctx.driver, batch);
+      const support = certifyNominated(
+        ctx.db,
+        nominated.map((orphan) => orphan.id),
+      );
 
       // Last, so the closes above are part of the backlog this run already repairs.
       const edges = await repairSummarizationEdges(
@@ -157,22 +213,25 @@ export function narrativeCleanupOperation(): IntrospectionOperation {
         ctx.now,
       );
 
-      // One declared unit across the three repairs: a record this run READ and could have
-      // changed. The stale-edge BACKLOG used to stand in for the edge term, which made a run
-      // that closed five hundred of forty thousand report forty thousand examined and a
-      // vanishing effect ratio. The backlog is a gauge in the detail; the subtallies are what
-      // a reader adds up.
-      const processed = duplicates.sessions + orphans.length + edges.examined;
-      const affected = duplicates.closed + forgotten + edges.closed;
+      // One declared unit across the repairs: a record this run READ and could have changed. The
+      // stale-edge BACKLOG used to stand in for the edge term, which made a run that closed five
+      // hundred of forty thousand report forty thousand examined and a vanishing effect ratio.
+      // The backlog is a gauge in the detail; the subtallies are what a reader adds up.
+      const processed = duplicates.families + nominated.length + edges.examined;
+      const affected = duplicates.closed + edges.closed;
       return {
         status: affected === 0 ? 'noop' : 'applied',
         itemsProcessed: processed,
         itemsAffected: affected,
         detail:
-          `examined ${String(duplicates.sessions)} duplicate group(s), ` +
-          `${String(orphans.length)} orphan candidate(s), ${String(edges.examined)} stale edge(s); ` +
-          `${String(duplicates.closed)} duplicate narrative(s) superseded, ` +
-          `${String(forgotten)} orphan(s) forgotten, ` +
+          `examined ${String(duplicates.families)} chunk family/families, ` +
+          `${String(nominated.length)} nominated narrative(s), ` +
+          `${String(edges.examined)} stale edge(s); ` +
+          `${String(duplicates.closed)} extra revision(s) superseded onto the acknowledged head, ` +
+          `${String(duplicates.unresolved)} family/families with no acknowledged head, ` +
+          `${String(duplicates.legacy)} legacy session family/families reported, ` +
+          `${String(support.supported)} narrative(s) the records hold up, ` +
+          `${String(support.withheld)} withheld for want of proof, ` +
           `${String(edges.closed)} stale summarization edge(s) closed; ` +
           `backlog ${String(edges.backlog)} stale, ${String(edges.active)} active`,
       };

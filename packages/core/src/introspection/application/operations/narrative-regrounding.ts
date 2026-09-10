@@ -41,7 +41,7 @@ export function narrativeRegroundingOperation(batch: number): IntrospectionOpera
     improves: 'lower',
     run: async (ctx): Promise<OperationOutcome> => {
       const report = await cleanupNarratives(
-        { driver: ctx.driver, provider: ctx.provider, logger: ctx.logger },
+        { driver: ctx.driver, db: ctx.db, provider: ctx.provider, logger: ctx.logger },
         {
           limit: ctx.config.maintenance.narrativeCleanupBatch,
           model: ctx.config.models.reflect,
@@ -50,14 +50,17 @@ export function narrativeRegroundingOperation(batch: number): IntrospectionOpera
           now: ctx.now,
         },
       );
-      const affected = report.regenerated + report.forgotten;
+      // Only a rewrite is an effect. A narrative left standing on proved support is the run
+      // declining to touch a record that was never wrong, and one withheld is work it could not
+      // do; counting either as affected would credit the operation for leaving things alone.
       return {
-        status: affected === 0 ? 'noop' : 'applied',
+        status: report.regenerated === 0 ? 'noop' : 'applied',
         itemsProcessed: report.examined,
-        itemsAffected: affected,
+        itemsAffected: report.regenerated,
         detail:
           `${String(report.regenerated)} narrative(s) rewritten from the claims that are open now, ` +
-          `${String(report.forgotten)} forgotten for want of a session to ground them, ` +
+          `${String(report.held)} left standing on proved durable support, ` +
+          `${String(report.withheld)} withheld for want of proof, ` +
           `${String(report.failed)} generation failure(s)`,
       };
     },

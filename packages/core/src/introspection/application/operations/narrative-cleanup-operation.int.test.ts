@@ -15,7 +15,7 @@ import { upsertEdge } from '../../../infrastructure/graph/edges.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import {
-  findDuplicateNarrativeSessions,
+  findDuplicateChunkFamilies,
   findOrphanedNarratives,
 } from '../../../infrastructure/graph/narrative-cleanup-queries.js';
 import { countNarrativeEdges } from '../../../infrastructure/graph/narrative-edge-queries.js';
@@ -36,7 +36,14 @@ import {
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger } from '../../../infrastructure/logging/logger.js';
 import { refusingProvider } from '../../../infrastructure/providers/test-support/refusing-provider.fixture.js';
+import { sealChunk } from '../../../infrastructure/sqlite/chunk-manifest.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import {
+  allocateNarrativeRevision,
+  CHUNK_REVISION_FAMILY,
+  publishNarrativeRevision,
+} from '../../../infrastructure/sqlite/narrative-revisions.js';
+import { recordSourceRecord } from '../../../infrastructure/sqlite/source-identity.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
 
@@ -99,6 +106,78 @@ async function seedEpisode(id: string, sessionId: string): Promise<void> {
     count: 0,
     now: NOW,
   });
+}
+
+/**
+ * A chunk revision as the publication writes it: the family key and the revision number the
+ * manifest allocated, on an open node derived from its session.
+ */
+async function seedChunkRevisionNode(
+  id: string,
+  sessionId: string,
+  chunkId: string,
+  revisionNo: number,
+): Promise<void> {
+  await writeStampedNode(harness.driver, {
+    label: 'Narrative',
+    id,
+    now: NOW,
+    properties: {
+      [MEMORY_PROPERTIES.text]: `chunk revision ${String(revisionNo)}`,
+      [NARRATIVE_PROPERTIES.family]: 'chunk',
+      [NARRATIVE_PROPERTIES.chunkId]: chunkId,
+      [NARRATIVE_PROPERTIES.revisionNo]: revisionNo,
+      [NARRATIVE_PROPERTIES.version]: revisionNo,
+      [NARRATIVE_PROPERTIES.coverageKey]: chunkId,
+      [NARRATIVE_PROPERTIES.coverageCount]: 1,
+    },
+  });
+  await upsertEdge(harness.driver, {
+    type: DERIVES_FROM_TYPE,
+    sourceId: id,
+    targetId: sessionId,
+    strength: 1,
+    confidence: 1,
+    signals: ['compression'],
+    provenance: ['test-seed'],
+    count: 0,
+    now: NOW,
+  });
+}
+
+/** One sealed chunk over one source, in the manifest, with no revision published yet. */
+function sealOneSourceChunk(sessionId: string, sourceId: string): string {
+  recordSourceRecord(db, {
+    sourceId,
+    sessionId,
+    verificationStatus: 'verified',
+    archive: {
+      canonicalArchiveId: `archive-${sourceId}`,
+      archiveSchemaVersion: 1,
+      identityHash: `identity-${sourceId}`,
+      verifiedContentDigest: `digest-${sourceId}`,
+      verificationPolicyVersion: 1,
+      archivedAt: NOW.toISOString(),
+    },
+    occurredAt: NOW.toISOString(),
+    createdAt: NOW,
+  });
+  return sealChunk(db, { sessionId, sourceIds: [sourceId], sealedAt: NOW }).chunkId;
+}
+
+/** Allocates and publishes the next revision of a chunk, answering the node id it minted. */
+function publishRevision(chunkId: string): string {
+  const allocation = allocateNarrativeRevision(db, CHUNK_REVISION_FAMILY, chunkId, NOW);
+  publishNarrativeRevision(db, CHUNK_REVISION_FAMILY, {
+    familyKey: chunkId,
+    revisionNo: allocation.revisionNo,
+    operationId: `op-${chunkId}-${String(allocation.revisionNo)}`,
+    evidenceRevisionJson: '{"dependencies":[]}',
+    knownFrom: NOW.toISOString(),
+    observedAckAt: NOW.toISOString(),
+    publishedAt: NOW,
+  });
+  return allocation.nodeId;
 }
 
 async function seedNarrative(
@@ -165,35 +244,103 @@ function contextFor(narrativeEdgeRepairBatch = 50): OperationContext {
 }
 
 describe('narrativeCleanupOperation against a live graph', () => {
-  it('keeps the highest-coverage duplicate and supersedes the rest', async () => {
+  /**
+   * A legacy session carrying two standing narratives is a repair obligation, not an arithmetic
+   * problem. Nothing binds either of them to a head, and the signed rule is explicit that a
+   * winner is not picked by coverage count, prose or graph timestamp; reconciling the preserved
+   * coverage and citation records is the cutover's work.
+   */
+  it('reports a legacy session duplicate and closes neither version', async () => {
     await seedSession('dup-session');
-    // A live episode, so this session is not *also* an orphan under the same run: the
-    // duplicate and orphan repairs are independent pathologies and this test isolates one.
+    // A live episode, so this session is not *also* nominated as an orphan under the same run.
     await seedEpisode('dup-episode', 'dup-session');
     await seedNarrative('dup-narrative-v1', 'dup-session', 1, 2);
     await seedNarrative('dup-narrative-v2', 'dup-session', 2, 5);
 
     const outcome = await narrativeCleanupOperation().run(contextFor());
 
-    expect(outcome.status).toBe('applied');
-    expect(outcome.itemsAffected).toBeGreaterThanOrEqual(1);
-
-    const v1Props = await nodeProperties(harness.driver, 'dup-narrative-v1');
-    expect(v1Props[BITEMPORAL_PROPERTIES.validUntil]).toBeDefined();
-
-    const v2Props = await nodeProperties(harness.driver, 'dup-narrative-v2');
-    expect(v2Props[BITEMPORAL_PROPERTIES.validUntil]).toBeUndefined();
+    expect(outcome.detail).toContain('1 legacy session family/families reported');
+    for (const id of ['dup-narrative-v1', 'dup-narrative-v2']) {
+      const props = await nodeProperties(harness.driver, id);
+      expect(props[BITEMPORAL_PROPERTIES.validUntil]).toBeUndefined();
+      expect(props[BITEMPORAL_PROPERTIES.forgottenAt]).toBeUndefined();
+    }
   }, 120_000);
 
-  it('forgets a narrative whose session holds no live episode', async () => {
+  /**
+   * The forget this operation used to perform. A session with no live Episode says nothing about
+   * whether the records still hold the narrative up, and for a legacy narrative they cannot speak
+   * at all, so the run withholds and says so.
+   */
+  it('withholds a narrative whose session holds no live episode rather than forgetting it', async () => {
     await seedSession('orphan-session');
     await seedNarrative('orphan-narrative', 'orphan-session', 1, 3);
 
     const outcome = await narrativeCleanupOperation().run(contextFor());
 
-    expect(outcome.status).toBe('applied');
+    expect(outcome.detail).toContain('withheld for want of proof');
     const props = await nodeProperties(harness.driver, 'orphan-narrative');
-    expect(props[BITEMPORAL_PROPERTIES.forgottenAt]).toBeDefined();
+    expect(props[BITEMPORAL_PROPERTIES.forgottenAt]).toBeUndefined();
+    expect(props[BITEMPORAL_PROPERTIES.validUntil]).toBeUndefined();
+  }, 120_000);
+
+  /**
+   * The case the structural check destroyed: a session whose every raw container is gone, and
+   * the chunk revision written from them standing as the only record of what they said. Its
+   * frozen membership is what holds it up, and repeated runs must not wear it down.
+   */
+  it('preserves distinct chunk revisions over a session with no live episode, run after run', async () => {
+    await seedSession('evicted-session');
+    const first = sealOneSourceChunk('evicted-session', 'evicted-s1');
+    const second = sealOneSourceChunk('evicted-session', 'evicted-s2');
+    const firstNode = publishRevision(first);
+    const secondNode = publishRevision(second);
+    await seedChunkRevisionNode(firstNode, 'evicted-session', first, 1);
+    await seedChunkRevisionNode(secondNode, 'evicted-session', second, 1);
+
+    for (let run = 0; run < 3; run += 1) {
+      await narrativeCleanupOperation().run(contextFor());
+    }
+
+    for (const id of [firstNode, secondNode]) {
+      const props = await nodeProperties(harness.driver, id);
+      expect(props[BITEMPORAL_PROPERTIES.forgottenAt]).toBeUndefined();
+      expect(props[BITEMPORAL_PROPERTIES.validUntil]).toBeUndefined();
+    }
+  }, 120_000);
+
+  /**
+   * The crash this repair exists for: a publication acknowledged the next revision and the graph
+   * close of the head it replaced never landed. The keeper is read from the manifest under the
+   * write, an attempt still in flight is left for its own receipt, and a different chunk of the
+   * same session is not a candidate at all.
+   */
+  it('closes an extra revision onto the acknowledged head and leaves an attempt in flight alone', async () => {
+    await seedSession('family-session');
+    const family = sealOneSourceChunk('family-session', 'family-s1');
+    const other = sealOneSourceChunk('family-session', 'family-s2');
+    const revision1 = publishRevision(family);
+    const revision2 = publishRevision(family);
+    const inFlight = allocateNarrativeRevision(db, CHUNK_REVISION_FAMILY, family, NOW);
+    const otherNode = publishRevision(other);
+
+    await seedChunkRevisionNode(revision1, 'family-session', family, 1);
+    await seedChunkRevisionNode(revision2, 'family-session', family, 2);
+    await seedChunkRevisionNode(inFlight.nodeId, 'family-session', family, inFlight.revisionNo);
+    await seedChunkRevisionNode(otherNode, 'family-session', other, 1);
+
+    const outcome = await narrativeCleanupOperation().run(contextFor());
+
+    expect(outcome.detail).toContain('1 extra revision(s) superseded onto the acknowledged head');
+    // The superseded revision, closed against the head the records name.
+    expect(
+      (await nodeProperties(harness.driver, revision1))[BITEMPORAL_PROPERTIES.validUntil],
+    ).toBeDefined();
+    // The acknowledged head, and the attempt whose receipt has not settled, both standing.
+    for (const id of [revision2, inFlight.nodeId, otherNode]) {
+      const props = await nodeProperties(harness.driver, id);
+      expect(props[BITEMPORAL_PROPERTIES.validUntil]).toBeUndefined();
+    }
   }, 120_000);
 
   it('leaves a session with one narrative and a live episode alone', async () => {
@@ -306,8 +453,8 @@ describe('what a bounded run says it examined', () => {
   }, 120_000);
 
   it('counts the bounded scan rather than the backlog behind it', async () => {
-    const groups = await findDuplicateNarrativeSessions(harness.driver, 50);
-    const orphans = await findOrphanedNarratives(harness.driver, 50);
+    const families = await findDuplicateChunkFamilies(harness.driver, 50);
+    const nominated = await findOrphanedNarratives(harness.driver, 50);
     const before = await countNarrativeEdges(harness.driver);
     expect(before.stale).toBeGreaterThanOrEqual(4);
 
@@ -319,8 +466,12 @@ describe('what a bounded run says it examined', () => {
     expect(before.stale - after.stale).toBe(2);
     expect(after.active).toBe(before.active);
 
-    expect(outcome.itemsProcessed).toBe(groups.length + orphans.length + 2);
-    expect(outcome.itemsProcessed).toBeLessThan(before.stale);
+    // The edge term is the batch this run reached, not the residue behind it. Read as the
+    // remainder of the total once the two populations that were counted before the run are
+    // taken out, so no other repair's arithmetic can stand in for the claim.
+    const edgeTerm = outcome.itemsProcessed - families.length - nominated.length;
+    expect(edgeTerm).toBe(2);
+    expect(edgeTerm).toBeLessThan(before.stale);
     expect(outcome.detail).toContain('2 stale edge(s)');
     expect(outcome.detail).toContain(`backlog ${String(before.stale)} stale`);
   }, 120_000);

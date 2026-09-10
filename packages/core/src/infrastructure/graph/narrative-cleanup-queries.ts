@@ -29,7 +29,10 @@ export type DuplicateNarrativeGroup = {
 
 const FIND_DUPLICATE_NARRATIVE_SESSIONS = [
   `MATCH (n:Narrative)-[:${DERIVES_FROM_TYPE}]->(s:Session)`,
-  `WHERE ${currentOnly('n')}`,
+  // Legacy only. A chunk revision carries its own family key and is grouped on that instead;
+  // two chunks of one session are two memories, not two versions of one, and a sweep that kept
+  // grouping this way would close one of them against the other.
+  `WHERE ${currentOnly('n')} AND n.${NARRATIVE_PROPERTIES.chunkId} IS NULL`,
   `WITH s, collect({ id: n.id, version: n.${NARRATIVE_PROPERTIES.version},` +
     ` coverage_count: n.${NARRATIVE_PROPERTIES.coverageCount} }) AS versions`,
   'WHERE size(versions) > 1',
@@ -91,6 +94,79 @@ export async function readOpenNarrativeVersionsInTransaction(
     id: row.id as string,
     version: typeof row.version === 'number' ? row.version : 0,
     coverageCount: typeof row.coverage_count === 'number' ? row.coverage_count : 0,
+  }));
+}
+
+export type ChunkRevisionVersion = {
+  readonly id: string;
+  readonly revisionNo: number;
+};
+
+export type DuplicateChunkFamily = {
+  readonly chunkId: string;
+  readonly versions: readonly ChunkRevisionVersion[];
+};
+
+/**
+ * The duplicate group for a chunk is the chunk itself, and never the session it came out of.
+ *
+ * A session serves several distinct chunks at once by design, so grouping on the session made
+ * every one of them a duplicate of the others and left the run to pick a survivor by coverage
+ * count. Grouping on `chunk_id` cannot make that mistake: two nodes are candidates only when they
+ * are two revisions of one frozen membership, and which of them stands is a manifest fact the
+ * caller reads rather than a property of the prose.
+ */
+const FIND_DUPLICATE_CHUNK_FAMILIES = [
+  'MATCH (n:Narrative)',
+  `WHERE ${currentOnly('n')} AND n.${NARRATIVE_PROPERTIES.chunkId} IS NOT NULL`,
+  `WITH n.${NARRATIVE_PROPERTIES.chunkId} AS chunk_id,`,
+  `     collect({ id: n.id, revision_no: n.${NARRATIVE_PROPERTIES.revisionNo} }) AS versions`,
+  'WHERE size(versions) > 1',
+  'RETURN chunk_id, versions',
+  'ORDER BY chunk_id',
+  'LIMIT $limit',
+].join('\n');
+
+function readChunkVersion(value: unknown): ChunkRevisionVersion {
+  const row = (value ?? {}) as Row;
+  return {
+    id: (row.id as string | null) ?? '',
+    revisionNo: typeof row.revision_no === 'number' ? row.revision_no : 0,
+  };
+}
+
+export async function findDuplicateChunkFamilies(
+  driver: Driver,
+  limit: number,
+): Promise<DuplicateChunkFamily[]> {
+  if (limit <= 0) {
+    return [];
+  }
+  return runRead(
+    driver,
+    { cypher: FIND_DUPLICATE_CHUNK_FAMILIES, parameters: { limit: toGraphInteger(limit) } },
+    (row) => ({
+      chunkId: row.chunk_id as string,
+      versions: Array.isArray(row.versions) ? row.versions.map(readChunkVersion) : [],
+    }),
+  );
+}
+
+const READ_OPEN_CHUNK_REVISIONS = [
+  `MATCH (n:Narrative { ${NARRATIVE_PROPERTIES.chunkId}: $chunkId })`,
+  `WHERE ${currentOnly('n')}`,
+  `RETURN n.id AS id, n.${NARRATIVE_PROPERTIES.revisionNo} AS revision_no`,
+  'ORDER BY n.id',
+].join('\n');
+
+/** The same family re-read under the caller's lock, because the scan ran outside one. */
+export async function readOpenChunkRevisionsInTransaction(
+  tx: GraphTransaction,
+  chunkId: string,
+): Promise<ChunkRevisionVersion[]> {
+  return tx.run(READ_OPEN_CHUNK_REVISIONS, { chunkId }, (row) => ({
+    id: row.id as string,
+    revisionNo: typeof row.revision_no === 'number' ? row.revision_no : 0,
   }));
 }
 
