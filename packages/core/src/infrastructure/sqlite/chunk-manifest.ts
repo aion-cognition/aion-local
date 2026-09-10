@@ -36,6 +36,43 @@ export function chunkIdentity(
     .digest('hex');
 }
 
+/** A source seals into a chunk only on a proved identity, so the state is named rather than typed. */
+const VERIFIED = 'verified';
+
+/**
+ * The ordering bases a LIVE cursor is written under.
+ *
+ * A `pinned` basis is the migration's placeholder for a source whose position nobody could
+ * establish, and reading it as a live cursor value would order the legacy population into the
+ * chunk a live tail is sealing. The two populations stay apart here rather than in the caller.
+ */
+const LIVE_CAPTURE_BASES = "('archive_acceptance', 'graph_tx_from')";
+
+/** The same set the SQL names, for the row-by-row re-read the freeze performs. */
+const LIVE_BASES = new Set(['archive_acceptance', 'graph_tx_from']);
+
+/**
+ * Eligibility for live membership: the identity is proved and the position is a live one.
+ *
+ * The verification test is a literal comparison on a NOT NULL column and the basis test names its
+ * accepted values, so neither can silently drop a row into a NULL comparison. Initial verification
+ * is what this decides. Evidence that becomes unreadable AFTER membership froze is a different
+ * question with a different answer: that chunk stays sealed and its publication blocks.
+ */
+const LIVE_MEMBER = `r.verification_status = '${VERIFIED}'
+         AND r.capture_order_basis IN ${LIVE_CAPTURE_BASES}`;
+
+/**
+ * The complement, written out rather than as `NOT (...)`.
+ *
+ * `basis IN (…)` is NULL for a NULL basis, and `NOT NULL` is NULL too, so a negated predicate
+ * would drop a NULL-basis row out of BOTH populations — which is precisely the silent loss these
+ * two reads exist to make impossible. `verification_status` is NOT NULL, so its test is safe.
+ */
+const HELD_MEMBER = `(r.verification_status <> '${VERIFIED}'
+         OR r.capture_order_basis IS NULL
+         OR r.capture_order_basis NOT IN ${LIVE_CAPTURE_BASES})`;
+
 /** How many earlier chunks one seal records an overlap against. A bound, not a survey. */
 export const CHUNK_OVERLAP_LIMIT = 16;
 
@@ -158,7 +195,67 @@ export type ChunkSealInput = {
   readonly sourceIds: readonly string[];
   readonly sealedAt: Date;
   readonly partitionPolicyVersion?: number;
+  /**
+   * The facts the decision was taken on, restated so the freeze can check them.
+   *
+   * Filtering the read that fed the decision is not enough: the decision ran across an await, and
+   * a verification withdrawn in that interval freezes a member the records no longer stand behind.
+   * A caller that states its facts gets them re-read inside the transaction that freezes the
+   * membership; one that states none — a fixture building a membership directly — took no such
+   * decision and asks for no re-check.
+   */
+  readonly expected?: readonly ExpectedMember[];
 };
+
+export type ExpectedMember = {
+  readonly sourceId: string;
+  readonly captureOrderValue: string;
+};
+
+/** A freeze refused because the facts it was decided on no longer hold. */
+export class ChunkSealRefused extends Error {
+  readonly sourceId: string;
+
+  constructor(sourceId: string, detail: string) {
+    super(`chunk seal refused: ${sourceId} ${detail}`);
+    this.name = 'ChunkSealRefused';
+    this.sourceId = sourceId;
+  }
+}
+
+/** Re-reads one stated fact inside the freeze, and says which part of it moved. */
+function verifyExpectedMember(db: SqliteHandle, expected: ExpectedMember): void {
+  const row = db
+    .prepare(
+      `SELECT verification_status, capture_order_basis, capture_order_value
+         FROM source_records WHERE source_id = ?`,
+    )
+    .get(expected.sourceId) as
+    | {
+        verification_status: string;
+        capture_order_basis: string | null;
+        capture_order_value: string | null;
+      }
+    | undefined;
+  if (row === undefined) {
+    throw new ChunkSealRefused(expected.sourceId, 'has no source record at the freeze');
+  }
+  if (row.verification_status !== VERIFIED) {
+    throw new ChunkSealRefused(
+      expected.sourceId,
+      `is ${row.verification_status} at the freeze, not ${VERIFIED}`,
+    );
+  }
+  if (row.capture_order_basis === null || !LIVE_BASES.has(row.capture_order_basis)) {
+    throw new ChunkSealRefused(
+      expected.sourceId,
+      `carries no live capture basis at the freeze (${row.capture_order_basis ?? 'null'})`,
+    );
+  }
+  if (row.capture_order_value !== expected.captureOrderValue) {
+    throw new ChunkSealRefused(expected.sourceId, 'moved in the capture order before the freeze');
+  }
+}
 
 export type ChunkSealOutcome = {
   readonly chunkId: string;
@@ -190,6 +287,9 @@ export function sealChunk(db: SqliteHandle, input: ChunkSealInput): ChunkSealOut
           throw new Error(`chunk ${chunkId} is already sealed over a different member set`);
         }
         return { chunkId, created: false };
+      }
+      for (const expected of input.expected ?? []) {
+        verifyExpectedMember(db, expected);
       }
       const sealedAt = input.sealedAt.toISOString();
       // Computed inside the seal's own transaction, over the chunks that were already sealed when
@@ -229,40 +329,6 @@ export type RemainderMember = {
   readonly occurredAt: string;
   readonly createdAt: string;
 };
-
-/** A source seals into a chunk only on a proved identity, so the state is named rather than typed. */
-const VERIFIED = 'verified';
-
-/**
- * The ordering bases a LIVE cursor is written under.
- *
- * A `pinned` basis is the migration's placeholder for a source whose position nobody could
- * establish, and reading it as a live cursor value would order the legacy population into the
- * chunk a live tail is sealing. The two populations stay apart here rather than in the caller.
- */
-const LIVE_CAPTURE_BASES = "('archive_acceptance', 'graph_tx_from')";
-
-/**
- * Eligibility for live membership: the identity is proved and the position is a live one.
- *
- * The verification test is a literal comparison on a NOT NULL column and the basis test names its
- * accepted values, so neither can silently drop a row into a NULL comparison. Initial verification
- * is what this decides. Evidence that becomes unreadable AFTER membership froze is a different
- * question with a different answer: that chunk stays sealed and its publication blocks.
- */
-const LIVE_MEMBER = `r.verification_status = '${VERIFIED}'
-         AND r.capture_order_basis IN ${LIVE_CAPTURE_BASES}`;
-
-/**
- * The complement, written out rather than as `NOT (...)`.
- *
- * `basis IN (…)` is NULL for a NULL basis, and `NOT NULL` is NULL too, so a negated predicate
- * would drop a NULL-basis row out of BOTH populations — which is precisely the silent loss these
- * two reads exist to make impossible. `verification_status` is NOT NULL, so its test is safe.
- */
-const HELD_MEMBER = `(r.verification_status <> '${VERIFIED}'
-         OR r.capture_order_basis IS NULL
-         OR r.capture_order_basis NOT IN ${LIVE_CAPTURE_BASES})`;
 
 const UNSEALED = 'NOT EXISTS (SELECT 1 FROM chunk_members m WHERE m.source_id = r.source_id)';
 

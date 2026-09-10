@@ -6,6 +6,7 @@ import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import type { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
 import {
+  ChunkSealRefused,
   heldSessionSources,
   readRemainderMembers,
   sealChunk,
@@ -154,7 +155,28 @@ export async function sealSessionChunk(
     return { held, status: 'waiting', reason: decision.reason };
   }
   const members = decision.members.map((member) => member.sourceId);
-  const sealed = sealChunk(deps.db, { sessionId, sourceIds: members, sealedAt: options.now });
+  // The facts this decision was taken on, restated for the freeze to re-read. The reads above
+  // happened across an await, and a verification withdrawn in that interval would otherwise be
+  // frozen into a membership the records no longer stand behind.
+  const expected = decision.members.map((member) => ({
+    sourceId: member.sourceId,
+    captureOrderValue: member.captureOrderValue,
+  }));
+  let sealed;
+  try {
+    sealed = sealChunk(deps.db, {
+      sessionId,
+      sourceIds: members,
+      sealedAt: options.now,
+      expected,
+    });
+  } catch (err) {
+    if (err instanceof ChunkSealRefused) {
+      deps.logger.warn({ sessionId, sourceId: err.sourceId }, 'chunk seal refused at the freeze');
+      return { held, status: 'refused', reason: err.message };
+    }
+    throw err;
+  }
   deps.logger.info(
     {
       sessionId,
