@@ -22,6 +22,7 @@ import {
   census,
   chunks,
   driver,
+  dropCensus,
   NOW,
   sealFor,
   store,
@@ -79,6 +80,7 @@ it('reaches a cleared block behind unchanged blocked attempts', async () => {
   const rows: { source: string; chunk: string; revision: number }[] = [];
   for (let index = 0; index < 3; index += 1) {
     const source = await acceptSource(`blocked-page:${String(index)}`, 'uncounted source', false);
+    dropCensus(source);
     const chunk = await sealFor(source);
     const result = await publishChunkNarrative(chunks, chunk, { now: NOW });
     expect(result).toMatchObject({ status: 'blocked', reason: 'member_scope_census_missing' });

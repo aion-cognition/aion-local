@@ -100,6 +100,18 @@ const INCOMING_STATEMENT_ROLES: readonly DurableRole[] = [
   'stated_confirmation',
 ];
 
+/**
+ * The same populations, named as the scopes their censuses are filed under.
+ *
+ * The acceptance writer establishes its own set from here rather than listing one, because a
+ * census established under a scope this reader does not ask for leaves the answer unproved while
+ * looking counted — and one established under a direction the registry files elsewhere is a count
+ * of a population nobody reads.
+ */
+export const INCOMING_STATEMENT_SCOPES: readonly string[] = INCOMING_STATEMENT_ROLES.map((role) =>
+  durableRoleScope(role, 'in'),
+);
+
 export type UnprovedScope = {
   readonly sourceId: string;
   readonly scope: string;

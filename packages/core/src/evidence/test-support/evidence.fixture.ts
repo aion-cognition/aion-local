@@ -164,6 +164,17 @@ export function establishScope(
 }
 
 /**
+ * A scope nobody has written at all, which is the state an endpoint no producer has covered is
+ * actually in: an absent row rather than a counted one. It is the only way to build that state
+ * once a writer establishes the scope at the moment it creates the endpoint.
+ */
+export function dropScope(db: SqliteHandle, endpointId: string, relationClass: string): void {
+  db.prepare(
+    'DELETE FROM evidence_scope_versions WHERE endpoint_id = ? AND relation_class = ?',
+  ).run(endpointId, relationClass);
+}
+
+/**
  * Every scope a support reading asks about this node, established.
  *
  * Taken from the reader's own list rather than written out here, so a test cannot certify a node

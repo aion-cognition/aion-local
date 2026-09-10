@@ -19,6 +19,7 @@ import {
   census,
   chunks,
   driver,
+  dropCensus,
   NOW,
   sealFor,
   store,
@@ -102,6 +103,7 @@ it('advances past unchanged heads to reach a later invalidated family', async ()
 
 it('wakes a blocked member-scope read when its census becomes proved', async () => {
   const source = await acceptSource('census-wakeup', 'initially uncounted', false);
+  dropCensus(source);
   const chunkId = await sealFor(source);
   expect(await publishChunkNarrative(chunks, chunkId, { now: NOW })).toMatchObject({
     status: 'blocked',

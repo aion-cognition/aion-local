@@ -6,6 +6,7 @@ import {
   activateCoverage,
   chunks,
   driver,
+  dropCensus,
   forgetSource,
   NOW,
   onGenerate,
@@ -37,6 +38,7 @@ import { checkPresentCoverage } from '../../recall/application/coverage-checker.
 
 it('does not publish while the incoming correction population is unproved', async () => {
   const source = await acceptSource('uncounted', 'uncounted source', false);
+  dropCensus(source);
   const chunk = await sealFor(source);
   const result = await publishChunkNarrative(chunks, chunk, { now: NOW });
   expect(result.status).not.toBe('published');

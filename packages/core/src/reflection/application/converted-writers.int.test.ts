@@ -258,9 +258,12 @@ it('advances the scopes a stated reference names, through the acceptance that ca
     now: NOW,
   });
   const scope = { endpointId: first.episode_id, relationClass: 'sqlite:stated_correction:in' };
-  // Nobody has stated anything about it, so the counter does not exist. An absent scope has no
-  // token on purpose: minting one would turn "nobody has looked" into a claim.
-  expect(readScopeVersion(store.db, scope)).toBeUndefined();
+  // The counter exists and is counted before any statement names it. Nobody can have corrected an
+  // id nobody had, so the acceptance that chose it is the one write in a position to say the
+  // population is empty, and it says so where it mints the records.
+  const minted = readScopeVersion(store.db, scope);
+  expect(minted?.publishedRevision).toBe(1);
+  expect(minted?.censusStatus).toBe('established');
 
   await handleReflection(
     intake,
@@ -269,10 +272,11 @@ it('advances the scopes a stated reference names, through the acceptance that ca
   );
 
   const advanced = readScopeVersion(store.db, scope);
-  expect(advanced?.publishedRevision).toBe(1);
+  expect(advanced?.publishedRevision).toBe(2);
   expect(advanced?.pendingOperationId).toBeNull();
-  // Advanced, and still uncounted: an acceptance states one thing and counts no population.
-  expect(advanced?.censusStatus).toBe('unknown');
+  // Advanced by the acceptance that carried the statement, in the transaction that recorded it, so
+  // the count still covers the population and every reader holding the old token finds out.
+  expect(advanced?.censusStatus).toBe('established');
 });
 
 it('drains the source-index rows nothing else claims, and settles their obligation', async () => {

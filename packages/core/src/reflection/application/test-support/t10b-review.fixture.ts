@@ -8,6 +8,7 @@ import { EvidenceResolver } from '../../../evidence/application/resolver.js';
 import { durableRoleScope } from '../../../evidence/domain/scopes.js';
 import {
   commitSourceState,
+  dropScope,
   establishScope,
 } from '../../../evidence/test-support/evidence.fixture.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
@@ -26,6 +27,7 @@ import { SqliteStore } from '../../../infrastructure/sqlite/database.js';
 import { readSourceRecord } from '../../../infrastructure/sqlite/source-identity.js';
 import { SessionManager } from '../../../session/session-manager.js';
 import type { ChunkBoundaryPolicy } from '../../domain/chunk-boundary.js';
+import { INCOMING_STATEMENT_SCOPES } from '../chunk-evidence.js';
 import { sealSessionChunk, type ChunkNarrativeDeps } from '../chunk-narrative.js';
 import { INSTALLED_PUBLICATION_HANDLERS } from '../installed-publications.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../intake.js';
@@ -137,6 +139,19 @@ export function census(sourceId: string): void {
     establishScope(store.db, sourceId, durableRoleScope(role, 'in'), NOW);
   }
   establishScope(store.db, sourceId, durableRoleScope('stated_derivation', 'out'), NOW);
+}
+
+/**
+ * A source whose incoming-statement census nobody established.
+ *
+ * The acceptance writer counts those populations for every source it mints, so this is the state
+ * of a source accepted before that producer existed — which is the population the migration cohort
+ * covers, and the only remaining way an ordinary member reads as uncounted.
+ */
+export function dropCensus(sourceId: string): void {
+  for (const scope of INCOMING_STATEMENT_SCOPES) {
+    dropScope(store.db, sourceId, scope);
+  }
 }
 
 export async function acceptSource(

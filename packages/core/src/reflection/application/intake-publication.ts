@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 
+import {
+  acknowledgeSourceCensus,
+  discardSourceCensus,
+  prepareSourceCensus,
+} from './accepted-source-census.js';
 import { projectEpisodeInTransaction } from './experience-store.js';
 import { enqueueSourceWork } from './intake-queue.js';
 import {
@@ -10,9 +15,9 @@ import {
   discardReferenceAcceptance,
   prepareReferenceAcceptance,
   projectAcceptedReferences,
+  statedInput,
   statedReferenceIds,
   type ReferenceAcceptance,
-  type StatedReferenceInput,
 } from './reference-acceptance.js';
 import { activateSourceManifest, writeSourceManifest } from './source-manifest.js';
 import { presentNodeIds } from '../../infrastructure/graph/projection-presence.js';
@@ -164,20 +169,6 @@ function occurrenceKey(payload: IntakePayload): OccurrenceKey & { contentHash: s
  */
 function candidateDigest(db: SqliteHandle, key: OccurrenceKey, ownSourceId: string): string {
   return hashContent(occurrenceCandidates(db, key).filter((sourceId) => sourceId !== ownSourceId));
-}
-
-/** The stated block a push carried, in the shape the shared acceptance normalizes to. */
-function statedInput(stated: ReflectionContent['provenance']): StatedReferenceInput {
-  return {
-    supersedes: stated?.supersedes ?? [],
-    derivedFrom: stated?.derived_from ?? [],
-    confirmations: (stated?.confirmations ?? []).map((entry) => ({
-      target: entry.target,
-      by: entry.by,
-      evidence: entry.evidence,
-      ...(entry.occurred_at === undefined ? {} : { occurredAt: entry.occurred_at }),
-    })),
-  };
 }
 
 /** The delivery identity of the statements one acceptance carried. */
@@ -441,6 +432,9 @@ export const intakePublication = new PublicationOperation({
         },
         data.turnIds,
       );
+      // Beside the records that mint the identity: the empty incoming population is a fact about
+      // this id having just been chosen.
+      prepareSourceCensus(context.db, data.sourceId, context.operationId, data.acceptedAt);
       return undefined;
     }
     // A reused occurrence rebuilds nothing and reindexes nothing, but the statements this push
@@ -480,6 +474,7 @@ export const intakePublication = new PublicationOperation({
       now: new Date(context.knownFrom),
     });
     enqueueSourceWork(context.db, data, context.operationId);
+    acknowledgeSourceCensus(context.db, data.sourceId, context.operationId, context.knownFrom);
     return undefined;
   },
   discardSqlite(context, data, reason) {
@@ -492,6 +487,7 @@ export const intakePublication = new PublicationOperation({
       candidates: data.pinnedCandidates,
     });
     discardReferenceAcceptance(context.db, referenceAcceptanceOf(data, context.operationId));
+    discardSourceCensus(context.db, data.sourceId, context.operationId, data.acceptedAt);
     return undefined;
   },
 });

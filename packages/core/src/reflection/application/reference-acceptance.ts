@@ -29,7 +29,7 @@ import {
   readReferenceDelivery,
 } from '../../infrastructure/sqlite/source-identity.js';
 import { recordEvidenceAcknowledgment } from '../../infrastructure/sqlite/source-lifecycle.js';
-import { hashContent } from '../domain/content.js';
+import { hashContent, type ReflectionContent } from '../domain/content.js';
 
 /**
  * Accepting what a caller states about other memories, shared by every writer that accepts one.
@@ -137,6 +137,20 @@ export type StatedReferenceInput = {
     readonly resolvedOccurredAt?: string;
   }[];
 };
+
+/** The stated block a push carried, in the shape every writer that accepts one normalizes to. */
+export function statedInput(stated: ReflectionContent['provenance']): StatedReferenceInput {
+  return {
+    supersedes: stated?.supersedes ?? [],
+    derivedFrom: stated?.derived_from ?? [],
+    confirmations: (stated?.confirmations ?? []).map((entry) => ({
+      target: entry.target,
+      by: entry.by,
+      evidence: entry.evidence,
+      ...(entry.occurred_at === undefined ? {} : { occurredAt: entry.occurred_at }),
+    })),
+  };
+}
 
 /** Every id a statement names, in the order the versions are recorded. */
 export function statedReferenceIds(input: StatedReferenceInput): readonly string[] {
