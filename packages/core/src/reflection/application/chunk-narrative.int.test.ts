@@ -52,10 +52,12 @@ import {
   listStatedLinksTo,
   prepareRetirementVersion,
 } from '../../infrastructure/sqlite/evidence-links.js';
+import { listAllocatedRevisions } from '../../infrastructure/sqlite/narrative-allocations.js';
 import { readCitationsFrom } from '../../infrastructure/sqlite/narrative-citations.js';
 import {
   allocateNarrativeRevision,
   CHUNK_REVISION_FAMILY,
+  nominateRetryableRevisions,
   readNarrativeRevision,
   readPublishedHead,
   readPublishedRevision,
@@ -108,11 +110,17 @@ function citeEveryHandle(prompt: string): unknown {
   };
 }
 
+/** What this run does while the model is being asked, for the cases about that window. */
+let duringGeneration: (() => void) | undefined;
+
 const scripted: Provider = {
   embed: () => Promise.reject(new Error('no embedding in this battery')),
   generate: (request: StructuredRequest) => {
     const user = request.messages.find((message) => message.role === 'user')?.content ?? '';
     prompts.push(user);
+    const hook = duringGeneration;
+    duringGeneration = undefined;
+    hook?.();
     return Promise.resolve(citeEveryHandle(user));
   },
 };
@@ -290,6 +298,7 @@ beforeEach(() => {
   prompts = [];
   failAt = undefined;
   hideAtPrepared = undefined;
+  duringGeneration = undefined;
 });
 
 afterAll(async () => {
@@ -746,4 +755,101 @@ it('drops a retired correction from the required input and adds nothing for an u
   const unrelated = await publishChunkNarrative(chunks, chunkId, { now: NOW });
   expect(unrelated).toMatchObject({ status: 'skipped', reason: 'head_current' });
   expect(prompts).toHaveLength(asked);
+});
+
+/**
+ * What durable state a run leaves behind. A number is spent when it is handed out, so the only
+ * question is which rows stay runnable: the one an attempt died before binding, none at all once
+ * a publication lands, and a fresh one carrying the reason when an output is refused.
+ */
+it('takes up its own unpublished allocation and leaves none runnable once one publishes', async () => {
+  await accept('session-retry', 'rho2');
+  const chunkId = await sealAndPublish('session-retry');
+
+  const failing: ChunkNarrativeDeps = {
+    ...chunks,
+    provider: {
+      embed: () => Promise.reject(new Error('no embedding in this battery')),
+      generate: () => Promise.reject(new Error('the provider refused')),
+    },
+  };
+  const failed = await publishChunkNarrative(failing, chunkId, { now: NOW });
+  expect(failed.status).toBe('failed');
+  const held = listAllocatedRevisions(store.db, CHUNK_REVISION_FAMILY, chunkId);
+  expect(held.map((row) => row.revisionNo)).toEqual(
+    failed.status === 'failed' ? [failed.revisionNo] : [],
+  );
+
+  const published = await publishChunkNarrative(chunks, chunkId, { now: NOW });
+  expect(published.status).toBe('published');
+  if (published.status !== 'published' || failed.status !== 'failed') {
+    return;
+  }
+  // The same number, taken up rather than spent beside the first.
+  expect(published.revisionNo).toBe(failed.revisionNo);
+  expect(readPublishedHead(store.db, CHUNK_REVISION_FAMILY, chunkId)).toBe(published.revisionNo);
+  // Nothing is left runnable: a scheduler reading durable state sees no owed work here.
+  expect(listAllocatedRevisions(store.db, CHUNK_REVISION_FAMILY, chunkId)).toEqual([]);
+  expect(
+    nominateRetryableRevisions(store.db, CHUNK_REVISION_FAMILY, NOW, 10).map((r) => r.familyKey),
+  ).not.toContain(chunkId);
+});
+
+it('leaves a runnable row carrying the reason when the guard refuses the output', async () => {
+  const first = await accept('session-refused', 'sigma2');
+  const second = await accept('session-refused', 'tau2');
+  const chunkId = await sealAndPublish('session-refused');
+  expect((await publishChunkNarrative(chunks, chunkId, { now: NOW })).status).toBe('published');
+
+  forget(first, 'forget-sigma2');
+  // The evidence moves again while the model is being asked, so what comes back describes a
+  // substrate that has changed under it.
+  duringGeneration = () => {
+    forget(second, 'forget-tau2');
+  };
+  const deferred = await publishChunkNarrative(chunks, chunkId, { now: NOW });
+  expect(deferred.status).toBe('deferred');
+  if (deferred.status !== 'deferred') {
+    return;
+  }
+  expect(deferred.reason).toContain('evidence_');
+  expect(readPublishedHead(store.db, CHUNK_REVISION_FAMILY, chunkId)).toBe(1);
+
+  // The refused number is spent, and the work is still visible: one runnable row, due now,
+  // carrying what refused it for the scheduler that decides how long to wait.
+  const owed = listAllocatedRevisions(store.db, CHUNK_REVISION_FAMILY, chunkId);
+  expect(owed.map((row) => row.revisionNo)).toEqual([deferred.revisionNo]);
+  const row = readNarrativeRevision(store.db, CHUNK_REVISION_FAMILY, chunkId, deferred.revisionNo);
+  expect(row?.lastFailureReason).toBe(deferred.reason);
+  expect(row?.attempts).toBe(1);
+  expect(row?.nextAttemptAt).toBeNull();
+  // Runnable: due now, unblocked, and nominated by the retry read the scheduler pages on.
+  expect(
+    nominateRetryableRevisions(store.db, CHUNK_REVISION_FAMILY, NOW, 10).map((r) => r.familyKey),
+  ).toContain(chunkId);
+});
+
+it('never takes up an allocation another attempt has bound to a durable intent', async () => {
+  await accept('session-bound', 'upsilon2');
+  const chunkId = await sealAndPublish('session-bound');
+  failAt = 'before_ack';
+  await expect(publishChunkNarrative(chunks, chunkId, { now: NOW })).rejects.toThrow();
+  const bound = listAllocatedRevisions(store.db, CHUNK_REVISION_FAMILY, chunkId);
+  expect(bound).toHaveLength(1);
+  expect(bound[0]?.operationId).not.toBeNull();
+
+  // A second attempt neither steals the bound number nor publishes beside it. It cannot even
+  // certify its evidence while a publication is pending, which is the honest refusal: the reading
+  // this revision would rest on is one nobody can take a position on yet.
+  const next = await publishChunkNarrative(chunks, chunkId, { now: NOW });
+  expect(next.status).not.toBe('published');
+  if (next.status !== 'skipped') {
+    expect(next.revisionNo).not.toBe(bound[0]?.revisionNo);
+  }
+  expect(readPublishedHead(store.db, CHUNK_REVISION_FAMILY, chunkId)).toBeUndefined();
+
+  // Recovery is what finishes the bound attempt, and it finishes THAT number rather than either
+  // of the ones allocated beside it.
+  expect((await coordinator.recover())?.status).toBe('acknowledged');
+  expect(readPublishedHead(store.db, CHUNK_REVISION_FAMILY, chunkId)).toBe(bound[0]?.revisionNo);
 });

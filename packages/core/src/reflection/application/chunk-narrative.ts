@@ -20,6 +20,10 @@ import type {
 } from '../../infrastructure/publication/preconditions.js';
 import { listChunkMembers, readChunk } from '../../infrastructure/sqlite/chunk-manifest.js';
 import {
+  abandonStaleAllocations,
+  listAllocatedRevisions,
+} from '../../infrastructure/sqlite/narrative-allocations.js';
+import {
   abandonNarrativeRevision,
   allocateNarrativeRevision,
   blockRevisionAttempt,
@@ -27,6 +31,7 @@ import {
   readPublishedRevision,
   recordRevisionAttemptFailure,
 } from '../../infrastructure/sqlite/narrative-revisions.js';
+import { publicationRecord } from '../../infrastructure/sqlite/publication-coordinator-store.js';
 import { readSourceResidency } from '../../infrastructure/sqlite/source-lifecycle.js';
 import {
   checkPresentCoverage,
@@ -76,6 +81,42 @@ export type ChunkPublishReport =
       readonly reason: string;
     }
   | { readonly status: 'skipped'; readonly chunkId: string; readonly reason: string };
+
+/**
+ * The operation identity a chunk revision publishes under.
+ *
+ * Derived from the pair rather than minted, so whether an allocation has a durable intent is a
+ * question the records answer exactly: the id is the same one any earlier attempt on that number
+ * would have used.
+ */
+function publicationOperationId(chunkId: string, revisionNo: number): string {
+  return `narrative-publish:${chunkId}:${String(revisionNo)}`;
+}
+
+/**
+ * The revision number this attempt works under: an unpublished allocation nobody bound to a
+ * durable intent, or a fresh one.
+ *
+ * Allocating unconditionally left the previous attempt's number `allocated` and runnable while a
+ * second number published beside it. Taking one up again is safe exactly while no intent exists
+ * for it: an operation with a record is an attempt the coordinator is still resolving, and a
+ * blocked row waits for a prerequisite rather than for another try.
+ */
+function claimRevisionAllocation(
+  deps: ChunkNarrativeDeps,
+  chunkId: string,
+  now: Date,
+): { readonly revisionNo: number; readonly nodeId: string } {
+  const held = listAllocatedRevisions(deps.db, CHUNK_REVISION_FAMILY, chunkId).find(
+    (row) =>
+      row.blockedReason === null &&
+      row.operationId === null &&
+      publicationRecord(deps.db, publicationOperationId(chunkId, row.revisionNo)) === undefined,
+  );
+  return held === undefined
+    ? allocateNarrativeRevision(deps.db, CHUNK_REVISION_FAMILY, chunkId, now)
+    : { revisionNo: held.revisionNo, nodeId: held.nodeId };
+}
 
 function storedRevision(json: string | null): EvidenceRevision | undefined {
   if (json === null) {
@@ -138,12 +179,7 @@ export async function publishChunkNarrative(
       reason: `coverage ${coverage.refusal.reason}`,
     };
   }
-  const allocation = allocateNarrativeRevision(
-    deps.db,
-    CHUNK_REVISION_FAMILY,
-    chunkId,
-    options.now,
-  );
+  const allocation = claimRevisionAllocation(deps, chunkId, options.now);
   const frozen = listChunkMembers(deps.db, chunkId);
   const residency = frozen.map((sourceId) => {
     const row = readSourceResidency(deps.db, sourceId);
@@ -260,7 +296,7 @@ export async function publishChunkNarrative(
   const span = spanOf(plan.members, options.now);
   const outcome = await deps.publications.publish({
     kind: 'narrative_publish',
-    operationId: `narrative-publish:${chunkId}:${String(allocation.revisionNo)}`,
+    operationId: publicationOperationId(chunkId, allocation.revisionNo),
     payload: {
       chunkId,
       sessionId: chunk.sessionId,
@@ -285,8 +321,11 @@ export async function publishChunkNarrative(
   });
 
   if (outcome.status !== 'acknowledged') {
-    // The allocation is spent and the decision is requeued: what published is what stands, and
-    // the next attempt reads the substrate again rather than re-blessing this output.
+    // The output is refused and its number is spent: this attempt bound an intent, so the number
+    // can never be taken up again. What must not go with it is the work — a refusal that left no
+    // durable row would take the chunk out of the scheduler's sight until something else moved.
+    // So a fresh allocation carries the reason and the attempt count forward, due now, for the
+    // scheduler that owns how long to wait.
     abandonNarrativeRevision(
       deps.db,
       CHUNK_REVISION_FAMILY,
@@ -294,13 +333,25 @@ export async function publishChunkNarrative(
       allocation.revisionNo,
       options.now,
     );
-    return {
-      status: 'deferred',
-      chunkId,
-      revisionNo: allocation.revisionNo,
+    const next = allocateNarrativeRevision(deps.db, CHUNK_REVISION_FAMILY, chunkId, options.now);
+    recordRevisionAttemptFailure(deps.db, CHUNK_REVISION_FAMILY, {
+      familyKey: chunkId,
+      revisionNo: next.revisionNo,
       reason: outcome.reason,
-    };
+    });
+    return { status: 'deferred', chunkId, revisionNo: next.revisionNo, reason: outcome.reason };
   }
+
+  // A number allocated against a head that has now moved describes an attempt nobody can finish.
+  // Leaving it `allocated` leaves it runnable, and durable state would report owed work that is
+  // already answered.
+  abandonStaleAllocations(
+    deps.db,
+    CHUNK_REVISION_FAMILY,
+    chunkId,
+    allocation.revisionNo,
+    options.now,
+  );
 
   deps.logger.info(
     {
