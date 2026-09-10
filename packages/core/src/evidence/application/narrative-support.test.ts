@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { certifyNarrativeSupport } from './narrative-support.js';
 import { certifyNodeSupport } from './node-support.js';
-import { sealChunk } from '../../infrastructure/sqlite/chunk-manifest.js';
+import { chunkOfSource, sealChunk } from '../../infrastructure/sqlite/chunk-manifest.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import { recordRevisionCitations } from '../../infrastructure/sqlite/narrative-citations.js';
 import {
@@ -10,6 +10,7 @@ import {
   CHUNK_REVISION_FAMILY,
   OVERVIEW_REVISION_FAMILY,
   publishNarrativeRevision,
+  readNarrativeRevision,
 } from '../../infrastructure/sqlite/narrative-revisions.js';
 import { recordSourceRecord } from '../../infrastructure/sqlite/source-identity.js';
 import { establishNodeSupportScopes } from '../test-support/evidence.fixture.js';
@@ -111,6 +112,32 @@ describe('what the manifest says about a narrative', () => {
   it('answers unknown for a bound revision carrying neither members nor citations', () => {
     const nodeId = publishOverview('day:2026-09-10');
     expect(certifyNarrativeSupport(store.db, nodeId).support).toBe('unknown');
+  });
+
+  /**
+   * The other side of the acknowledgment rule. A revision a later one replaced still published:
+   * its reading rests on the evidence it recorded, and a historical read of it is answerable.
+   * Only output nobody settled is uncertain.
+   */
+  it('still holds up a revision a later one superseded', () => {
+    const first = publishChunk(['h1']);
+    const chunkId = chunkOfSource(store.db, 'h1') ?? '';
+    const second = allocateNarrativeRevision(store.db, CHUNK_REVISION_FAMILY, chunkId, NOW);
+    publishNarrativeRevision(store.db, CHUNK_REVISION_FAMILY, {
+      familyKey: chunkId,
+      revisionNo: second.revisionNo,
+      operationId: `op-${chunkId}-2`,
+      evidenceRevisionJson: '{"dependencies":[]}',
+      knownFrom: NOW.toISOString(),
+      observedAckAt: NOW.toISOString(),
+      publishedAt: NOW,
+    });
+
+    expect(readNarrativeRevision(store.db, CHUNK_REVISION_FAMILY, chunkId, 1)?.state).toBe(
+      'closed',
+    );
+    expect(certifyNarrativeSupport(store.db, first).support).toBe('supported');
+    expect(certifyNarrativeSupport(store.db, second.nodeId).support).toBe('supported');
   });
 });
 

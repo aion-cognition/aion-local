@@ -14,12 +14,25 @@ import { countCitationsFrom } from '../../infrastructure/sqlite/narrative-citati
  * text. What does NOT support it is a live Episode, and what does not refute it is a missing one.
  *
  * Three answers, and only one of them is a licence. `supported` means the manifest names members
- * or citations behind it. `unknown` means the manifest binds it and can prove neither, which
- * authorizes nothing. `unbound` means these tables were never asked about this id at all, which
- * is where a legacy whole-session narrative sits until its family is cut over; it is silence, not
- * absence, and a caller that reads it as absence has invented a fact.
+ * or citations behind an ACKNOWLEDGED revision. `unknown` means the manifest binds it and cannot
+ * prove that, which authorizes nothing. `unbound` means these tables were never asked about this
+ * id at all, which is where a legacy whole-session narrative sits until its family is cut over; it
+ * is silence, not absence, and a caller that reads it as absence has invented a fact.
+ *
+ * The acknowledgment is load-bearing and it is a separate question from the membership. A chunk's
+ * members freeze at the seal, so an allocated or prepared revision of it already has a full
+ * membership behind it and has published nothing: reading that membership as support for the
+ * interpretation would certify output no coordinator ever settled. What a pending attempt owes is
+ * recovery by its own receipt, which is a different mechanism from semantic support and stays one.
  */
 export type NarrativeSupport = 'supported' | 'unknown' | 'unbound';
+
+/**
+ * States in which the revision's own output is acknowledged: the standing head, and a head a
+ * later revision has since replaced. A superseded revision published, so its historical reading
+ * still rests on the evidence it recorded.
+ */
+const ACKNOWLEDGED_STATES = new Set(['published', 'closed']);
 
 export type NarrativeSupportReading = {
   readonly support: NarrativeSupport;
@@ -39,6 +52,16 @@ export function certifyNarrativeSupport(db: SqliteHandle, nodeId: string): Narra
     };
   }
   const citations = countCitationsFrom(db, nodeId);
+  if (!ACKNOWLEDGED_STATES.has(binding.state)) {
+    return {
+      support: 'unknown',
+      reason:
+        `${binding.family} revision ${binding.familyKey}/${String(binding.revisionNo)} is ` +
+        `${binding.state}: its output has not been acknowledged`,
+      members: binding.members,
+      citations,
+    };
+  }
   if (binding.members > 0) {
     return {
       support: 'supported',
