@@ -72,6 +72,8 @@ type DuplicateReport = {
   /** Revision records this run actually read, keeper included: the denominator of its closes. */
   readonly examined: number;
   readonly closed: number;
+  /** Traversal edges the repair closed with the revisions it superseded. */
+  readonly closedEdges: number;
   /** Families whose keeper the records could not name, left standing and reported. */
   readonly unresolved: number;
   /** Legacy session families carrying more than one standing narrative. */
@@ -95,14 +97,27 @@ async function closeExtraRevisions(
   ctx: OperationContext,
   publications: NarrativeMaintenanceDeps['publications'],
   limit: number,
-): Promise<{ families: number; examined: number; closed: number; unresolved: number }> {
+): Promise<{
+  families: number;
+  examined: number;
+  closed: number;
+  closedEdges: number;
+  unresolved: number;
+}> {
   const families = await findDuplicateChunkFamilies(ctx.driver, limit);
   const epoch = readCurrentCoverageContract(ctx.db)?.epoch;
   if (epoch === undefined) {
-    return { families: families.length, examined: 0, closed: 0, unresolved: families.length };
+    return {
+      families: families.length,
+      examined: 0,
+      closed: 0,
+      closedEdges: 0,
+      unresolved: families.length,
+    };
   }
   let examined = 0;
   let closed = 0;
+  let closedEdges = 0;
   let unresolved = 0;
   for (const family of families) {
     if (examined >= REVISION_SCAN_BUDGET) {
@@ -128,8 +143,6 @@ async function closeExtraRevisions(
         );
         return undefined;
       });
-    // The records this run READ, which is the reading the repair took under the guard rather than
-    // the one the scan took outside it: the second is exactly what could have changed.
     examined += family.versions.length;
     if (outcome?.status !== 'acknowledged') {
       if (outcome !== undefined) {
@@ -141,9 +154,15 @@ async function closeExtraRevisions(
       unresolved += 1;
       continue;
     }
-    closed += (outcome.result as { closed?: number }).closed ?? 0;
+    // Both effects, from the producer that performed them. The repair closes a revision AND the
+    // traversal edges into it, in one transaction; the later stale-edge sweep cannot count those
+    // edges, because by the time it runs they are already closed. Reporting only the revision
+    // credited the run with a third of what it did.
+    const result = outcome.result as { closed?: number; closedEdges?: number };
+    closed += result.closed ?? 0;
+    closedEdges += result.closedEdges ?? 0;
   }
-  return { families: families.length, examined, closed, unresolved };
+  return { families: families.length, examined, closed, closedEdges, unresolved };
 }
 
 /**
@@ -206,7 +225,7 @@ export function narrativeCleanupOperation(): IntrospectionOperation {
       const batch = ctx.config.maintenance.narrativeCleanupBatch;
       const chunks =
         ctx.narratives === undefined
-          ? { families: 0, examined: 0, closed: 0, unresolved: 0 }
+          ? { families: 0, examined: 0, closed: 0, closedEdges: 0, unresolved: 0 }
           : await closeExtraRevisions(ctx, ctx.narratives.publications, batch);
       // The legacy family is counted and left alone. Its keeper cannot be read from a manifest
       // that never bound it, and the signed rule is explicit that a winner is not picked by
@@ -231,11 +250,12 @@ export function narrativeCleanupOperation(): IntrospectionOperation {
       // The stale-edge BACKLOG used to stand in for the edge term too, which made a run that
       // closed five hundred of forty thousand report forty thousand examined and a vanishing
       // effect ratio. The backlog is a gauge in the detail; the subtallies are what adds up.
-      // One declared unit: a record this run READ and could have changed. The duplicate term
-      // used to be FAMILIES against closes counted in REVISIONS, so a family of three closed two
-      // and reported one examined; calling both "records" did not make them comparable.
+      // One declared unit: a record this run READ and could have changed. The duplicate term is
+      // the revision records the NOMINATION returned — which is the population the run reads, and
+      // the population R1's bound is enforced over — while the affected term is what the repair's
+      // own result says it changed.
       const processed = duplicates.examined + nominated.length + edges.examined;
-      const affected = duplicates.closed + edges.closed;
+      const affected = duplicates.closed + duplicates.closedEdges + edges.closed;
       return {
         status: affected === 0 ? 'noop' : 'applied',
         itemsProcessed: processed,
@@ -245,7 +265,8 @@ export function narrativeCleanupOperation(): IntrospectionOperation {
           `${String(duplicates.families)} chunk family/families, ` +
           `${String(nominated.length)} nominated narrative(s), ` +
           `${String(edges.examined)} stale edge(s); ` +
-          `${String(duplicates.closed)} extra revision(s) superseded onto the acknowledged head, ` +
+          `${String(duplicates.closed)} extra revision(s) superseded onto the acknowledged head ` +
+          `with ${String(duplicates.closedEdges)} traversal edge(s), ` +
           `${String(duplicates.unresolved)} family/families with no acknowledged head, ` +
           `${String(duplicates.legacy)} legacy session family/families reported, ` +
           `${String(support.supported)} narrative(s) the records hold up, ` +
