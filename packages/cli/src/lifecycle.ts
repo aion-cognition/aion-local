@@ -1,5 +1,6 @@
 import {
   ApiUsageRecorder,
+  EvidenceResolver,
   INSTALLED_PUBLICATION_HANDLERS,
   LaneAssigner,
   ProviderRouter,
@@ -69,5 +70,49 @@ export async function lifecycleIntakeDeps(target: LifecycleTarget): Promise<Refl
     // The gate exists to keep a hook from flooding a local model with transcript. A command
     // recording one observation about itself is neither.
     acceptHookCapture: true,
+  };
+}
+
+/**
+ * What a command needs to reach the chunk lifecycle: the substrate it opened, and nothing about
+ * a member or a workspace, because a maintenance run records no experience of its own.
+ */
+export type NarrativeTarget = Pick<LifecycleTarget, 'connection' | 'db' | 'logger'>;
+
+/**
+ * The resolver and coordinator a forced narrative run works through.
+ *
+ * A forced run is the second driver path, and it has to be the same path. `maintain run
+ * narrative_seal` composed neither of these, so the operation found no publisher and declined
+ * every time it was asked — the operation was listed, its `run` returned, and nothing about the
+ * lifecycle was ever exercised from a command.
+ *
+ * One coordinator, initialized here for the reason the lifecycle intake initializes one: a
+ * narrative reaches either store only through a publication, and a command that published any
+ * other way would be the writer outside the protocol. The resolver is bound to the same store, so
+ * what the run reads and what it publishes under are one substrate and one fence. The whole
+ * installed handler set, so a command meeting a pending operation of a kind it did not install
+ * can still recover it.
+ */
+export async function lifecycleNarrativeDeps(target: NarrativeTarget): Promise<{
+  readonly resolver: EvidenceResolver;
+  readonly publications: PublicationCoordinator;
+}> {
+  const { driver } = target.connection;
+  const publications = new PublicationCoordinator({
+    driver,
+    db: target.db,
+    logger: target.logger,
+    handlers: [...INSTALLED_PUBLICATION_HANDLERS],
+  });
+  await publications.initialize();
+  return {
+    publications,
+    resolver: new EvidenceResolver({
+      driver,
+      db: target.db,
+      logger: target.logger,
+      publications,
+    }),
   };
 }

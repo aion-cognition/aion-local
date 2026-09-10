@@ -6,6 +6,14 @@ import type { Substrate, SubstrateCommand } from './substrate.js';
 const seam = vi.hoisted(() => ({
   /** The signal a forced run's operation was actually handed. */
   capturedSignal: undefined as AbortSignal | undefined,
+  /** The chunk-lifecycle deps a forced run composed and handed on. */
+  capturedNarratives: undefined,
+  /** The composition itself, so the test opens no store and initializes no coordinator. */
+  composed: { resolver: 'resolver', publications: 'coordinator' },
+}));
+
+vi.mock('./lifecycle.js', () => ({
+  lifecycleNarrativeDeps: () => Promise.resolve(seam.composed),
 }));
 
 vi.mock('@aion/core', async (importOriginal) => {
@@ -15,8 +23,15 @@ vi.mock('@aion/core', async (importOriginal) => {
     name: 'test_forced_op',
     bucket: 'day',
     relevance: () => 0,
-    run: async ({ signal }: { readonly signal: AbortSignal }) => {
+    run: async ({
+      signal,
+      narratives,
+    }: {
+      readonly signal: AbortSignal;
+      readonly narratives?: unknown;
+    }) => {
       seam.capturedSignal = signal;
+      seam.capturedNarratives = narratives;
       return { status: 'ok', itemsProcessed: 0, itemsAffected: 0 };
     },
   };
@@ -129,5 +144,20 @@ describe('aion maintain run', () => {
     process.emit('SIGINT');
 
     expect(seam.capturedSignal?.aborted).toBe(true);
+  });
+
+  /**
+   * The second driver path. A forced run used to hand the operation no resolver and no
+   * coordinator, so `maintain run narrative_seal` found no publisher and declined every time it
+   * was asked: the operation was listed, its run returned, and the lifecycle was never reached
+   * from a command. What it is handed now is the store-bound composition the lifecycle machinery
+   * builds, the same one an acceptance publishes through.
+   */
+  it('hands a forced run the chunk lifecycle it is supposed to drive', async () => {
+    const out = collector();
+
+    expect(await runMaintain(['run', 'test_forced_op'], out.write)).toBe(0);
+
+    expect(seam.capturedNarratives).toBe(seam.composed);
   });
 });

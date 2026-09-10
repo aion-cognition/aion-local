@@ -10,6 +10,7 @@ import {
 } from '@aion/core';
 
 import { CliUsageError, parseArgs, type ArgSpec } from './args.js';
+import { lifecycleNarrativeDeps } from './lifecycle.js';
 import { stdoutWriter, type Writer } from './output.js';
 import { abortOnInterrupt } from './replay.js';
 import { withSubstrate, type Substrate } from './substrate.js';
@@ -87,8 +88,13 @@ async function runOne(substrate: Substrate, name: string): Promise<number> {
   const { config, write } = substrate;
   const db = substrate.db();
   const logger = substrate.logger();
-  const { driver } = substrate.connection();
+  const connection = substrate.connection();
+  const { driver } = connection;
   const now = new Date();
+  // The second driver path has to be the same path. Composed for every forced run rather than
+  // for the operations that name it, because which of them publishes is the catalog's business
+  // and a command that guessed would be a second answer to it.
+  const narratives = await lifecycleNarrativeDeps({ connection, db, logger });
   // The same reading a tick would have taken. An operation is contracted never to observe for
   // itself, so a forced run has to arrive holding one.
   const health = await observeHealth({ driver, db, config, logger });
@@ -110,6 +116,7 @@ async function runOne(substrate: Substrate, name: string): Promise<number> {
       config,
       recordApiCall: new ApiUsageRecorder(db, logger).recordApiCall,
     }).forRole('reflect'),
+    narratives,
     health,
     now,
     signal: controller.signal,
