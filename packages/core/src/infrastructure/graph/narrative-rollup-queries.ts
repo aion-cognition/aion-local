@@ -5,7 +5,7 @@ import { runRead } from './connection.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import { NARRATIVE_PROPERTIES } from './narrative-queries.js';
 import { SUPERSEDES_TYPE } from './relationships.js';
-import { toGraphInteger, type Row } from './values.js';
+import { toGraphDateTime, toGraphInteger, type Row } from './values.js';
 
 /**
  * The reads the day and week rollups need: the standing narratives of the scope below, and the
@@ -39,6 +39,12 @@ const FIND_ROLLUP_MEMBERS = [
   'MATCH (n:Narrative)',
   `WHERE n.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
   `  AND n.${NARRATIVE_PROPERTIES.scope} = $scope`,
+  // Where the last page stopped, in the order this query returns. A fixed front page reads the
+  // same members every run, so a window behind a page of members nothing can compress is never
+  // reached however many times the pass runs.
+  `  AND ($afterOccurredAt IS NULL`,
+  `       OR n.${BITEMPORAL_PROPERTIES.occurredAt} > $afterOccurredAt`,
+  `       OR (n.${BITEMPORAL_PROPERTIES.occurredAt} = $afterOccurredAt AND n.id > $afterId))`,
   `  AND (n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
   `       OR EXISTS { (r:Narrative)-[:${SUPERSEDES_TYPE}]->(n)`,
   `                   WHERE r.${NARRATIVE_PROPERTIES.scope} = $rollupScope })`,
@@ -51,12 +57,19 @@ const FIND_ROLLUP_MEMBERS = [
   'LIMIT $limit',
 ].join('\n');
 
+/** Where a member page resumes, in the order the query returns. */
+export type RollupMemberCursor = {
+  readonly occurredAt: Date;
+  readonly id: string;
+};
+
 export type RollupMemberInput = {
   /** The scope being rolled up, which is the one below the rollup's own. */
   readonly scope: string;
   /** The rollup's own scope, which is what tells an absorbed member from a re-versioned one. */
   readonly rollupScope: string;
   readonly limit: number;
+  readonly after?: RollupMemberCursor;
 };
 
 export async function findRollupMembers(
@@ -73,6 +86,8 @@ export async function findRollupMembers(
       scope: input.scope,
       rollupScope: input.rollupScope,
       limit: toGraphInteger(input.limit),
+      afterOccurredAt: input.after === undefined ? null : toGraphDateTime(input.after.occurredAt),
+      afterId: input.after?.id ?? null,
     },
     (row: Row) => {
       const summary = asOptionalText(row.summary);

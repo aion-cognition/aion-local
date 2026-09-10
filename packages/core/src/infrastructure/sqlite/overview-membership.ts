@@ -25,6 +25,17 @@ export type OverviewMember = {
   readonly spanEnd: string;
 };
 
+/**
+ * Where a member page resumes, in the order these reads return.
+ *
+ * A fixed front page reads the same members every run, so a window behind a page of members
+ * nothing can compress is never reached however often the pass runs.
+ */
+export type MemberCursor = {
+  readonly spanEnd: string;
+  readonly familyKey: string;
+};
+
 /** `'(scope kind):(window key)'`, the family key the signed DDL names for an overview. */
 export function overviewFamilyKey(scope: string, windowKey: string): string {
   return `${scope}:${windowKey}`;
@@ -49,10 +60,15 @@ export function overviewWindowOf(
  * in one window rather than being split across two. A chunk whose members carry no occurrence at
  * all cannot be placed and is left out — named by `unplaceableChunks` rather than dropped quietly.
  */
-export function publishedChunkSpans(db: SqliteHandle, limit: number): readonly OverviewMember[] {
+export function publishedChunkSpans(
+  db: SqliteHandle,
+  limit: number,
+  after?: MemberCursor,
+): readonly OverviewMember[] {
   if (limit <= 0) {
     return [];
   }
+  const resume = after ?? { spanEnd: '', familyKey: '' };
   const rows = db
     .prepare(
       `SELECT r.chunk_id AS family_key, r.node_id, r.revision_no,
@@ -61,10 +77,11 @@ export function publishedChunkSpans(db: SqliteHandle, limit: number): readonly O
                 WHERE m.chunk_id = r.chunk_id) AS span_end
          FROM chunk_revisions r
         WHERE r.state = 'published'
+          AND (? = '' OR span_end > ? OR (span_end = ? AND r.chunk_id > ?))
         ORDER BY span_end, r.chunk_id
         LIMIT ?`,
     )
-    .all(limit) as {
+    .all(resume.spanEnd, resume.spanEnd, resume.spanEnd, resume.familyKey, limit) as {
     family_key: string;
     node_id: string;
     revision_no: number;
@@ -104,19 +121,22 @@ export function publishedOverviewSpans(
   db: SqliteHandle,
   scope: string,
   limit: number,
+  after?: MemberCursor,
 ): readonly OverviewMember[] {
   if (limit <= 0) {
     return [];
   }
+  const resume = after ?? { spanEnd: '', familyKey: '' };
   const rows = db
     .prepare(
       `SELECT r.family_key, r.node_id, r.revision_no, r.published_at
          FROM overview_revisions r
         WHERE r.state = 'published' AND r.family_key LIKE ? || ':%'
+          AND (? = '' OR r.family_key > ?)
         ORDER BY r.family_key
         LIMIT ?`,
     )
-    .all(scope, limit) as {
+    .all(scope, resume.familyKey, resume.familyKey, limit) as {
     family_key: string;
     node_id: string;
     revision_no: number;

@@ -39,7 +39,6 @@ import { unsupersedeNode } from '../../../infrastructure/graph/unsupersede.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import type { Provider } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
-import { getLedgerEntry } from '../../../infrastructure/sqlite/ops-ledger.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
 
@@ -277,11 +276,10 @@ describe('narrative rollups against a live substrate', () => {
     expect(outcome.detail).toContain('blocked for capacity');
     expect(generated).toHaveLength(before);
 
-    // The reason and the measurement a later allowance decision is made against.
-    const entry = getLedgerEntry(db, 'narrative-rollup:blocked:day:2026-04-02');
-    expect((entry?.summary as { reason?: string } | undefined)?.reason).toContain(
-      'blocked_window_capacity',
-    );
+    // The refusal is reported and nothing is recorded for it: a legacy window has no attempt row
+    // to carry a reason, and the interim ledger row it used to write authorized nothing. The
+    // manifest overview family records its refusals on its own attempts instead.
+    expect(outcome.detail).toContain('blocked for capacity');
 
     // The constituent narratives are untouched and still discoverable.
     for (const seed of [SESSIONS[0]!, SESSIONS[1]!]) {

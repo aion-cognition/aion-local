@@ -5,9 +5,12 @@ import type { Config } from '../../infrastructure/config/schema.js';
 import {
   findRollupMembers,
   findWindowRollups,
+  type RollupMemberCursor,
   type WindowNarrative,
 } from '../../infrastructure/graph/narrative-rollup-queries.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
+import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { getLedgerEntry, markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import {
   buildRollupMessages,
   renderConsolidationSource,
@@ -270,6 +273,45 @@ async function rollUpWindow(
   return { outcome: 'created', absorbed };
 }
 
+/** Where the last pass of one scope stopped reading members. */
+function memberCursorKey(scope: RollupScope): string {
+  return `narrative-rollup:member-cursor:${scope}`;
+}
+
+function readMemberCursor(
+  db: SqliteHandle | undefined,
+  scope: RollupScope,
+): RollupMemberCursor | undefined {
+  if (db === undefined) {
+    return undefined;
+  }
+  const summary = getLedgerEntry(db, memberCursorKey(scope))?.summary;
+  if (typeof summary !== 'object' || summary === null) {
+    return undefined;
+  }
+  const { occurredAt, id } = summary as { occurredAt?: unknown; id?: unknown };
+  if (typeof occurredAt !== 'string' || typeof id !== 'string' || id === '') {
+    return undefined;
+  }
+  const at = new Date(occurredAt);
+  return Number.isNaN(at.getTime()) ? undefined : { occurredAt: at, id };
+}
+
+function writeMemberCursor(
+  db: SqliteHandle | undefined,
+  scope: RollupScope,
+  cursor: RollupMemberCursor | undefined,
+): void {
+  if (db === undefined) {
+    return;
+  }
+  markLedgerApplied(
+    db,
+    memberCursorKey(scope),
+    cursor === undefined ? {} : { occurredAt: cursor.occurredAt.toISOString(), id: cursor.id },
+  );
+}
+
 /**
  * One scope's rollup pass. Finding nothing is the ordinary answer on a young substrate: a day
  * rollup needs a day that has ended with session narratives inside it, and a week rollup needs
@@ -282,11 +324,22 @@ export async function rollUpNarratives(
 ): Promise<RollupReport> {
   const settings = settingsOf(options, deps.provider);
   const memberScope = rollupMemberScope(settings.scope);
-  const members = await findRollupMembers(deps.driver, {
+  const cursor = readMemberCursor(deps.db, settings.scope);
+  let members = await findRollupMembers(deps.driver, {
     scope: memberScope,
     rollupScope: settings.scope,
     limit: settings.memberLimit,
+    ...(cursor === undefined ? {} : { after: cursor }),
   });
+  if (members.length === 0 && cursor !== undefined) {
+    // The end of the enumeration, reached inside this run rather than costing one. Starting from
+    // the front again is what makes the position a position and not a discharge.
+    members = await findRollupMembers(deps.driver, {
+      scope: memberScope,
+      rollupScope: settings.scope,
+      limit: settings.memberLimit,
+    });
+  }
 
   const closed = groupRollupWindows(members, settings.scope).filter((window) =>
     isWindowClosed(window, settings.now),
@@ -297,6 +350,23 @@ export async function rollUpNarratives(
   // BLOCKED with its reason rather than quietly dropped from the list.
   const truncated =
     members.length < settings.memberLimit ? undefined : closed[closed.length - 1]?.key;
+  // Where the next page starts: past the last window this page could enumerate WHOLE. Advancing
+  // by the last member read instead would split a window across two pages and let the second
+  // half look complete; advancing by the last whole window means a window bigger than the page
+  // is refused for capacity and stepped over rather than read forever.
+  const settledWindows = closed.filter((window) => window.key !== truncated);
+  const lastWhole = settledWindows[settledWindows.length - 1];
+  const stopAt =
+    lastWhole === undefined
+      ? members[members.length - 1]
+      : lastWhole.members[lastWhole.members.length - 1];
+  writeMemberCursor(
+    deps.db,
+    settings.scope,
+    members.length < settings.memberLimit || stopAt?.occurredAt === undefined
+      ? undefined
+      : { occurredAt: stopAt.occurredAt, id: stopAt.id },
+  );
 
   let created = 0;
   let skipped = 0;

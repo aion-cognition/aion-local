@@ -24,11 +24,13 @@ import {
   readNarrativeRevision,
   readPublishedRevision,
 } from '../../infrastructure/sqlite/narrative-revisions.js';
+import { getLedgerEntry, markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import {
   overviewFamilyKey,
   publishedChunkSpans,
   publishedOverviewSpans,
   unplaceableChunks,
+  type MemberCursor,
   type OverviewMember,
 } from '../../infrastructure/sqlite/overview-membership.js';
 import { renderConsolidationSource, type ConsolidationMember } from '../domain/consolidation.js';
@@ -135,15 +137,32 @@ type Window = {
 };
 
 /** Every member of the scope below, grouped into the closed windows of this scope. */
+function readMembers(
+  db: SqliteHandle,
+  scope: RollupScope,
+  after?: MemberCursor,
+): readonly OverviewMember[] {
+  return scope === 'day'
+    ? publishedChunkSpans(db, OVERVIEW_MEMBER_SCAN_LIMIT, after)
+    : publishedOverviewSpans(db, 'day', OVERVIEW_MEMBER_SCAN_LIMIT, after);
+}
+
 function closedWindows(
   db: SqliteHandle,
   scope: RollupScope,
   now: Date,
-): { readonly windows: readonly Window[]; readonly unplaceable: number } {
-  const members =
-    scope === 'day'
-      ? publishedChunkSpans(db, OVERVIEW_MEMBER_SCAN_LIMIT)
-      : publishedOverviewSpans(db, 'day', OVERVIEW_MEMBER_SCAN_LIMIT);
+): {
+  readonly windows: readonly Window[];
+  readonly unplaceable: number;
+  readonly next: MemberCursor | undefined;
+} {
+  const cursor = readMemberCursor(db, scope);
+  let members = readMembers(db, scope, cursor);
+  if (members.length === 0 && cursor !== undefined) {
+    // The end of the enumeration, reached inside this run. Starting from the front again is what
+    // makes the position a position rather than a discharge.
+    members = readMembers(db, scope);
+  }
   const grouped = new Map<
     string,
     { bounds: ReturnType<typeof rollupWindow>; rows: OverviewMember[] }
@@ -170,7 +189,38 @@ function closedWindows(
       members: [...entry.rows].sort((left, right) => left.spanEnd.localeCompare(right.spanEnd)),
     }))
     .sort((left, right) => left.key.localeCompare(right.key));
-  return { windows, unplaceable: scope === 'day' ? unplaceableChunks(db) : 0 };
+  // Past the last member this page read, so the next page reaches the windows behind it. A page
+  // that came back short is the end of the walk and clears the position.
+  const last = members[members.length - 1];
+  const next =
+    members.length < OVERVIEW_MEMBER_SCAN_LIMIT || last === undefined
+      ? undefined
+      : { spanEnd: last.spanEnd, familyKey: last.familyKey };
+  return { windows, unplaceable: scope === 'day' ? unplaceableChunks(db) : 0, next };
+}
+
+/** Where the last pass of one scope stopped reading members. */
+function memberCursorKey(scope: RollupScope): string {
+  return `narrative-overview:member-cursor:${scope}`;
+}
+
+function readMemberCursor(db: SqliteHandle, scope: RollupScope): MemberCursor | undefined {
+  const summary = getLedgerEntry(db, memberCursorKey(scope))?.summary;
+  if (typeof summary !== 'object' || summary === null) {
+    return undefined;
+  }
+  const { spanEnd, familyKey } = summary as { spanEnd?: unknown; familyKey?: unknown };
+  return typeof spanEnd === 'string' && typeof familyKey === 'string' && familyKey !== ''
+    ? { spanEnd, familyKey }
+    : undefined;
+}
+
+function writeMemberCursor(
+  db: SqliteHandle,
+  scope: RollupScope,
+  cursor: MemberCursor | undefined,
+): void {
+  markLedgerApplied(db, memberCursorKey(scope), cursor === undefined ? {} : { ...cursor });
 }
 
 /** Whether the standing head already cites exactly this membership. */
@@ -396,7 +446,8 @@ export async function rollUpOverviews(
   if (epoch === undefined) {
     return empty;
   }
-  const { windows, unplaceable } = closedWindows(deps.db, options.scope, options.now);
+  const { windows, unplaceable, next } = closedWindows(deps.db, options.scope, options.now);
+  writeMemberCursor(deps.db, options.scope, next);
   let published = 0;
   let settledWindows = 0;
   let blocked = 0;
