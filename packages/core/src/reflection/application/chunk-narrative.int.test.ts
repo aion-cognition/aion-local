@@ -45,6 +45,7 @@ import {
   readChunk,
   revisionsDependingOn,
 } from '../../infrastructure/sqlite/chunk-manifest.js';
+import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import {
   acknowledgeStatedLinkVersions,
@@ -459,6 +460,7 @@ it('defers a publication whose head moved under it, and publishes nothing', asyn
       members: [{ sourceId: only, residency: 'resident', projectionGeneration: 0 }],
       coverageGaps: [],
       dependencies: [],
+      coverageEpoch: readCurrentCoverageContract(store.db)?.epoch ?? '',
       expectedHead: null,
     },
   });
@@ -635,4 +637,42 @@ it('serves two chunks of one session at once, and supersedes neither across them
       secondPublished.nodeId,
     ),
   ).toBe(0);
+});
+
+/**
+ * The distinct rule the seal-time eligibility fix must not weaken. A member whose evidence was
+ * proved when its membership froze, and became unreadable afterwards, keeps its membership: that
+ * chunk stays sealed and refuses to publish, and the chunk beside it publishes normally.
+ */
+it('blocks only its own chunk when a frozen member stops being readable', async () => {
+  await accept('session-blocked-neighbour', 'phi');
+  const healthyChunk = await sealAndPublish('session-blocked-neighbour');
+  const broken = await accept('session-blocked-neighbour', 'chi');
+  const brokenChunk = await sealAndPublish('session-blocked-neighbour');
+  expect(brokenChunk).not.toBe(healthyChunk);
+
+  // Reversible: the recorded digest stops matching the archive the member is verified against.
+  const digest = store.db
+    .prepare('SELECT verified_content_digest AS d FROM source_records WHERE source_id = ?')
+    .get(broken) as { d: string };
+  store.db
+    .prepare('UPDATE source_records SET verified_content_digest = ? WHERE source_id = ?')
+    .run('digest-that-no-archive-row-hashes-to', broken);
+
+  const blocked = await publishChunkNarrative(chunks, brokenChunk, { now: NOW });
+  expect(blocked.status).toBe('blocked');
+  if (blocked.status === 'blocked') {
+    expect(blocked.reason).toBe('member_evidence_missing');
+  }
+  expect(listChunkMembers(store.db, brokenChunk)).toEqual([broken]);
+  expect(readPublishedHead(store.db, CHUNK_REVISION_FAMILY, brokenChunk)).toBeUndefined();
+
+  // Its neighbour is untouched: it publishes on its own evidence.
+  const neighbour = await publishChunkNarrative(chunks, healthyChunk, { now: NOW });
+  expect(neighbour.status).toBe('published');
+  expect(readPublishedHead(store.db, CHUNK_REVISION_FAMILY, healthyChunk)).toBe(1);
+
+  store.db
+    .prepare('UPDATE source_records SET verified_content_digest = ? WHERE source_id = ?')
+    .run(digest.d, broken);
 });

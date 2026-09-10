@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   chunkIdentity,
   chunkOfSource,
+  heldSessionSources,
   listChunkMembers,
   listSessionChunks,
   markChunkPublished,
@@ -167,21 +168,89 @@ describe('the remainder', () => {
   });
 
   /**
+   * Initial verification decides membership. A source the migration pinned has no proved identity,
+   * so it waits outside every chunk rather than freezing into one — and it is named, because
+   * excluding it silently is the loss this pair of reads exists to prevent.
+   */
+  it('holds an unverified source out of membership and names what holds it', () => {
+    accept('s1', 1);
+    recordSourceRecord(store.db, {
+      sourceId: 'legacy-pin',
+      sessionId: SESSION,
+      verificationStatus: 'pinned',
+      verificationReason: 'archive_mapping_unverified',
+      occurredAt: NOW.toISOString(),
+      createdAt: NOW,
+      captureOrderValue: captureOrderValue(2),
+      captureOrderBasis: 'archive_acceptance',
+    });
+    expect(readRemainderMembers(store.db, SESSION, 10).map((row) => row.sourceId)).toEqual(['s1']);
+    expect(heldSessionSources(store.db, SESSION).map((row) => row.sourceId)).toEqual([
+      'legacy-pin',
+    ]);
+    // A pin is not an eligible source with no position, so it refuses nothing.
+    expect(unorderedSessionSources(store.db, SESSION)).toEqual([]);
+  });
+
+  /**
+   * A legacy ordering value is not a live cursor position. The NULL basis is the case a negated
+   * predicate would drop out of both populations, so both reads are asserted on it.
+   */
+  it('holds a source whose capture basis is not a live one, including a null basis', () => {
+    accept('s1', 1);
+    for (const [sourceId, basis] of [
+      ['pinned-basis', 'pinned'],
+      ['no-basis', undefined],
+    ] as const) {
+      recordSourceRecord(store.db, {
+        sourceId,
+        sessionId: SESSION,
+        verificationStatus: 'verified',
+        occurredAt: NOW.toISOString(),
+        createdAt: NOW,
+        archive: { ...ARCHIVE_PROOF, canonicalArchiveId: `archive-${sourceId}` },
+        captureOrderValue: captureOrderValue(3),
+        ...(basis === undefined ? {} : { captureOrderBasis: basis }),
+      });
+    }
+    expect(readRemainderMembers(store.db, SESSION, 10).map((row) => row.sourceId)).toEqual(['s1']);
+    expect(heldSessionSources(store.db, SESSION).map((row) => row.sourceId)).toEqual([
+      'no-basis',
+      'pinned-basis',
+    ]);
+  });
+
+  /**
    * The remainder orders on the capture value and a NULL satisfies no bound, so a source without
-   * one would drop out of every seal without a word. It is named instead.
+   * one would drop out of every seal without a word. Which read names it depends on whether it was
+   * ever going to be a member: an eligible source claiming a live basis and recording no position
+   * refuses, and one with no live basis at all is held. Neither is silently lost, and the three
+   * populations partition the unsealed set.
    */
   it('names an unsealed source that carries no capture position', () => {
     accept('s1', 1);
     recordSourceRecord(store.db, {
-      sourceId: 's-null',
+      sourceId: 's-eligible-unordered',
       sessionId: SESSION,
       verificationStatus: 'verified',
       occurredAt: NOW.toISOString(),
       createdAt: NOW,
-      archive: { ...ARCHIVE_PROOF, canonicalArchiveId: 'archive-s-null' },
+      archive: { ...ARCHIVE_PROOF, canonicalArchiveId: 'archive-eligible' },
+      captureOrderBasis: 'archive_acceptance',
+    });
+    recordSourceRecord(store.db, {
+      sourceId: 's-no-basis',
+      sessionId: SESSION,
+      verificationStatus: 'verified',
+      occurredAt: NOW.toISOString(),
+      createdAt: NOW,
+      archive: { ...ARCHIVE_PROOF, canonicalArchiveId: 'archive-no-basis' },
     });
     expect(readRemainderMembers(store.db, SESSION, 10).map((row) => row.sourceId)).toEqual(['s1']);
-    expect(unorderedSessionSources(store.db, SESSION)).toEqual(['s-null']);
+    expect(unorderedSessionSources(store.db, SESSION)).toEqual(['s-eligible-unordered']);
+    expect(heldSessionSources(store.db, SESSION).map((row) => row.sourceId)).toEqual([
+      's-no-basis',
+    ]);
   });
 });
 

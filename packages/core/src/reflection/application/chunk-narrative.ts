@@ -19,6 +19,7 @@ import type {
 import {
   listChunkMembers,
   readChunk,
+  heldSessionSources,
   readRemainderMembers,
   sealChunk,
   unorderedSessionSources,
@@ -74,10 +75,18 @@ export type ChunkSealOptions = {
   readonly policy?: ChunkBoundaryPolicy;
 };
 
-export type ChunkSealReport =
+export type ChunkSealReport = {
+  /**
+   * Unsealed sources this session holds outside live membership: an unproved identity, or a
+   * position the migration pinned. They never seal here and they never stop the tail beside them;
+   * the count travels so a caller can tell an empty session from one nobody can take.
+   */
+  readonly held: number;
+} & (
   | { readonly status: 'sealed'; readonly chunkId: string; readonly members: readonly string[] }
   | { readonly status: 'waiting'; readonly reason: string }
-  | { readonly status: 'refused'; readonly reason: string };
+  | { readonly status: 'refused'; readonly reason: string }
+);
 
 /** Which class this member's own allowance puts it in, once the batch has been read. */
 async function admissionOf(
@@ -117,22 +126,25 @@ export async function sealSessionChunk(
   options: ChunkSealOptions,
 ): Promise<ChunkSealReport> {
   const policy = options.policy ?? CHUNK_BOUNDARY_POLICY;
+  const held = heldSessionSources(deps.db, sessionId).length;
   const unordered = unorderedSessionSources(deps.db, sessionId);
   if (unordered.length > 0) {
-    // A source with no capture position cannot be ordered into a chunk, and sealing around it
-    // would leave it permanently unsealed and unnarrated without saying so.
+    // An ELIGIBLE source with no capture position cannot be ordered into a chunk, and sealing
+    // around it would leave it permanently unsealed and unnarrated without saying so. A held
+    // source is a different population and refuses nothing: it is waiting for its own migration.
     return {
+      held,
       status: 'refused',
-      reason: `${String(unordered.length)} unsealed sources carry no capture position`,
+      reason: `${String(unordered.length)} eligible sources carry no capture position`,
     };
   }
   const remainder = readRemainderMembers(deps.db, sessionId, policy.maxMembers + 1);
   if (remainder.length === 0) {
-    return { status: 'waiting', reason: 'the session has no unsealed members' };
+    return { held, status: 'waiting', reason: 'the session has no unsealed members' };
   }
   const coverage = checkPresentCoverage(deps.db, options.now);
   if (coverage.status !== 'checked') {
-    return { status: 'refused', reason: `coverage ${coverage.refusal.reason}` };
+    return { held, status: 'refused', reason: `coverage ${coverage.refusal.reason}` };
   }
   const resolved = await resolveChunkMembers(
     deps.resolver,
@@ -144,7 +156,7 @@ export async function sealSessionChunk(
   for (const [index, row] of remainder.entries()) {
     const member = resolved.readings[index];
     if (member === undefined) {
-      return { status: 'refused', reason: `${row.sourceId} has no evidence result` };
+      return { held, status: 'refused', reason: `${row.sourceId} has no evidence result` };
     }
     const { text, ...admission } = await admissionOf(deps, member, coverage.context, policy);
     candidates.push({
@@ -163,15 +175,21 @@ export async function sealSessionChunk(
     ...(options.policy === undefined ? {} : { policy: options.policy }),
   });
   if (decision.action === 'wait') {
-    return { status: 'waiting', reason: decision.reason };
+    return { held, status: 'waiting', reason: decision.reason };
   }
   const members = decision.members.map((member) => member.sourceId);
   const sealed = sealChunk(deps.db, { sessionId, sourceIds: members, sealedAt: options.now });
   deps.logger.info(
-    { sessionId, chunkId: sealed.chunkId, members: members.length, trigger: decision.trigger },
+    {
+      sessionId,
+      chunkId: sealed.chunkId,
+      members: members.length,
+      held,
+      trigger: decision.trigger,
+    },
     'chunk sealed',
   );
-  return { status: 'sealed', chunkId: sealed.chunkId, members };
+  return { held, status: 'sealed', chunkId: sealed.chunkId, members };
 }
 
 export type ChunkPublishOptions = {
@@ -373,6 +391,9 @@ export async function publishChunkNarrative(
       members: residency,
       coverageGaps: synthesis.gaps,
       dependencies,
+      // The epoch the evidence was read under, carried rather than re-read: an activation during
+      // the model call has to refuse this output, not relabel it.
+      coverageEpoch: coverage.context.coverageEpoch,
       expectedHead: head?.revisionNo ?? null,
     },
   });

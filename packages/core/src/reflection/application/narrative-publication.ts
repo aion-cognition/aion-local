@@ -125,6 +125,15 @@ const Payload = z.strictObject({
   members: z.array(Member).min(1),
   coverageGaps: z.array(Gap),
   dependencies: z.array(Dependency),
+  /**
+   * The coverage epoch the evidence was read under, carried from the start of assembly.
+   *
+   * Reading the registry again here would bind whatever epoch is in force when the output arrives,
+   * which is the one thing the fence must not do: an activation during the model call changes what
+   * the substrate says it covers, and relabelling an already-written answer with the newer epoch
+   * makes the coordinator check a reading nobody took.
+   */
+  coverageEpoch: z.string().min(1),
   /** The head the caller read before it started. Null when the chunk had never published. */
   expectedHead: z.number().int().positive().nullable(),
 });
@@ -201,8 +210,7 @@ export const narrativePublication = new PublicationOperation({
   data: Data,
   result: Result,
   prepare(context, payload) {
-    const coverage = readCurrentCoverageContract(context.db);
-    if (coverage === undefined) {
+    if (readCurrentCoverageContract(context.db) === undefined) {
       throw new Error('a narrative revision cannot publish before the coverage registry exists');
     }
     // Resolved here, under the guard, rather than carried from the caller's read: the head this
@@ -216,7 +224,8 @@ export const narrativePublication = new PublicationOperation({
     return Promise.resolve({
       data,
       expected: {
-        coverageEpoch: coverage.epoch,
+        // The caller's own epoch, never a fresh read of the registry.
+        coverageEpoch: payload.coverageEpoch,
         evidence: buildEvidenceRevision(payload.dependencies),
         sources: [],
         heads: [{ chunkId: payload.chunkId, publishedRevisionNo: payload.expectedHead }],

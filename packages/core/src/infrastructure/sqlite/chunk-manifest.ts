@@ -166,13 +166,51 @@ export type RemainderMember = {
   readonly createdAt: string;
 };
 
+/** A source seals into a chunk only on a proved identity, so the state is named rather than typed. */
+const VERIFIED = 'verified';
+
+/**
+ * The ordering bases a LIVE cursor is written under.
+ *
+ * A `pinned` basis is the migration's placeholder for a source whose position nobody could
+ * establish, and reading it as a live cursor value would order the legacy population into the
+ * chunk a live tail is sealing. The two populations stay apart here rather than in the caller.
+ */
+const LIVE_CAPTURE_BASES = "('archive_acceptance', 'graph_tx_from')";
+
+/**
+ * Eligibility for live membership: the identity is proved and the position is a live one.
+ *
+ * The verification test is a literal comparison on a NOT NULL column and the basis test names its
+ * accepted values, so neither can silently drop a row into a NULL comparison. Initial verification
+ * is what this decides. Evidence that becomes unreadable AFTER membership froze is a different
+ * question with a different answer: that chunk stays sealed and its publication blocks.
+ */
+const LIVE_MEMBER = `r.verification_status = '${VERIFIED}'
+         AND r.capture_order_basis IN ${LIVE_CAPTURE_BASES}`;
+
+/**
+ * The complement, written out rather than as `NOT (...)`.
+ *
+ * `basis IN (…)` is NULL for a NULL basis, and `NOT NULL` is NULL too, so a negated predicate
+ * would drop a NULL-basis row out of BOTH populations — which is precisely the silent loss these
+ * two reads exist to make impossible. `verification_status` is NOT NULL, so its test is safe.
+ */
+const HELD_MEMBER = `(r.verification_status <> '${VERIFIED}'
+         OR r.capture_order_basis IS NULL
+         OR r.capture_order_basis NOT IN ${LIVE_CAPTURE_BASES})`;
+
+const UNSEALED = 'NOT EXISTS (SELECT 1 FROM chunk_members m WHERE m.source_id = r.source_id)';
+
 /**
  * The session's unsealed tail, derived rather than stored: the sources this session accepted, up
- * to the remainder watermark, that no chunk has taken.
+ * to the remainder watermark, that no chunk has taken and that are eligible to be taken.
  *
  * The watermark bound is what keeps the tail to acknowledged acceptances. A source whose
  * acceptance has not been acknowledged is not part of any session yet, and sealing it would freeze
- * a membership around a publication that may still be discarded.
+ * a membership around a publication that may still be discarded. The eligibility bound is what
+ * keeps the initial verification question out of the seal: a source the migration pinned has no
+ * proved identity, so it waits outside every chunk instead of freezing into one.
  */
 export function readRemainderMembers(
   db: SqliteHandle,
@@ -185,9 +223,10 @@ export function readRemainderMembers(
        FROM source_records r
        JOIN session_remainders s ON s.session_id = r.session_id
        WHERE r.session_id = ?
+         AND ${LIVE_MEMBER}
          AND r.capture_order_value IS NOT NULL
          AND r.capture_order_value <= s.watermark
-         AND NOT EXISTS (SELECT 1 FROM chunk_members m WHERE m.source_id = r.source_id)
+         AND ${UNSEALED}
        ORDER BY r.capture_order_value, r.source_id
        LIMIT ?`,
     )
@@ -206,22 +245,62 @@ export function readRemainderMembers(
 }
 
 /**
- * Unsealed sources of this session that carry no capture position.
+ * ELIGIBLE unsealed sources of this session that carry no capture position.
  *
  * The remainder read above orders on `capture_order_value` and a NULL never satisfies its bound,
- * so such a source would silently never be sealed and never be narrated. It is named here instead:
- * the caller refuses to seal the session while one exists rather than quietly leaving it out.
+ * so such a source would silently never be sealed and never be narrated. It is named here instead
+ * and the caller refuses rather than quietly leaving it out — but only for a source that was
+ * otherwise going to be a member. A pin the migration left behind is not a live member and is not
+ * a reason to stop the verified tail beside it; it is reported by `heldSessionSources`.
  */
 export function unorderedSessionSources(db: SqliteHandle, sessionId: string): readonly string[] {
   const rows = db
     .prepare(
-      `SELECT source_id FROM source_records
-       WHERE session_id = ? AND capture_order_value IS NULL
-         AND NOT EXISTS (SELECT 1 FROM chunk_members m WHERE m.source_id = source_records.source_id)
-       ORDER BY source_id`,
+      `SELECT r.source_id FROM source_records r
+       WHERE r.session_id = ? AND ${LIVE_MEMBER} AND r.capture_order_value IS NULL
+         AND ${UNSEALED}
+       ORDER BY r.source_id`,
     )
     .all(sessionId) as { source_id: string }[];
   return rows.map((row) => row.source_id);
+}
+
+export type HeldSource = {
+  readonly sourceId: string;
+  readonly verificationStatus: string;
+  readonly verificationReason: string | null;
+  readonly captureOrderBasis: string | null;
+};
+
+/**
+ * Unsealed sources this session holds OUT of live membership, with what holds them.
+ *
+ * Excluding them silently is the loss this read exists to prevent: a pinned identity or a legacy
+ * ordering value means the source waits for the migration that owns it, and a caller that reports
+ * the count can tell a session with nothing left to seal from one whose tail nobody can take.
+ */
+export function heldSessionSources(db: SqliteHandle, sessionId: string): readonly HeldSource[] {
+  const rows = db
+    .prepare(
+      `SELECT r.source_id, r.verification_status, r.verification_reason, r.capture_order_basis
+       FROM source_records r
+       WHERE r.session_id = ?
+         AND ${HELD_MEMBER}
+         AND ${UNSEALED}
+       ORDER BY r.source_id`,
+    )
+    .all(sessionId) as {
+    source_id: string;
+    verification_status: string;
+    verification_reason: string | null;
+    capture_order_basis: string | null;
+  }[];
+  return rows.map((row) => ({
+    sourceId: row.source_id,
+    verificationStatus: row.verification_status,
+    verificationReason: row.verification_reason,
+    captureOrderBasis: row.capture_order_basis,
+  }));
 }
 
 /**
