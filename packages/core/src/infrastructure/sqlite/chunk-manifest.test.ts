@@ -62,6 +62,17 @@ describe('chunk identity', () => {
     expect(chunkIdentity(SESSION, ['a', 'a', 'b'])).toBe(chunkIdentity(SESSION, ['a', 'b']));
   });
 
+  /**
+   * The algorithm, pinned. The separator is written as an escape rather than as a raw byte, and
+   * the two produce the same character: a change to either would move every chunk id that has
+   * ever been stored, so the value is asserted rather than described.
+   */
+  it('hashes a known membership to a known value', () => {
+    expect(chunkIdentity('session-a', ['s1', 's2'], 1)).toBe(
+      '1c9c962f92ee2e46041856de3b8a6a1bd36d98d942ee3570e2ffaf9cbdf46ff6',
+    );
+  });
+
   it('separates a different session, a different set and a different partition policy', () => {
     const base = chunkIdentity(SESSION, ['a', 'b'], 1);
     expect(chunkIdentity('session-b', ['a', 'b'], 1)).not.toBe(base);
