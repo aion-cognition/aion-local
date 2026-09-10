@@ -1,15 +1,15 @@
 import { z } from 'zod';
 
-import { currentOnly, supersedeInTransaction } from '../../infrastructure/graph/bitemporal.js';
+import { GRAPH_NODE_SCOPE } from '../../evidence/domain/scopes.js';
+import { supersedeInTransaction } from '../../infrastructure/graph/bitemporal.js';
+import { standingFamilyRevisionsInTransaction } from '../../infrastructure/graph/narrative-cleanup-queries.js';
 import { closeNarrativeEdgesInTransaction } from '../../infrastructure/graph/narrative-edge-queries.js';
-import { NARRATIVE_PROPERTIES } from '../../infrastructure/graph/narrative-queries.js';
-import { toGraphInteger } from '../../infrastructure/graph/values.js';
 import { PublicationOperation } from '../../infrastructure/publication/operation.js';
 import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
-import type { PublicationContext } from '../../infrastructure/publication/types.js';
 import { narrativeRevisionBinding } from '../../infrastructure/sqlite/chunk-manifest.js';
 import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { readScopeMirror, recordScopeMirror } from '../../infrastructure/sqlite/evidence-scope.js';
 import {
   CHUNK_REVISION_FAMILY,
   readPublishedRevision,
@@ -76,28 +76,6 @@ export function narrativeFamilyRepairOperationId(chunkId: string, at: Date): str
   return `narrative-family-repair:${chunkId}:${at.toISOString()}`;
 }
 
-const OPEN_FAMILY_REVISIONS = [
-  `MATCH (n:Narrative { ${NARRATIVE_PROPERTIES.chunkId}: $chunkId })`,
-  `WHERE ${currentOnly('n')}`,
-  `RETURN n.id AS id`,
-  'ORDER BY n.id',
-  'LIMIT $limit',
-].join('\n');
-
-/**
- * The family's standing revision nodes, read inside the guard.
- *
- * The scan that nominated the family ran outside every lock, so what it saw is a claim about a
- * moment that has passed. This is the reading the repair acts on.
- */
-async function openRevisions(context: PublicationContext, chunkId: string): Promise<string[]> {
-  return context.graph.run(
-    OPEN_FAMILY_REVISIONS,
-    { chunkId, limit: toGraphInteger(REPAIR_TARGET_LIMIT + 1) },
-    (row) => row.id as string,
-  );
-}
-
 /** Whether the manifest calls this node an acknowledged revision of THIS family. */
 function repairable(db: SqliteHandle, chunkId: string, nodeId: string): boolean {
   const binding = narrativeRevisionBinding(db, nodeId);
@@ -119,21 +97,30 @@ export const narrativeFamilyRepairPublication = new PublicationOperation({
       throw new Error('a narrative family cannot be repaired before the coverage registry exists');
     }
     const head = readPublishedRevision(context.db, CHUNK_REVISION_FAMILY, payload.chunkId);
-    const standing = await openRevisions(context, payload.chunkId);
+    const standing = await standingFamilyRevisionsInTransaction(
+      context.graph,
+      payload.chunkId,
+      REPAIR_TARGET_LIMIT + 1,
+    );
     // Both endpoints of every close are checked against the manifest family: a node carrying this
     // chunk's property that the records bind to another family, or to no revision at all, is not
     // this family's to close.
+    // The keeper has to be STANDING, not merely named by the manifest. A head something else
+    // closed in the graph is not a keeper: closing the survivors onto it would leave the family
+    // with no current narrative at all, which is the one outcome this repair exists to prevent.
+    const keeper = head !== undefined && standing.includes(head.nodeId) ? head : undefined;
     const targets =
-      head === undefined
+      keeper === undefined
         ? []
         : standing
             .filter(
-              (nodeId) => nodeId !== head.nodeId && repairable(context.db, payload.chunkId, nodeId),
+              (nodeId) =>
+                nodeId !== keeper.nodeId && repairable(context.db, payload.chunkId, nodeId),
             )
             .slice(0, REPAIR_TARGET_LIMIT);
     const data: RepairData = {
       ...payload,
-      headNodeId: head?.nodeId ?? '',
+      headNodeId: keeper?.nodeId ?? '',
       headRevisionNo: head?.revisionNo ?? 1,
       targets,
       examined: standing.length,
@@ -171,7 +158,7 @@ export const narrativeFamilyRepairPublication = new PublicationOperation({
     if (head.nodeId !== data.headNodeId) {
       return Promise.resolve({ status: 'deferred', reason: 'head_moved' } as const);
     }
-    if (data.targets.length === 0) {
+    if (data.headNodeId === '' || data.targets.length === 0) {
       return Promise.resolve({ status: 'rejected', reason: 'nothing_to_repair' } as const);
     }
     for (const nodeId of data.targets) {
@@ -207,11 +194,28 @@ export const narrativeFamilyRepairPublication = new PublicationOperation({
   prepareSqlite() {
     return undefined;
   },
-  acknowledgeSqlite() {
-    // Nothing durable moves. The manifest already named this head and already called the closed
-    // revisions closed — that is the disagreement being repaired — so the record of this repair
-    // is its intent, its effect and its receipt, which is what makes a second run of it a
-    // recovery rather than a second suppression.
+  acknowledgeSqlite(context, data) {
+    // Closing a node is a change to its own semantic state, so evidence somebody else is holding
+    // about that state stops being current HERE, in the operation that made the change. Left
+    // alone, a judgment fenced on the reading this repair invalidated would still verify as
+    // current against a narrative the substrate has stopped standing behind.
+    //
+    // The manifest itself does not move — it already named this head and already called these
+    // revisions closed, which is the disagreement being repaired — so the mirrors and the
+    // receipt are the whole durable record of the repair.
+    for (const nodeId of data.targets) {
+      const held = readScopeMirror(context.db, {
+        endpointId: nodeId,
+        relationClass: GRAPH_NODE_SCOPE,
+      });
+      recordScopeMirror(context.db, {
+        endpointId: nodeId,
+        relationClass: GRAPH_NODE_SCOPE,
+        mirroredRevision: (held?.mirroredRevision ?? 0) + 1,
+        operationId: context.operationId,
+        mirroredAt: new Date(context.knownFrom),
+      });
+    }
     return undefined;
   },
   discardSqlite() {

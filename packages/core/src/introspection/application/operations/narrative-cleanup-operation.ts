@@ -13,6 +13,7 @@ import {
 } from '../../../infrastructure/graph/narrative-edge-queries.js';
 import { readCurrentCoverageContract } from '../../../infrastructure/sqlite/coverage-contract.js';
 import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import { getLedgerEntry, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
 import { narrativeFamilyRepairOperationId } from '../../../reflection/application/narrative-repair.js';
 import type {
   IntrospectionOperation,
@@ -104,7 +105,22 @@ async function closeExtraRevisions(
   closedEdges: number;
   unresolved: number;
 }> {
-  const families = await findDuplicateChunkFamilies(ctx.driver, limit);
+  // The per-family version bound distributes the run's record budget across the families the
+  // page may return, so the page cannot materialize more records than the run may examine.
+  const versionLimit = Math.max(2, Math.floor(REVISION_SCAN_BUDGET / Math.max(1, limit)));
+  const cursor = readRepairCursor(ctx.db);
+  let families = await findDuplicateChunkFamilies(ctx.driver, {
+    limit,
+    versionLimit,
+    ...(cursor === undefined ? {} : { after: cursor }),
+  });
+  if (families.length === 0 && cursor !== undefined) {
+    // The end of the enumeration, reached inside this run rather than costing one. Starting again
+    // from the front is what makes the cursor a position and not a discharge: a family an earlier
+    // page could not repair is visited again, and a run that resumed near the tail still spends
+    // its page.
+    families = await findDuplicateChunkFamilies(ctx.driver, { limit, versionLimit });
+  }
   const epoch = readCurrentCoverageContract(ctx.db)?.epoch;
   if (epoch === undefined) {
     return {
@@ -162,7 +178,26 @@ async function closeExtraRevisions(
     closed += result.closed ?? 0;
     closedEdges += result.closedEdges ?? 0;
   }
+  // Where this page stopped. A family it could not repair is behind the cursor rather than at the
+  // front of every later page, and the cursor settles nothing: it wraps at the end of the walk.
+  writeRepairCursor(ctx.db, families[families.length - 1]?.chunkId);
   return { families: families.length, examined, closed, closedEdges, unresolved };
+}
+
+/** Where the last run's family nomination stopped. One row, naming a family and nothing else. */
+const REPAIR_CURSOR_KEY = 'narrative_cleanup:family_cursor';
+
+function readRepairCursor(db: SqliteHandle): string | undefined {
+  const summary = getLedgerEntry(db, REPAIR_CURSOR_KEY)?.summary;
+  if (typeof summary !== 'object' || summary === null) {
+    return undefined;
+  }
+  const { chunkId } = summary as { chunkId?: unknown };
+  return typeof chunkId === 'string' && chunkId !== '' ? chunkId : undefined;
+}
+
+function writeRepairCursor(db: SqliteHandle, chunkId: string | undefined): void {
+  markLedgerApplied(db, REPAIR_CURSOR_KEY, chunkId === undefined ? {} : { chunkId });
 }
 
 /**
@@ -254,14 +289,21 @@ export function narrativeCleanupOperation(): IntrospectionOperation {
       // the revision records the NOMINATION returned — which is the population the run reads, and
       // the population R1's bound is enforced over — while the affected term is what the repair's
       // own result says it changed.
-      const processed = duplicates.examined + nominated.length + edges.examined;
+      // Both record classes on both sides. The repair reads revision records and the traversal
+      // edges into the ones it closes, and it changes both; counting the edges as affected while
+      // leaving them out of examined would make the two terms incomparable in the other
+      // direction. The edge population it read and the one it changed are the same set, for the
+      // reason the stale-edge sweep's are: the statement matches what it writes.
+      const processed =
+        duplicates.examined + duplicates.closedEdges + nominated.length + edges.examined;
       const affected = duplicates.closed + duplicates.closedEdges + edges.closed;
       return {
         status: affected === 0 ? 'noop' : 'applied',
         itemsProcessed: processed,
         itemsAffected: affected,
         detail:
-          `examined ${String(duplicates.examined)} revision record(s) across ` +
+          `examined ${String(duplicates.examined)} revision record(s) and ` +
+          `${String(duplicates.closedEdges)} traversal edge(s) across ` +
           `${String(duplicates.families)} chunk family/families, ` +
           `${String(nominated.length)} nominated narrative(s), ` +
           `${String(edges.examined)} stale edge(s); ` +

@@ -119,9 +119,16 @@ export type DuplicateChunkFamily = {
 const FIND_DUPLICATE_CHUNK_FAMILIES = [
   'MATCH (n:Narrative)',
   `WHERE ${currentOnly('n')} AND n.${NARRATIVE_PROPERTIES.chunkId} IS NOT NULL`,
+  `  AND ($after = '' OR n.${NARRATIVE_PROPERTIES.chunkId} > $after)`,
   `WITH n.${NARRATIVE_PROPERTIES.chunkId} AS chunk_id,`,
-  `     collect({ id: n.id, revision_no: n.${NARRATIVE_PROPERTIES.revisionNo} }) AS versions`,
-  'WHERE size(versions) > 1',
+  `     collect({ id: n.id, revision_no: n.${NARRATIVE_PROPERTIES.revisionNo} }) AS all_versions`,
+  'WHERE size(all_versions) > 1',
+  // The version array is truncated HERE, in the read, because a bound applied after the rows
+  // are in hand is not a read bound: one family carrying two hundred standing versions
+  // materializes all of them before any caller can decline. What the caller does with the page
+  // is choose a family; the repair re-reads the family's standing revisions under the guard and
+  // bounds that reading itself, so a truncated page loses no correctness.
+  'WITH chunk_id, all_versions[0..$versionLimit] AS versions',
   'RETURN chunk_id, versions',
   'ORDER BY chunk_id',
   'LIMIT $limit',
@@ -135,20 +142,60 @@ function readChunkVersion(value: unknown): ChunkRevisionVersion {
   };
 }
 
+export type DuplicateFamilyPage = {
+  readonly limit: number;
+  /** Standing versions returned per family, which is what bounds the materialized records. */
+  readonly versionLimit: number;
+  /** Resume strictly past this family key, so an unrepairable prefix stops holding the front. */
+  readonly after?: string;
+};
+
 export async function findDuplicateChunkFamilies(
   driver: Driver,
-  limit: number,
+  page: DuplicateFamilyPage,
 ): Promise<DuplicateChunkFamily[]> {
-  if (limit <= 0) {
+  if (page.limit <= 0 || page.versionLimit <= 0) {
     return [];
   }
   return runRead(
     driver,
-    { cypher: FIND_DUPLICATE_CHUNK_FAMILIES, parameters: { limit: toGraphInteger(limit) } },
+    {
+      cypher: FIND_DUPLICATE_CHUNK_FAMILIES,
+      parameters: {
+        limit: toGraphInteger(page.limit),
+        versionLimit: toGraphInteger(page.versionLimit),
+        after: page.after ?? '',
+      },
+    },
     (row) => ({
       chunkId: row.chunk_id as string,
       versions: Array.isArray(row.versions) ? row.versions.map(readChunkVersion) : [],
     }),
+  );
+}
+
+const READ_STANDING_FAMILY_REVISIONS = [
+  `MATCH (n:Narrative { ${NARRATIVE_PROPERTIES.chunkId}: $chunkId })`,
+  `WHERE ${currentOnly('n')}`,
+  'RETURN n.id AS id',
+  'ORDER BY n.id',
+  'LIMIT $limit',
+].join('\n');
+
+/**
+ * The family's standing revision nodes, read inside a caller's transaction and bounded there.
+ *
+ * The scan that nominated the family ran outside every lock, so what it saw is a claim about a
+ * moment that has passed. This is the reading a guarded repair acts on, and the bound is on the
+ * read rather than on what the caller does with it.
+ */
+export async function standingFamilyRevisionsInTransaction(
+  tx: GraphTransaction,
+  chunkId: string,
+  limit: number,
+): Promise<string[]> {
+  return tx.run(READ_STANDING_FAMILY_REVISIONS, { chunkId, limit: toGraphInteger(limit) }, (row) =>
+    String(row.id),
   );
 }
 

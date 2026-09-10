@@ -478,7 +478,10 @@ describe('what a bounded run says it examined', () => {
   }, 120_000);
 
   it('counts the bounded scan rather than the backlog behind it', async () => {
-    const families = await findDuplicateChunkFamilies(harness.driver, 50);
+    const families = await findDuplicateChunkFamilies(harness.driver, {
+      limit: 50,
+      versionLimit: 50,
+    });
     const revisions = families.reduce((total, family) => total + family.versions.length, 0);
     const nominated = await findOrphanedNarratives(harness.driver, 50);
     const before = await countNarrativeEdges(harness.driver);
