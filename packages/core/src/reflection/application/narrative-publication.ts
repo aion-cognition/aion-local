@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { NARRATIVE_EXTRACTION_METHOD } from './narrative-write.js';
 import { verifyEvidenceRevision } from '../../evidence/application/dependencies.js';
-import { NARRATIVE_SCOPES } from '../../evidence/domain/scopes.js';
+import { durableRoleScope, NARRATIVE_SCOPES } from '../../evidence/domain/scopes.js';
 import {
   supersedeInTransaction,
   writeStampedDerivedNodeInTransaction,
@@ -34,6 +34,7 @@ import {
   prepareScopeAdvance,
   rejectScopeAdvance,
 } from '../../infrastructure/sqlite/evidence-scope.js';
+import { readCitationsFrom } from '../../infrastructure/sqlite/narrative-citations.js';
 import {
   CHUNK_REVISION_FAMILY,
   prepareNarrativeRevision,
@@ -141,6 +142,8 @@ const Payload = z.strictObject({
 const Data = Payload.extend({
   /** The node id of the head this publication closes, resolved under the guard. '' when first. */
   supersedes: z.string(),
+  /** What that head cited, so a target it stops citing has its own population moved as well. */
+  closedTargets: z.array(z.string().min(1)),
   observedAt: z.string().min(1),
 });
 
@@ -195,12 +198,45 @@ function narrativeProperties(data: NarrativeData): GraphProperties {
   };
 }
 
-/** The endpoints this revision's citations advance a citation-scope version on. */
+/**
+ * The scopes this operation may call COUNTED, because it authored their whole population.
+ *
+ * The citation set is written here in one transaction, and no extraction incidence is written
+ * against a narrative at all, so both counts are exact rather than sampled. A later writer that
+ * changes either advances the scope the ordinary way.
+ *
+ * A target's INBOUND citation population is a different question — how many revisions cite it —
+ * and this publication counted no part of it. Its version moves and its census does not.
+ */
+const NODE_OWN_SCOPES = [CITATION_SCOPE, durableRoleScope('extraction', 'out')];
+
+/**
+ * Every citation population this publication changes.
+ *
+ * Three of them, and each was a separate way to leave a reader stuck. The targets this revision
+ * cites move, obviously. The targets the head it CLOSES cited move too: a reader fenced on
+ * "this narrative cites me" would otherwise hold a token that still compares equal after the
+ * citation is gone. And the new node's OWN outbound population moves, because a durable lineage
+ * walk crossing this narrative asks whether its citation set was counted before it will cross it.
+ */
 function citationScopes(
   data: NarrativeData,
 ): readonly { endpointId: string; relationClass: string }[] {
-  const endpoints = [...new Set(data.citations.map((citation) => citation.targetId))].sort();
-  return endpoints.map((endpointId) => ({ endpointId, relationClass: CITATION_SCOPE }));
+  const targets = new Set([
+    ...data.citations.map((citation) => citation.targetId),
+    ...data.closedTargets,
+  ]);
+  targets.delete(data.nodeId);
+  return [
+    ...[...targets].sort().map((endpointId) => ({ endpointId, relationClass: CITATION_SCOPE })),
+    // The node's own outbound populations, which is what a durable walk asks about before it will
+    // cross this narrative to the sources it rests on.
+    ...NODE_OWN_SCOPES.map((relationClass) => ({ endpointId: data.nodeId, relationClass })),
+  ];
+}
+
+function establishesCensus(data: NarrativeData, endpointId: string): boolean {
+  return endpointId === data.nodeId;
 }
 
 export const narrativePublication = new PublicationOperation({
@@ -216,9 +252,14 @@ export const narrativePublication = new PublicationOperation({
     // Resolved here, under the guard, rather than carried from the caller's read: the head this
     // publication closes is the one standing when it lands, and closing a node the caller happened
     // to see is how two revisions end up both open.
+    const supersedes = headNodeId(context.db, payload.chunkId);
     const data: NarrativeData = {
       ...payload,
-      supersedes: headNodeId(context.db, payload.chunkId),
+      supersedes,
+      closedTargets:
+        supersedes === ''
+          ? []
+          : readCitationsFrom(context.db, supersedes).map((citation) => citation.targetId),
       observedAt: context.now.toISOString(),
     };
     return Promise.resolve({
@@ -398,6 +439,9 @@ export const narrativePublication = new PublicationOperation({
         ...scope,
         operationId: context.operationId,
         updatedAt: new Date(context.knownFrom),
+        ...(establishesCensus(data, scope.endpointId)
+          ? { censusStatus: 'established' as const }
+          : {}),
       });
     }
     return undefined;

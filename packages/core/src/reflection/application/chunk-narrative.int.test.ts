@@ -12,6 +12,8 @@ import { INSTALLED_PUBLICATION_HANDLERS } from './installed-publications.js';
 import { handleReflection, type ReflectionIntakeDeps } from './intake.js';
 import { LaneAssigner } from './lanes.js';
 import { publishPipelineReadinessPolicy } from './readiness.js';
+import { verifyEvidenceRevision } from '../../evidence/application/dependencies.js';
+import { walkLineage } from '../../evidence/application/lineage-walk.js';
 import { EvidenceResolver } from '../../evidence/application/resolver.js';
 import { durableRoleScope } from '../../evidence/domain/scopes.js';
 import { commitSourceState, establishScope } from '../../evidence/test-support/evidence.fixture.js';
@@ -39,6 +41,7 @@ import {
 import { openLogger } from '../../infrastructure/logging/logger.js';
 import type { StructuredRequest, Provider } from '../../infrastructure/providers/types.js';
 import { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
+import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
 import type { PublicationBoundary } from '../../infrastructure/publication/types.js';
 import {
   listChunkMembers,
@@ -51,9 +54,15 @@ import {
   acknowledgeStatedLinkVersions,
   listStatedLinksTo,
   prepareRetirementVersion,
+  prepareStatedLinkVersion,
+  statedLinkId,
 } from '../../infrastructure/sqlite/evidence-links.js';
+import { publishedScopeToken } from '../../infrastructure/sqlite/evidence-scope.js';
 import { listAllocatedRevisions } from '../../infrastructure/sqlite/narrative-allocations.js';
-import { readCitationsFrom } from '../../infrastructure/sqlite/narrative-citations.js';
+import {
+  readCitationsFrom,
+  readCitationsOf,
+} from '../../infrastructure/sqlite/narrative-citations.js';
 import {
   allocateNarrativeRevision,
   CHUNK_REVISION_FAMILY,
@@ -212,6 +221,9 @@ function establishStatementCensus(sourceId: string): void {
   for (const role of ['stated_correction', 'stated_confirmation'] as const) {
     establishScope(store.db, sourceId, durableRoleScope(role, 'in'), NOW);
   }
+  // The outbound derivation population too, which is what a lineage walk asks a source about
+  // before it will call the chain ended there.
+  establishScope(store.db, sourceId, durableRoleScope('stated_derivation', 'out'), NOW);
 }
 
 function forget(sourceId: string, operationId: string): void {
@@ -852,4 +864,74 @@ it('never takes up an allocation another attempt has bound to a durable intent',
   // of the ones allocated beside it.
   expect((await coordinator.recover())?.status).toBe('acknowledged');
   expect(readPublishedHead(store.db, CHUNK_REVISION_FAMILY, chunkId)).toBe(bound[0]?.revisionNo);
+});
+
+/**
+ * What a publication owes a later reader: a walk that can cross it, and a moved token wherever a
+ * citation population changed. The evicted member is the point of the durable half — the graph
+ * fallback is gone and the records are all that is left.
+ */
+it('lets a durable walk cross the narrative to an evicted member, and invalidates a dropped target', async () => {
+  const kept = await accept('session-walk', 'phi2');
+  const dropped = await accept('session-walk', 'chi2');
+  const chunkId = await sealAndPublish('session-walk');
+  const first = await publishChunkNarrative(chunks, chunkId, { now: NOW });
+  expect(first.status).toBe('published');
+  if (first.status !== 'published') {
+    return;
+  }
+
+  // A reader fenced on "this target's citation population" as it stood at the first head. The
+  // census is what makes an inbound citation population bindable at all, and counting it is the
+  // seal's job rather than this publication's: what a revision counts is its own outbound set.
+  const key = { endpointId: dropped, relationClass: 'sqlite.revision_citations' };
+  establishScope(store.db, dropped, 'sqlite.revision_citations', NOW);
+  const held = buildEvidenceRevision([
+    {
+      kind: 'relation_scope',
+      id: dropped,
+      scope: 'sqlite.revision_citations',
+      version: publishedScopeToken(store.db, key) ?? '',
+    },
+  ]);
+  expect(verifyEvidenceRevision(store.db, held).status).toBe('current');
+
+  // The member is evicted, so nothing but the records can answer for it.
+  transitionSourceResidency(store.db, {
+    sourceId: kept,
+    state: 'evicted',
+    operationId: 'evict-phi2',
+    transitionedAt: NOW,
+  });
+  const derived = await accept('session-walk-child', 'psi2');
+  prepareStatedLinkVersion(store.db, {
+    linkId: statedLinkId('derived_from', 'retained_node', derived, first.nodeId),
+    kind: 'derived_from',
+    qualifier: 'retained_node',
+    fromId: derived,
+    toId: first.nodeId,
+    operationId: 'derive-from-chunk-narrative',
+    operationKey: 'derive-from-chunk-narrative',
+    recordedValues: {},
+    temporalProof: {},
+    observedAt: NOW,
+    referenceSourceId: derived,
+    referenceVersion: 1,
+  });
+  acknowledgeStatedLinkVersions(
+    store.db,
+    'derive-from-chunk-narrative',
+    NOW.toISOString(),
+    NOW.toISOString(),
+  );
+  establishScope(store.db, derived, durableRoleScope('stated_derivation', 'out'), NOW);
+  const walk = walkLineage(store.db, [derived], undefined);
+  expect(walk.roots).toContain(kept);
+  expect(walk.complete).toBe(true);
+
+  // The replacement stops citing the dropped member, and the token a reader held moves with it.
+  forget(dropped, 'forget-chi2');
+  expect((await publishChunkNarrative(chunks, chunkId, { now: NOW })).status).toBe('published');
+  expect(readCitationsOf(store.db, dropped)).toEqual([]);
+  expect(verifyEvidenceRevision(store.db, held).status).toBe('stale');
 });
