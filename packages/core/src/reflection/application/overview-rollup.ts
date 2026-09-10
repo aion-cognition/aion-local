@@ -98,11 +98,16 @@ export const OVERVIEW_CLAIM_LEASE_MS = 10 * 60 * 1000;
 /**
  * Gives back a number THIS attempt still owns, and nothing else.
  *
- * Ownership is proven by an unexpired claim under this actor's own identity. A number whose row
- * now carries a different binding was reclaimed after this actor's lease expired, and the reclaim
- * mints a new ownership: releasing it here would hand a live attempt's number away. The shared
- * helper matches on the family and the number alone, so the identity check lives on this side of
- * the call rather than being assumed of it.
+ * Ownership is proven by an unexpired claim under this actor's own identity, so the identity check
+ * lives on this side of the call: the shared helper matches on the family and the number alone, and
+ * releasing a row that now carries someone else's binding would hand a live attempt's number away.
+ *
+ * One case this cannot see. The shared claim derives the identity from the family key and the
+ * number, so a reclaim after a lease expires writes back the SAME binding rather than a new one,
+ * and a stale actor's release passes this test and clears the live claim. Written against the
+ * intended contract, where a reclaim mints an ownership the old actor cannot match, this check
+ * closes it; under the current claim it is the one dependency this publication carries, and it is
+ * confined to these four lines rather than spread through the run.
  */
 function releaseOwnClaim(
   db: SqliteHandle,
