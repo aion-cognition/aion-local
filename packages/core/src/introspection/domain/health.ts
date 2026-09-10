@@ -141,6 +141,16 @@ export type SealDemand = {
   readonly dueRemainders: number | undefined;
   /** The publication half. */
   readonly dueChunks: number | undefined;
+  /**
+   * Tails a bounded discovery OFFERED, which is a different claim from the counts above.
+   *
+   * The rendered-input trigger is knowable only to the admission decision, and an observation tick
+   * has no resolver to render with. What durable state can measure is which bound a tail reaches
+   * first, and that measure over-reports: a tail it offers may turn out to fit and answer
+   * `waiting`. So the offer is counted here and never inside `eligibleGroups`, which says PROVED.
+   * A run still spends an evidence read on each of these, which is why the score sees them.
+   */
+  readonly inputCandidates: number | undefined;
   /** Elapsed arrival age of the oldest eligible group. Blocked groups never set it. */
   readonly oldestEligibleAgeMs: number | undefined;
   /**
@@ -285,6 +295,7 @@ export const NEUTRAL_SEAL_DEMAND: SealDemand = {
   eligibleGroups: undefined,
   dueRemainders: undefined,
   dueChunks: undefined,
+  inputCandidates: undefined,
   oldestEligibleAgeMs: undefined,
   invalidatedHeads: undefined,
   blockedSourcesByReason: {},

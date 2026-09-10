@@ -371,6 +371,12 @@ export function reconsiderableBlockedAttempts(
  * of asking earlier rather than later. A tail it nominates that turns out to fit answers `waiting`
  * and costs one evidence read. Without it an input-full tail produced no demand at all: the
  * operation sealed it the moment anything forced a run, and the scheduler never asked for one.
+ *
+ * The archive is reached through the record's OWN pointer. Matching `episode_id` to `source_id`
+ * assumes an equality the schema keeps apart: a record whose archive was correctly remapped still
+ * names its row, and a join on the two identifiers stops finding it while every other reader
+ * still does. Either address the pointer resolves at is accepted, the way the signed archive
+ * grouping accepts both.
  */
 export function inputFullRemainderGroups(
   db: SqliteHandle,
@@ -386,7 +392,8 @@ export function inputFullRemainderGroups(
               MIN(r.created_at) AS oldest_arrival_at
          FROM source_records r
          JOIN session_remainders s ON s.session_id = r.session_id
-         JOIN experience_archive a ON a.episode_id = r.source_id
+         JOIN experience_archive a
+           ON a.id = r.canonical_archive_id OR a.episode_id = r.canonical_archive_id
         WHERE ${REMAINDER_PREDICATE}
           AND r.verification_status = '${VERIFIED}'
         GROUP BY r.session_id

@@ -151,14 +151,16 @@ export function readSealDemand(db: SqliteHandle, input: SealCensusInput): SealDe
       (soonest, tally) => oldest(soonest, tally.oldestAt),
       held.oldestAt,
     );
+    // The age of the oldest ELIGIBLE group, so an offered tail does not date a backlog it may
+    // turn out not to be part of.
     const eligibleAt = [
       ...chunks.map((chunk) => chunk.sealedAt),
       ...remainders.map((group) => group.oldestArrivalAt),
-      ...extraInput.map((group) => group.oldestArrivalAt),
     ].reduce<string | undefined>((soonest, at) => oldest(soonest, at), undefined);
     return {
-      eligibleGroups: chunks.length + remainders.length + extraInput.length,
-      dueRemainders: remainders.length + extraInput.length,
+      eligibleGroups: chunks.length + remainders.length,
+      dueRemainders: remainders.length,
+      inputCandidates: extraInput.length,
       dueChunks: chunks.length,
       oldestEligibleAgeMs: ageMs(input.now, eligibleAt),
       invalidatedHeads: invalidatedHeadCount(db, ceiling),

@@ -38,10 +38,14 @@ export function sealRelevance(demand: SealDemand, scales: SealRelevanceScales): 
   if (demand.availability !== 'measured' || demand.eligibleGroups === undefined) {
     return 0;
   }
-  if (demand.eligibleGroups === 0) {
+  // Proved work and offered work both cost a run's slot, so both raise the score; only the first
+  // is reported as eligible. Scoring on the proved count alone would leave an input-full tail with
+  // relevance zero, which is the defect that made the operation reachable only by being forced.
+  const asking = demand.eligibleGroups + (demand.inputCandidates ?? 0);
+  if (asking === 0) {
     return 0;
   }
-  const byCount = demand.eligibleGroups / scales.batch;
+  const byCount = asking / scales.batch;
   const byAge = (demand.oldestEligibleAgeMs ?? 0) / scales.ageScaleMs;
   return Math.min(1, Math.max(byCount, byAge));
 }
