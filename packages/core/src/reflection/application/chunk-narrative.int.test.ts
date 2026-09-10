@@ -1,25 +1,23 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
+import { expect, it } from 'vitest';
 
+import { publishChunkNarrative, sealSessionChunk } from './chunk-narrative.js';
 import {
-  publishChunkNarrative,
-  sealSessionChunk,
-  type ChunkNarrativeDeps,
-} from './chunk-narrative.js';
-import { INSTALLED_PUBLICATION_HANDLERS } from './installed-publications.js';
-import { handleReflection, type ReflectionIntakeDeps } from './intake.js';
-import { LaneAssigner } from './lanes.js';
-import { publishPipelineReadinessPolicy } from './readiness.js';
-import { verifyEvidenceRevision } from '../../evidence/application/dependencies.js';
-import { walkLineage } from '../../evidence/application/lineage-walk.js';
-import { EvidenceResolver } from '../../evidence/application/resolver.js';
-import { durableRoleScope } from '../../evidence/domain/scopes.js';
-import { commitSourceState, establishScope } from '../../evidence/test-support/evidence.fixture.js';
-import { DEFAULTS } from '../../infrastructure/config/defaults.js';
-import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
-import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
+  NOW,
+  accept,
+  acceptCorrection,
+  battery,
+  body,
+  chunks,
+  driver,
+  forget,
+  prompts,
+  resetPrompts,
+  retireCorrection,
+  sealAndPublish,
+  sessionNodeOf,
+  store,
+  unforget,
+} from './test-support/chunk-lifecycle.fixture.js';
 import {
   DERIVES_FROM_TYPE,
   NARRATIVE_PROPERTIES,
@@ -27,58 +25,25 @@ import {
 } from '../../infrastructure/graph/narrative-queries.js';
 import { SUPERSEDES_TYPE } from '../../infrastructure/graph/relationships.js';
 import {
-  startRehearsalSubstrate,
-  stopRehearsalSubstrate,
-  type RehearsalSubstrate,
-} from '../../infrastructure/graph/test-support/consolidation-rehearsal.fixture.js';
-import {
   countEdges,
-  countNodesWithId,
   countOpenEdgesInto,
-  renameNodeId,
   nodeProperties,
 } from '../../infrastructure/graph/test-support/graph-queries.fixture.js';
-import { openLogger } from '../../infrastructure/logging/logger.js';
-import type { StructuredRequest, Provider } from '../../infrastructure/providers/types.js';
-import { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
-import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
-import type { PublicationBoundary } from '../../infrastructure/publication/types.js';
 import { listChunkMembers, readChunk } from '../../infrastructure/sqlite/chunk-manifest.js';
-import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
-import { SqliteStore } from '../../infrastructure/sqlite/database.js';
-import {
-  acknowledgeStatedLinkVersions,
-  listStatedLinksTo,
-  prepareRetirementVersion,
-  prepareStatedLinkVersion,
-  statedLinkId,
-} from '../../infrastructure/sqlite/evidence-links.js';
-import { publishedScopeToken } from '../../infrastructure/sqlite/evidence-scope.js';
-import { listAllocatedRevisions } from '../../infrastructure/sqlite/narrative-allocations.js';
 import {
   readCitationsFrom,
-  readCitationsOf,
   revisionsDependingOn,
 } from '../../infrastructure/sqlite/narrative-citations.js';
 import {
-  allocateNarrativeRevision,
   CHUNK_REVISION_FAMILY,
-  nominateRetryableRevisions,
   readNarrativeRevision,
   readPublishedHead,
   readPublishedRevision,
 } from '../../infrastructure/sqlite/narrative-revisions.js';
-import {
-  acknowledgePublicationIntent,
-  preparePublicationIntent,
-} from '../../infrastructure/sqlite/publication-intents.js';
-import { readSourceRecord } from '../../infrastructure/sqlite/source-identity.js';
-import { transitionSourceResidency } from '../../infrastructure/sqlite/source-lifecycle.js';
-import { SessionManager } from '../../session/session-manager.js';
 import { CHUNK_BOUNDARY_POLICY } from '../domain/chunk-boundary.js';
 
 /**
- * The C2 steady-state lifecycle, end to end against real stores and a real coordinator.
+ * The C2 steady-state lifecycle: what seals, what a revision submits, and what refuses.
  *
  * The provider is scripted and it records the exact string it was handed, so every claim about
  * what reached the model is asserted on that string rather than on a coverage number. Nothing in
@@ -86,241 +51,11 @@ import { CHUNK_BOUNDARY_POLICY } from '../domain/chunk-boundary.js';
  * an accidental generation fails the run instead of passing quietly.
  */
 
-const NOW = new Date('2026-09-09T06:00:00.000Z');
-const EMBED_DIMENSION = 3;
-const STAGES = ['entities'];
-
-let substrate: RehearsalSubstrate;
-let dir: string;
-let store: SqliteStore;
-let coordinator: PublicationCoordinator;
-let intake: ReflectionIntakeDeps;
-let chunks: ChunkNarrativeDeps;
-
-/** Every user message the scripted provider was handed, in order. */
-let prompts: string[] = [];
-/** The chunk the first case sealed, which the second case asks about again. */
-let basicChunkId = '';
-/** The boundary this run interrupts once, for the crash-recovery case. */
-let failAt: PublicationBoundary | undefined;
-/** A projection this run moves out of reach once, after the check and before the graph write. */
-let hideAtPrepared: string | undefined;
-
-function citeEveryHandle(prompt: string): unknown {
-  const handles = [...prompt.matchAll(/\[(S\d+)\]/g)].map((match) => match[1] ?? '');
-  return {
-    sentences: handles.map((handle) => ({
-      text: `the substrate recorded what ${handle} carried`,
-      source_ids: [handle],
-    })),
-  };
-}
-
-/** What this run does while the model is being asked, for the cases about that window. */
-let duringGeneration: (() => void) | undefined;
-
-const scripted: Provider = {
-  embed: () => Promise.reject(new Error('no embedding in this battery')),
-  generate: (request: StructuredRequest) => {
-    const user = request.messages.find((message) => message.role === 'user')?.content ?? '';
-    prompts.push(user);
-    const hook = duringGeneration;
-    duringGeneration = undefined;
-    hook?.();
-    return Promise.resolve(citeEveryHandle(user));
-  },
-};
-
-/** Long enough that the sentence budget can carry one sentence per member. */
-function body(marker: string): string {
-  return `${marker}: ${'the sync keyed on id_slug rather than on npi. '.repeat(9)}`;
-}
-
-async function accept(session: string, marker: string): Promise<string> {
-  const result = await handleReflection(
-    intake,
-    { observations: [body(marker)] },
-    { identity: session, now: NOW },
-  );
-  // Every accepted source gets its incoming-statement census, which is what a cohort seal
-  // establishes at scale and what a publication now requires: a revision resting on an uncounted
-  // "nothing corrects this" is one no correction could ever invalidate.
-  establishStatementCensus(result.episode_id);
-  return result.episode_id;
-}
-
-function sessionNodeOf(sourceId: string): string {
-  const record = readSourceRecord(store.db, sourceId);
-  if (record === undefined) {
-    throw new Error(`${sourceId} has no source record`);
-  }
-  return record.sessionId;
-}
-
-/**
- * A correction, accepted the way a caller states one: an ordinary push carrying provenance, so
- * the link and its version are committed through the real acceptance publication rather than
- * written beside it.
- */
-async function acceptCorrection(session: string, marker: string, target: string): Promise<string> {
-  const result = await handleReflection(
-    intake,
-    { observations: [body(marker)], provenance: { supersedes: [target] } },
-    { identity: session, now: NOW },
-  );
-  establishStatementCensus(result.episode_id);
-  // Counting the corrected source's scope again is what moves its published token, which is how a
-  // revision that rested on "nothing corrects this" finds out that something now does.
-  establishStatementCensus(target);
-  return result.episode_id;
-}
-
-/** Retires a standing statement the way a withdrawal would, under an acknowledged operation. */
-function retireCorrection(fromSource: string, toSource: string, operationId: string): void {
-  // Found by its record rather than recomputed: the acceptance chose the target class, and a
-  // retirement that guessed it would close a link nobody ever wrote.
-  const link = listStatedLinksTo(store.db, toSource).find(
-    (row) => row.kind === 'corrects' && row.fromId === fromSource,
-  );
-  if (link === undefined) {
-    throw new Error(`no committed correction from ${fromSource} to ${toSource}`);
-  }
-  prepareRetirementVersion(store.db, {
-    linkId: link.linkId,
-    operationId,
-    operationKey: `${operationId}:retire`,
-    recordedValues: {},
-    temporalProof: {},
-    observedAt: NOW,
-  });
-  preparePublicationIntent(store.db, {
-    operationId,
-    kind: 'stated_references',
-    payloadDigest: operationId,
-    payloadJson: '{}',
-    affectedScopesJson: '[]',
-    expectedJson: '{}',
-    preparedActionsJson: '[]',
-    createdAt: NOW,
-  });
-  acknowledgePublicationIntent(store.db, {
-    operationId,
-    resultDigest: `result:${operationId}`,
-    resultJson: '{}',
-    observedAckAt: NOW,
-  });
-  acknowledgeStatedLinkVersions(store.db, operationId, NOW.toISOString(), NOW.toISOString());
-  establishStatementCensus(toSource);
-}
-
-/** The incoming-statement census for a source, which is what the cohort seal establishes at scale. */
-function establishStatementCensus(sourceId: string): void {
-  for (const role of ['stated_correction', 'stated_confirmation'] as const) {
-    establishScope(store.db, sourceId, durableRoleScope(role, 'in'), NOW);
-  }
-  // The outbound derivation population too, which is what a lineage walk asks a source about
-  // before it will call the chain ended there.
-  establishScope(store.db, sourceId, durableRoleScope('stated_derivation', 'out'), NOW);
-}
-
-function forget(sourceId: string, operationId: string): void {
-  commitSourceState(store.db, { sourceId, stateKind: 'forgotten', operationId, at: NOW });
-}
-
-function unforget(sourceId: string, operationId: string): void {
-  commitSourceState(store.db, { sourceId, stateKind: 'unforgotten', operationId, at: NOW });
-}
-
-async function sealAndPublish(session: string): Promise<string> {
-  const sealed = await sealSessionChunk(chunks, session, { now: NOW, sessionClosing: true });
-  if (sealed.status !== 'sealed') {
-    throw new Error(`expected a seal, got ${sealed.status}`);
-  }
-  return sealed.chunkId;
-}
-
-beforeAll(async () => {
-  dir = mkdtempSync(join(tmpdir(), 'aion-chunk-narrative-'));
-  substrate = await startRehearsalSubstrate({ sqlitePath: join(dir, 'store.sqlite') });
-  store = new SqliteStore({ filePath: substrate.sqlitePath });
-  await runGraphMigrations(substrate.harness.driver, store.db, { embedDimension: EMBED_DIMENSION });
-  const backbone = await bootstrapBackbone(substrate.harness.driver, { memberName: 'member' });
-  const logger = openLogger({ filePath: join(dir, 'aion.jsonl'), level: 'fatal' });
-  coordinator = new PublicationCoordinator({
-    driver: substrate.harness.driver,
-    db: store.db,
-    logger,
-    handlers: [...INSTALLED_PUBLICATION_HANDLERS],
-    boundary: async ({ boundary }) => {
-      expect(store.db.inTransaction).toBe(false);
-      if (boundary === 'prepared' && hideAtPrepared !== undefined) {
-        const target = hideAtPrepared;
-        hideAtPrepared = undefined;
-        await renameNodeId(substrate.harness.driver, target, `${target}-hidden`);
-      }
-      if (boundary === failAt) {
-        failAt = undefined;
-        throw new Error(`interrupted at ${boundary}`);
-      }
-    },
-  });
-  await coordinator.initialize();
-  publishPipelineReadinessPolicy(
-    store.db,
-    STAGES.map((name) => ({ name, run: () => Promise.resolve({ status: 'ok', summary: '' }) })),
-    NOW,
-  );
-  intake = {
-    driver: substrate.harness.driver,
-    db: store.db,
-    sessions: new SessionManager(substrate.harness.driver, {
-      memberId: backbone.member.id,
-      workspaceId: backbone.workspace.id,
-    }),
-    provider: {
-      embed: () => Promise.reject(new Error('no embedding in this battery')),
-      generate: () => Promise.reject(new Error('no generation in this battery')),
-    },
-    publications: coordinator,
-    logger,
-    entropyThreshold: DEFAULTS.redaction.entropyThreshold,
-    lanes: new LaneAssigner(DEFAULTS.lanes),
-    workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
-    acceptHookCapture: true,
-  };
-  chunks = {
-    driver: substrate.harness.driver,
-    db: store.db,
-    provider: scripted,
-    resolver: new EvidenceResolver({
-      driver: substrate.harness.driver,
-      db: store.db,
-      logger,
-      publications: coordinator,
-    }),
-    publications: coordinator,
-    logger,
-  };
-}, 300_000);
-
-beforeEach(() => {
-  prompts = [];
-  failAt = undefined;
-  hideAtPrepared = undefined;
-  duringGeneration = undefined;
-});
-
-afterAll(async () => {
-  store.close();
-  await stopRehearsalSubstrate(substrate);
-  rmSync(dir, { recursive: true, force: true });
-});
-
 it('seals a session tail at its close and publishes one revision over exactly its members', async () => {
   const first = await accept('session-basic', 'alpha');
   const second = await accept('session-basic', 'beta');
   const chunkId = await sealAndPublish('session-basic');
-  basicChunkId = chunkId;
+  battery.basicChunkId = chunkId;
   expect(listChunkMembers(store.db, chunkId)).toEqual([first, second]);
 
   const report = await publishChunkNarrative(chunks, chunkId, { now: NOW });
@@ -337,21 +72,12 @@ it('seals a session tail at its close and publishes one revision over exactly it
   expect(prompts[0]).toContain(body('alpha'));
   expect(prompts[0]).toContain(body('beta'));
 
-  const properties = await nodeProperties(substrate.harness.driver, report.nodeId);
+  const properties = await nodeProperties(driver, report.nodeId);
   expect(properties[NARRATIVE_PROPERTIES.family]).toBe('chunk');
   expect(properties[NARRATIVE_PROPERTIES.chunkId]).toBe(chunkId);
   expect(properties[NARRATIVE_PROPERTIES.coverage]).toBe(1);
-  expect(await countEdges(substrate.harness.driver, SUMMARIZED_BY_TYPE, first, report.nodeId)).toBe(
-    1,
-  );
-  expect(
-    await countEdges(
-      substrate.harness.driver,
-      DERIVES_FROM_TYPE,
-      report.nodeId,
-      sessionNodeOf(first),
-    ),
-  ).toBe(1);
+  expect(await countEdges(driver, SUMMARIZED_BY_TYPE, first, report.nodeId)).toBe(1);
+  expect(await countEdges(driver, DERIVES_FROM_TYPE, report.nodeId, sessionNodeOf(first))).toBe(1);
 
   expect(readPublishedHead(store.db, CHUNK_REVISION_FAMILY, chunkId)).toBe(1);
   expect(readChunk(store.db, chunkId)?.state).toBe('published');
@@ -366,7 +92,7 @@ it('seals a session tail at its close and publishes one revision over exactly it
 });
 
 it('leaves a head whose dependency versions still read the same, and asks no model', async () => {
-  const report = await publishChunkNarrative(chunks, basicChunkId, { now: NOW });
+  const report = await publishChunkNarrative(chunks, battery.basicChunkId, { now: NOW });
   expect(report.status).toBe('skipped');
   expect(prompts).toEqual([]);
 });
@@ -381,7 +107,7 @@ it('omits a forgotten member with its gap while its neighbours are submitted who
   const firstNode = initial.status === 'published' ? initial.nodeId : '';
 
   forget(forgotten, 'forget-delta');
-  prompts = [];
+  resetPrompts();
   const replacement = await publishChunkNarrative(chunks, chunkId, { now: NOW });
   expect(replacement.status).toBe('published');
   if (replacement.status !== 'published') {
@@ -404,12 +130,10 @@ it('omits a forgotten member with its gap while its neighbours are submitted who
   // Membership is frozen: the omitted member is still a member of this chunk.
   expect(listChunkMembers(store.db, chunkId)).toEqual([first, forgotten, third]);
   // The head it replaced stopped summarizing the session, and the new one does.
-  expect(await countOpenEdgesInto(substrate.harness.driver, SUMMARIZED_BY_TYPE, firstNode)).toBe(0);
+  expect(await countOpenEdgesInto(driver, SUMMARIZED_BY_TYPE, firstNode)).toBe(0);
   // Residency decides the edges, and suppression is not eviction: the omitted member is still
   // resident, so its structural edge is written exactly as the manifest records its membership.
-  expect(
-    await countOpenEdgesInto(substrate.harness.driver, SUMMARIZED_BY_TYPE, replacement.nodeId),
-  ).toBe(3);
+  expect(await countOpenEdgesInto(driver, SUMMARIZED_BY_TYPE, replacement.nodeId)).toBe(3);
 });
 
 it('publishes nothing for a chunk whose every member is forgotten', async () => {
@@ -434,7 +158,7 @@ it('blocks the whole revision when the correction it must reground on is suppres
   const corrector = await acceptCorrection('session-corrector', 'theta', member);
 
   forget(corrector, 'forget-theta');
-  prompts = [];
+  resetPrompts();
   const blocked = await publishChunkNarrative(chunks, chunkId, { now: NOW });
   expect(blocked.status).toBe('blocked');
   if (blocked.status === 'blocked') {
@@ -486,148 +210,10 @@ it('seals an oversized member alone and publishes the ranges it actually submitt
 
   const submitted = gaps[0]?.submitted.reduce((sum, range) => sum + (range.end - range.start), 0);
   expect(submitted).toBeLessThan(body('iota').length);
-  const properties = await nodeProperties(substrate.harness.driver, report.nodeId);
+  const properties = await nodeProperties(driver, report.nodeId);
   expect(properties[NARRATIVE_PROPERTIES.coverage]).toBeLessThan(1);
   // The gapped revision never claims the whole member: only the submitted prefix reached it.
   expect(prompts[0]).not.toContain(body('iota'));
-});
-
-it('defers a publication whose head moved under it, and publishes nothing', async () => {
-  const only = await accept('session-race', 'kappa');
-  const chunkId = await sealAndPublish('session-race');
-  const first = await publishChunkNarrative(chunks, chunkId, { now: NOW });
-  expect(first.status).toBe('published');
-
-  // A second attempt carrying the head the first one saw. The guard reads the ACTUAL head, so
-  // an output prepared against a superseded one is refused rather than becoming the head.
-  const allocation = allocateNarrativeRevision(store.db, CHUNK_REVISION_FAMILY, chunkId, NOW);
-  const outcome = await coordinator.publish({
-    kind: 'narrative_publish',
-    operationId: `stale-head:${chunkId}`,
-    payload: {
-      chunkId,
-      sessionId: sessionNodeOf(only),
-      revisionNo: allocation.revisionNo,
-      nodeId: allocation.nodeId,
-      summary: 'a stale answer',
-      narrative: 'a stale answer',
-      citations: [{ targetId: only, targetKind: 'source' }],
-      sentenceCount: 1,
-      coverage: 1,
-      occurredAt: NOW.toISOString(),
-      members: [{ sourceId: only, residency: 'resident', projectionGeneration: 0 }],
-      coverageGaps: [],
-      dependencies: [],
-      coverageEpoch: readCurrentCoverageContract(store.db)?.epoch ?? '',
-      expectedHead: null,
-    },
-  });
-  expect(outcome.status).toBe('deferred');
-  if (outcome.status !== 'acknowledged') {
-    expect(outcome.reason).toBe('published_head_moved');
-  }
-  expect(readPublishedHead(store.db, CHUNK_REVISION_FAMILY, chunkId)).toBe(1);
-  expect(await countNodesWithId(substrate.harness.driver, 'Narrative', allocation.nodeId)).toBe(0);
-});
-
-it('finishes a publication interrupted between the graph write and the manifest, exactly once', async () => {
-  const only = await accept('session-crash', 'lambda');
-  const chunkId = await sealAndPublish('session-crash');
-  failAt = 'before_ack';
-  await expect(publishChunkNarrative(chunks, chunkId, { now: NOW })).rejects.toThrow();
-
-  // The node and the receipt are committed; the manifest has not caught up yet.
-  expect(readPublishedHead(store.db, CHUNK_REVISION_FAMILY, chunkId)).toBeUndefined();
-  const recovered = await coordinator.recover();
-  expect(recovered?.status).toBe('acknowledged');
-  expect(readPublishedHead(store.db, CHUNK_REVISION_FAMILY, chunkId)).toBe(1);
-
-  const head = readPublishedRevision(store.db, CHUNK_REVISION_FAMILY, chunkId);
-  expect(head).toBeDefined();
-  // Exactly once: a second recovery adds no citation and moves no head.
-  const citations = readCitationsFrom(store.db, head?.nodeId ?? '');
-  expect(await coordinator.recover()).toBeUndefined();
-  expect(readCitationsFrom(store.db, head?.nodeId ?? '')).toEqual(citations);
-  expect(citations.map((row) => row.targetId)).toEqual([only]);
-});
-
-it('gives an evicted member no edge and keeps its membership and citations', async () => {
-  const resident = await accept('session-evicted', 'mu');
-  const evicted = await accept('session-evicted', 'nu');
-  transitionSourceResidency(store.db, {
-    sourceId: evicted,
-    state: 'evicted',
-    operationId: 'evict-nu',
-    transitionedAt: NOW,
-  });
-  const chunkId = await sealAndPublish('session-evicted');
-  const report = await publishChunkNarrative(chunks, chunkId, { now: NOW });
-  expect(report.status).toBe('published');
-  if (report.status !== 'published') {
-    return;
-  }
-  expect(listChunkMembers(store.db, chunkId)).toEqual([resident, evicted]);
-  expect(
-    await countEdges(substrate.harness.driver, SUMMARIZED_BY_TYPE, resident, report.nodeId),
-  ).toBe(1);
-  expect(
-    await countEdges(substrate.harness.driver, SUMMARIZED_BY_TYPE, evicted, report.nodeId),
-  ).toBe(0);
-  // The evidence is unchanged by eviction, so the evicted member is still submitted and cited.
-  expect(prompts[0]).toContain(body('nu'));
-  expect(
-    readCitationsFrom(store.db, report.nodeId)
-      .map((row) => row.targetId)
-      .sort(),
-  ).toEqual([resident, evicted].sort());
-});
-
-it('defers rather than skipping a member the records call resident with no projection', async () => {
-  await accept('session-missing', 'xi');
-  const vanished = await accept('session-missing', 'omicron');
-  const chunkId = await sealAndPublish('session-missing');
-  await renameNodeId(substrate.harness.driver, vanished, `${vanished}-hidden`);
-
-  const report = await publishChunkNarrative(chunks, chunkId, { now: NOW });
-  expect(report.status).toBe('deferred');
-  if (report.status === 'deferred') {
-    expect(report.reason).toBe('member_projection_missing');
-  }
-  expect(readPublishedHead(store.db, CHUNK_REVISION_FAMILY, chunkId)).toBeUndefined();
-  // The guard was released rather than held: nothing is pending and other writers can publish.
-  expect(coordinator.hasPending()).toBe(false);
-
-  // Restored, the same chunk publishes, and its edge names the projection that came back.
-  await renameNodeId(substrate.harness.driver, `${vanished}-hidden`, vanished);
-  const republished = await publishChunkNarrative(chunks, chunkId, { now: NOW });
-  expect(republished.status).toBe('published');
-  if (republished.status === 'published') {
-    expect(
-      await countEdges(substrate.harness.driver, SUMMARIZED_BY_TYPE, vanished, republished.nodeId),
-    ).toBe(1);
-  }
-});
-
-it('refuses the whole write when a projection goes between the check and the edge', async () => {
-  const present = await accept('session-vanish', 'rho');
-  const vanishing = await accept('session-vanish', 'sigma');
-  const chunkId = await sealAndPublish('session-vanish');
-  // Deleted after the check passed and before the graph transaction runs, which is the window
-  // the signed text calls an inconsistency rather than a member to skip.
-  hideAtPrepared = vanishing;
-  await expect(publishChunkNarrative(chunks, chunkId, { now: NOW })).rejects.toThrow();
-  expect(readPublishedHead(store.db, CHUNK_REVISION_FAMILY, chunkId)).toBeUndefined();
-  const attempted = readNarrativeRevision(store.db, CHUNK_REVISION_FAMILY, chunkId, 1);
-  expect(attempted?.state).not.toBe('published');
-  expect(
-    await countNodesWithId(substrate.harness.driver, 'Narrative', attempted?.nodeId ?? ''),
-  ).toBe(0);
-  expect(await countNodesWithId(substrate.harness.driver, 'Episode', present)).toBe(1);
-
-  // The pending attempt is finished by recovery once the projection is back, not by skipping it.
-  await renameNodeId(substrate.harness.driver, `${vanishing}-hidden`, vanishing);
-  expect((await coordinator.recover())?.status).toBe('acknowledged');
-  expect(readPublishedHead(store.db, CHUNK_REVISION_FAMILY, chunkId)).toBe(1);
 });
 
 it('seals and publishes while the members still owe every downstream stage', async () => {
@@ -672,36 +258,17 @@ it('serves two chunks of one session at once, and supersedes neither across them
   // write, which across a chunked session would retire the chunk before this one every time.
   expect(readPublishedHead(store.db, CHUNK_REVISION_FAMILY, first)).toBe(1);
   expect(readPublishedHead(store.db, CHUNK_REVISION_FAMILY, second)).toBe(1);
-  expect(
-    await countOpenEdgesInto(substrate.harness.driver, SUMMARIZED_BY_TYPE, firstPublished.nodeId),
-  ).toBe(1);
-  expect(
-    await countEdges(substrate.harness.driver, SUMMARIZED_BY_TYPE, early, firstPublished.nodeId),
-  ).toBe(1);
+  expect(await countOpenEdgesInto(driver, SUMMARIZED_BY_TYPE, firstPublished.nodeId)).toBe(1);
+  expect(await countEdges(driver, SUMMARIZED_BY_TYPE, early, firstPublished.nodeId)).toBe(1);
   // No supersession between two chunks of one session, in either direction.
   expect(
-    await countEdges(
-      substrate.harness.driver,
-      SUPERSEDES_TYPE,
-      secondPublished.nodeId,
-      firstPublished.nodeId,
-    ),
+    await countEdges(driver, SUPERSEDES_TYPE, secondPublished.nodeId, firstPublished.nodeId),
   ).toBe(0);
   expect(
-    await countEdges(
-      substrate.harness.driver,
-      SUPERSEDES_TYPE,
-      firstPublished.nodeId,
-      secondPublished.nodeId,
-    ),
+    await countEdges(driver, SUPERSEDES_TYPE, firstPublished.nodeId, secondPublished.nodeId),
   ).toBe(0);
 });
 
-/**
- * The distinct rule the seal-time eligibility fix must not weaken. A member whose evidence was
- * proved when its membership froze, and became unreadable afterwards, keeps its membership: that
- * chunk stays sealed and refuses to publish, and the chunk beside it publishes normally.
- */
 it('blocks only its own chunk when a frozen member stops being readable', async () => {
   await accept('session-blocked-neighbour', 'phi');
   const healthyChunk = await sealAndPublish('session-blocked-neighbour');
@@ -735,11 +302,6 @@ it('blocks only its own chunk when a frozen member stops being readable', async 
     .run(digest.d, broken);
 });
 
-/**
- * The required set is the standing requirement, so it has to shrink as well as grow. A retired
- * statement stops being required; a change to something this chunk never rested on requires
- * nothing at all.
- */
 it('drops a retired correction from the required input and adds nothing for an unrelated change', async () => {
   const member = await accept('session-standing', 'psi');
   const chunkId = await sealAndPublish('session-standing');
@@ -764,171 +326,4 @@ it('drops a retired correction from the required input and adds nothing for an u
   const unrelated = await publishChunkNarrative(chunks, chunkId, { now: NOW });
   expect(unrelated).toMatchObject({ status: 'skipped', reason: 'head_current' });
   expect(prompts).toHaveLength(asked);
-});
-
-/**
- * What durable state a run leaves behind. A number is spent when it is handed out, so the only
- * question is which rows stay runnable: the one an attempt died before binding, none at all once
- * a publication lands, and a fresh one carrying the reason when an output is refused.
- */
-it('takes up its own unpublished allocation and leaves none runnable once one publishes', async () => {
-  await accept('session-retry', 'rho2');
-  const chunkId = await sealAndPublish('session-retry');
-
-  const failing: ChunkNarrativeDeps = {
-    ...chunks,
-    provider: {
-      embed: () => Promise.reject(new Error('no embedding in this battery')),
-      generate: () => Promise.reject(new Error('the provider refused')),
-    },
-  };
-  const failed = await publishChunkNarrative(failing, chunkId, { now: NOW });
-  expect(failed.status).toBe('failed');
-  const held = listAllocatedRevisions(store.db, CHUNK_REVISION_FAMILY, chunkId);
-  expect(held.map((row) => row.revisionNo)).toEqual(
-    failed.status === 'failed' ? [failed.revisionNo] : [],
-  );
-
-  const published = await publishChunkNarrative(chunks, chunkId, { now: NOW });
-  expect(published.status).toBe('published');
-  if (published.status !== 'published' || failed.status !== 'failed') {
-    return;
-  }
-  // The same number, taken up rather than spent beside the first.
-  expect(published.revisionNo).toBe(failed.revisionNo);
-  expect(readPublishedHead(store.db, CHUNK_REVISION_FAMILY, chunkId)).toBe(published.revisionNo);
-  // Nothing is left runnable: a scheduler reading durable state sees no owed work here.
-  expect(listAllocatedRevisions(store.db, CHUNK_REVISION_FAMILY, chunkId)).toEqual([]);
-  expect(
-    nominateRetryableRevisions(store.db, CHUNK_REVISION_FAMILY, NOW, 10).map((r) => r.familyKey),
-  ).not.toContain(chunkId);
-});
-
-it('leaves a runnable row carrying the reason when the guard refuses the output', async () => {
-  const first = await accept('session-refused', 'sigma2');
-  const second = await accept('session-refused', 'tau2');
-  const chunkId = await sealAndPublish('session-refused');
-  expect((await publishChunkNarrative(chunks, chunkId, { now: NOW })).status).toBe('published');
-
-  forget(first, 'forget-sigma2');
-  // The evidence moves again while the model is being asked, so what comes back describes a
-  // substrate that has changed under it.
-  duringGeneration = () => {
-    forget(second, 'forget-tau2');
-  };
-  const deferred = await publishChunkNarrative(chunks, chunkId, { now: NOW });
-  expect(deferred.status).toBe('deferred');
-  if (deferred.status !== 'deferred') {
-    return;
-  }
-  expect(deferred.reason).toContain('evidence_');
-  expect(readPublishedHead(store.db, CHUNK_REVISION_FAMILY, chunkId)).toBe(1);
-
-  // The refused number is spent, and the work is still visible: one runnable row, due now,
-  // carrying what refused it for the scheduler that decides how long to wait.
-  const owed = listAllocatedRevisions(store.db, CHUNK_REVISION_FAMILY, chunkId);
-  expect(owed.map((row) => row.revisionNo)).toEqual([deferred.revisionNo]);
-  const row = readNarrativeRevision(store.db, CHUNK_REVISION_FAMILY, chunkId, deferred.revisionNo);
-  expect(row?.lastFailureReason).toBe(deferred.reason);
-  expect(row?.attempts).toBe(1);
-  expect(row?.nextAttemptAt).toBeNull();
-  // Runnable: due now, unblocked, and nominated by the retry read the scheduler pages on.
-  expect(
-    nominateRetryableRevisions(store.db, CHUNK_REVISION_FAMILY, NOW, 10).map((r) => r.familyKey),
-  ).toContain(chunkId);
-});
-
-it('never takes up an allocation another attempt has bound to a durable intent', async () => {
-  await accept('session-bound', 'upsilon2');
-  const chunkId = await sealAndPublish('session-bound');
-  failAt = 'before_ack';
-  await expect(publishChunkNarrative(chunks, chunkId, { now: NOW })).rejects.toThrow();
-  const bound = listAllocatedRevisions(store.db, CHUNK_REVISION_FAMILY, chunkId);
-  expect(bound).toHaveLength(1);
-  expect(bound[0]?.operationId).not.toBeNull();
-
-  // A second attempt neither steals the bound number nor publishes beside it. It cannot even
-  // certify its evidence while a publication is pending, which is the honest refusal: the reading
-  // this revision would rest on is one nobody can take a position on yet.
-  const next = await publishChunkNarrative(chunks, chunkId, { now: NOW });
-  expect(next.status).not.toBe('published');
-  if (next.status !== 'skipped') {
-    expect(next.revisionNo).not.toBe(bound[0]?.revisionNo);
-  }
-  expect(readPublishedHead(store.db, CHUNK_REVISION_FAMILY, chunkId)).toBeUndefined();
-
-  // Recovery is what finishes the bound attempt, and it finishes THAT number rather than either
-  // of the ones allocated beside it.
-  expect((await coordinator.recover())?.status).toBe('acknowledged');
-  expect(readPublishedHead(store.db, CHUNK_REVISION_FAMILY, chunkId)).toBe(bound[0]?.revisionNo);
-});
-
-/**
- * What a publication owes a later reader: a walk that can cross it, and a moved token wherever a
- * citation population changed. The evicted member is the point of the durable half — the graph
- * fallback is gone and the records are all that is left.
- */
-it('lets a durable walk cross the narrative to an evicted member, and invalidates a dropped target', async () => {
-  const kept = await accept('session-walk', 'phi2');
-  const dropped = await accept('session-walk', 'chi2');
-  const chunkId = await sealAndPublish('session-walk');
-  const first = await publishChunkNarrative(chunks, chunkId, { now: NOW });
-  expect(first.status).toBe('published');
-  if (first.status !== 'published') {
-    return;
-  }
-
-  // A reader fenced on "this target's citation population" as it stood at the first head. The
-  // census is what makes an inbound citation population bindable at all, and counting it is the
-  // seal's job rather than this publication's: what a revision counts is its own outbound set.
-  const key = { endpointId: dropped, relationClass: 'sqlite.revision_citations' };
-  establishScope(store.db, dropped, 'sqlite.revision_citations', NOW);
-  const held = buildEvidenceRevision([
-    {
-      kind: 'relation_scope',
-      id: dropped,
-      scope: 'sqlite.revision_citations',
-      version: publishedScopeToken(store.db, key) ?? '',
-    },
-  ]);
-  expect(verifyEvidenceRevision(store.db, held).status).toBe('current');
-
-  // The member is evicted, so nothing but the records can answer for it.
-  transitionSourceResidency(store.db, {
-    sourceId: kept,
-    state: 'evicted',
-    operationId: 'evict-phi2',
-    transitionedAt: NOW,
-  });
-  const derived = await accept('session-walk-child', 'psi2');
-  prepareStatedLinkVersion(store.db, {
-    linkId: statedLinkId('derived_from', 'retained_node', derived, first.nodeId),
-    kind: 'derived_from',
-    qualifier: 'retained_node',
-    fromId: derived,
-    toId: first.nodeId,
-    operationId: 'derive-from-chunk-narrative',
-    operationKey: 'derive-from-chunk-narrative',
-    recordedValues: {},
-    temporalProof: {},
-    observedAt: NOW,
-    referenceSourceId: derived,
-    referenceVersion: 1,
-  });
-  acknowledgeStatedLinkVersions(
-    store.db,
-    'derive-from-chunk-narrative',
-    NOW.toISOString(),
-    NOW.toISOString(),
-  );
-  establishScope(store.db, derived, durableRoleScope('stated_derivation', 'out'), NOW);
-  const walk = walkLineage(store.db, [derived], undefined);
-  expect(walk.roots).toContain(kept);
-  expect(walk.complete).toBe(true);
-
-  // The replacement stops citing the dropped member, and the token a reader held moves with it.
-  forget(dropped, 'forget-chi2');
-  expect((await publishChunkNarrative(chunks, chunkId, { now: NOW })).status).toBe('published');
-  expect(readCitationsOf(store.db, dropped)).toEqual([]);
-  expect(verifyEvidenceRevision(store.db, held).status).toBe('stale');
 });
