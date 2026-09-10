@@ -74,6 +74,12 @@ export function memberTextOf(evidence: SourceEvidence): ChunkMemberText {
 export type ResolvedMembers = {
   readonly readings: readonly ChunkMemberEvidence[];
   readonly dependencies: readonly EvidenceDependency[];
+  /**
+   * Scopes this read needed and could not bind. A caller publishing on them would certify an
+   * answer nothing can later invalidate; a caller only sealing may ignore them, because the
+   * membership question does not rest on what has been said about a member.
+   */
+  readonly unprovedScopes: readonly UnprovedScope[];
 };
 
 /**
@@ -81,25 +87,43 @@ export type ResolvedMembers = {
  *
  * "Nothing corrects this" and "nothing confirms this" are readings a revision rests on as surely
  * as the text itself, and a revision fenced only on its members' own records goes on standing
- * after a correction arrives. Each is bound at its own token where a census has counted the scope;
- * where none has, nothing is bound, because a reader that looked once and found nothing has
- * established no membership to fence on.
+ * after a correction arrives. Each is bound at its own token where a census has counted the scope.
+ *
+ * Where none has, the reader binds nothing AND says so. Silently omitting the dependency was the
+ * defect: it read as a publishable input, and the revision it produced had no scope for a later
+ * correction to invalidate — the answer would stand for good. A reader may not mint a census, so
+ * the uncertainty travels to the plan and holds the publication instead.
  */
 const INCOMING_STATEMENT_ROLES = ['stated_correction', 'stated_confirmation'] as const;
 
-function incomingStatementScopes(
-  db: SqliteHandle,
-  sourceId: string,
-): readonly EvidenceDependency[] {
-  return INCOMING_STATEMENT_ROLES.flatMap((role) => {
+export type UnprovedScope = {
+  readonly sourceId: string;
+  readonly scope: string;
+};
+
+type ScopeReading = {
+  readonly dependencies: readonly EvidenceDependency[];
+  readonly unproved: readonly UnprovedScope[];
+};
+
+function incomingStatementScopes(db: SqliteHandle, sourceId: string): ScopeReading {
+  const dependencies: EvidenceDependency[] = [];
+  const unproved: UnprovedScope[] = [];
+  for (const role of INCOMING_STATEMENT_ROLES) {
+    const scope = durableRoleScope(role, 'in');
     const reading = readRelationScope(db, {
       kind: 'relation_scope',
       endpointId: sourceId,
-      scope: durableRoleScope(role, 'in'),
+      scope,
       empty: false,
     });
-    return reading.status === 'verified' ? [reading.dependency] : [];
-  });
+    if (reading.status === 'verified') {
+      dependencies.push(reading.dependency);
+    } else {
+      unproved.push({ sourceId, scope });
+    }
+  }
+  return { dependencies, unproved };
 }
 
 /**
@@ -115,7 +139,7 @@ export async function resolveChunkMembers(
   context: CheckedReadContext,
 ): Promise<ResolvedMembers> {
   if (sourceIds.length === 0) {
-    return { readings: [], dependencies: [] };
+    return { readings: [], dependencies: [], unprovedScopes: [] };
   }
   const batch = await resolver.resolveSources(
     sourceIds.map(idAddress),
@@ -130,12 +154,14 @@ export async function resolveChunkMembers(
       ? { sourceId, reading, text: memberTextOf(result.value) }
       : { sourceId, reading };
   });
+  const scopes = sourceIds.map((sourceId) => incomingStatementScopes(db, sourceId));
   return {
     readings,
     dependencies: [
       ...batch.revision.dependencies,
-      ...sourceIds.flatMap((sourceId) => incomingStatementScopes(db, sourceId)),
+      ...scopes.flatMap((reading) => reading.dependencies),
     ],
+    unprovedScopes: scopes.flatMap((reading) => reading.unproved),
   };
 }
 

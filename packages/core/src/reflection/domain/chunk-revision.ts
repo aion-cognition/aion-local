@@ -58,6 +58,7 @@ export type CoverageGap =
   | { readonly reason: 'suppressed_member'; readonly sourceId: string };
 
 export type ChunkBlockReason =
+  | 'member_scope_census_missing'
   | 'member_evidence_missing'
   | 'member_over_resolver_budget'
   | 'no_admissible_input'
@@ -95,6 +96,14 @@ export type ChunkInputRequest = {
   readonly oversizedMember?: string;
   /** The ranges the render would submit for that member, recorded on the gap. */
   readonly submittedRanges?: readonly SubmittedRange[];
+  /**
+   * Scopes the read needed and could not bind, as `<source>:<scope>` pairs.
+   *
+   * A revision published on an uncounted incoming-statement population is one no later correction
+   * can invalidate: nothing was bound, so nothing can move. Holding is the conservative answer and
+   * omitting the dependency was not.
+   */
+  readonly unprovedScopes?: readonly { readonly sourceId: string; readonly scope: string }[];
 };
 
 function block(reason: ChunkBlockReason, detail: string): ChunkInputPlan {
@@ -170,6 +179,15 @@ export function planChunkInput(request: ChunkInputRequest): ChunkInputPlan {
   const memberBlocked = memberRefusal(request.members);
   if (memberBlocked !== undefined) {
     return memberBlocked;
+  }
+  const unproved = request.unprovedScopes ?? [];
+  const firstUnproved = unproved[0];
+  if (firstUnproved !== undefined) {
+    return block(
+      'member_scope_census_missing',
+      `${String(unproved.length)} required scope(s) are uncounted, starting with ` +
+        `${firstUnproved.scope} on ${firstUnproved.sourceId}`,
+    );
   }
 
   const gaps: CoverageGap[] = [];

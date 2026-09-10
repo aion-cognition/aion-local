@@ -89,6 +89,29 @@ describe('what a revision may submit', () => {
     ).toBe('unscoped_coverage_gap');
   });
 
+  /**
+   * A revision published on an uncounted incoming-statement population is one no later correction
+   * can invalidate: nothing was bound, so nothing can move. The reader may not mint the census.
+   */
+  it('blocks while a required scope population is uncounted', () => {
+    const plan = planChunkInput({
+      members: [member('s1')],
+      allowance: ALLOWANCE,
+      unprovedScopes: [{ sourceId: 's1', scope: 'sqlite:stated_correction:in' }],
+    });
+    expect(blockReason(plan)).toBe('member_scope_census_missing');
+    if (plan.status === 'block') {
+      expect(plan.detail).toContain('sqlite:stated_correction:in');
+      expect(plan.detail).toContain('s1');
+    }
+  });
+
+  it('renders once every required scope population is counted', () => {
+    expect(
+      planChunkInput({ members: [member('s1')], allowance: ALLOWANCE, unprovedScopes: [] }).status,
+    ).toBe('render');
+  });
+
   it('blocks a member over the resolver budget rather than submitting part of it', () => {
     expect(
       blockReason(planChunkInput({ members: [member('s1', 'over_budget')], allowance: ALLOWANCE })),

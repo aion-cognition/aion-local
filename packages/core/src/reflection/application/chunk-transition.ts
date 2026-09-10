@@ -63,7 +63,7 @@ export async function chunkTransitionEvidence(
   context: CheckedReadContext,
 ): Promise<TransitionEvidence> {
   if (changed.length === 0) {
-    return { readings: [], dependencies: [], unresolved: [] };
+    return { readings: [], dependencies: [], unresolved: [], unprovedScopes: [] };
   }
   const members = new Set(frozenMembers);
   const { sources, endpoints } = transitionEndpoints(changed);
@@ -98,5 +98,8 @@ export async function chunkTransitionEvidence(
     ],
     dependencies,
     unresolved,
+    // The transition sources' own incoming-statement scopes are not what this revision rests on:
+    // what it needs from them is their content. An unproved scope on a correction holds nothing.
+    unprovedScopes: [],
   };
 }

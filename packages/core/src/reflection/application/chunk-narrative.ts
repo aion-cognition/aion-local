@@ -308,6 +308,9 @@ export async function publishChunkNarrative(
   const plan = planChunkInput({
     members: members.readings,
     transition: transition.readings,
+    // Sealing never consults these: what may still be said about a member is not a membership
+    // question. Publishing does, because the revision is what would rest on the reading.
+    unprovedScopes: members.unprovedScopes,
     allowance: policy.renderedInputAllowance,
     ...(oversized === undefined ? {} : { oversizedMember: oversized }),
   });
@@ -456,7 +459,7 @@ async function settledMembers(
         : member,
     );
   }
-  return { readings, dependencies: batch.dependencies };
+  return { readings, dependencies: batch.dependencies, unprovedScopes: batch.unprovedScopes };
 }
 
 /**

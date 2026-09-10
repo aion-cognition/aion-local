@@ -124,6 +124,10 @@ async function accept(session: string, marker: string): Promise<string> {
     { observations: [body(marker)] },
     { identity: session, now: NOW },
   );
+  // Every accepted source gets its incoming-statement census, which is what a cohort seal
+  // establishes at scale and what a publication now requires: a revision resting on an uncounted
+  // "nothing corrects this" is one no correction could ever invalidate.
+  establishStatementCensus(result.episode_id);
   return result.episode_id;
 }
 
@@ -370,7 +374,6 @@ it('publishes nothing for a chunk whose every member is forgotten', async () => 
 it('blocks the whole revision when the correction it must reground on is suppressed', async () => {
   const member = await accept('session-correction', 'eta');
   const corrector = await accept('session-corrector', 'theta');
-  establishStatementCensus(member);
   const chunkId = await sealAndPublish('session-correction');
   expect((await publishChunkNarrative(chunks, chunkId, { now: NOW })).status).toBe('published');
 
