@@ -12,10 +12,14 @@ export const NARRATIVE_SCHEMA_STATEMENTS: readonly string[] = [
    * the head: null until a first publication lands, and moved only by one that succeeds.
    *
    * `overlaps_json` is F13 D6's annotation: the earlier chunks of this session whose world-time
-   * span contains this one's earliest member. A backdated arrival joins the remainder and seals
+   * span contains ANY of this one's members. A backdated arrival joins the remainder and seals
    * into a later chunk rather than repartitioning history, so the overlap is the only record that
    * the two describe the same stretch of time. Null and empty differ as they do everywhere here:
    * null means nobody computed it, an empty array means it was computed and there was none.
+   *
+   * `overlaps_truncated` is what keeps a bounded read from reading as a survey: set when the seal
+   * found more overlapping chunks than its limit stores, so a later reader knows the list names
+   * some of them rather than all of them.
    */
   `CREATE TABLE IF NOT EXISTS chunks (
     chunk_id TEXT PRIMARY KEY,
@@ -26,7 +30,8 @@ export const NARRATIVE_SCHEMA_STATEMENTS: readonly string[] = [
     published_revision_no INTEGER,
     member_count INTEGER NOT NULL CHECK (member_count > 0),
     created_at TEXT NOT NULL,
-    overlaps_json TEXT
+    overlaps_json TEXT,
+    overlaps_truncated INTEGER
   )`,
   /**
    * Frozen membership. A source seals into exactly one chunk and never moves, which is what
@@ -198,6 +203,7 @@ export const NARRATIVE_SCHEMA_STATEMENTS: readonly string[] = [
  */
 export const NARRATIVE_COLUMN_ADDITIONS: readonly ColumnAddition[] = [
   { table: 'chunks', column: 'overlaps_json', definition: 'TEXT' },
+  { table: 'chunks', column: 'overlaps_truncated', definition: 'INTEGER' },
   { table: 'chunk_revisions', column: 'coverage_gaps_json', definition: 'TEXT' },
   {
     table: 'chunk_revisions',

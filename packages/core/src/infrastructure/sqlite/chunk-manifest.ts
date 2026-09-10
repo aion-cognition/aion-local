@@ -85,8 +85,10 @@ export type SealedChunk = {
   readonly publishedRevisionNo: number | null;
   readonly memberCount: number;
   readonly createdAt: string;
-  /** F13 D6: earlier chunks of this session whose world-time span holds this one's earliest member. */
+  /** F13 D6: earlier chunks of this session whose world-time span holds any of this one's members. */
   readonly overlaps: readonly string[] | undefined;
+  /** Whether more overlapping chunks were found than the bound stores. A list, not a survey. */
+  readonly overlapsTruncated: boolean | undefined;
 };
 
 type ChunkRowData = {
@@ -99,10 +101,11 @@ type ChunkRowData = {
   member_count: number;
   created_at: string;
   overlaps_json: string | null;
+  overlaps_truncated: number | null;
 };
 
 const SELECT_CHUNK = `SELECT chunk_id, session_id, partition_policy_version, state, sealed_at,
-    published_revision_no, member_count, created_at, overlaps_json
+    published_revision_no, member_count, created_at, overlaps_json, overlaps_truncated
   FROM chunks`;
 
 function toChunk(row: ChunkRowData): SealedChunk {
@@ -116,36 +119,58 @@ function toChunk(row: ChunkRowData): SealedChunk {
     memberCount: row.member_count,
     createdAt: row.created_at,
     overlaps: row.overlaps_json === null ? undefined : (JSON.parse(row.overlaps_json) as string[]),
+    overlapsTruncated: row.overlaps_truncated === null ? undefined : row.overlaps_truncated === 1,
   };
 }
 
+/** What a bounded overlap read found, and whether the bound cut it short. */
+type OverlapAnnotation = {
+  readonly chunkIds: readonly string[];
+  readonly truncated: boolean;
+};
+
 /**
- * Earlier chunks of this session whose members' world-time span holds `earliest`.
+ * Earlier chunks of this session whose members' world-time span holds a member of `sourceIds`.
  *
  * The condition is F13 D6's: an arrival whose world time falls inside a sealed chunk's span does
- * not repartition it. Both bounds are compared against the same moment, so a chunk is named only
- * when the new membership genuinely starts inside it rather than merely before it ended.
+ * not repartition it. It is asked of EVERY new member, not only the earliest one. A membership
+ * that opens before an old chunk and reaches into it overlaps that chunk on its later member, and
+ * testing the earliest arrival alone answered for a moment no old span contained and stored
+ * nothing — the annotation was silently empty exactly where a backdated arrival made it matter.
+ *
+ * One row past the bound is asked for so the caller can say the list is partial. A bounded read
+ * is what this is; presenting it as the complete set would be the claim it cannot support.
  */
 function overlappingChunks(
   db: SqliteHandle,
   sessionId: string,
-  earliest: string,
+  sourceIds: readonly string[],
   limit: number,
-): readonly string[] {
+): OverlapAnnotation {
+  const placeholders = new Array(sourceIds.length).fill('?').join(', ');
   const rows = db
     .prepare(
-      `SELECT c.chunk_id
-         FROM chunks c
-         JOIN chunk_members m ON m.chunk_id = c.chunk_id
-         JOIN source_records r ON r.source_id = m.source_id
-        WHERE c.session_id = ?
-        GROUP BY c.chunk_id
-       HAVING MIN(r.occurred_at) <= ? AND MAX(r.occurred_at) >= ?
-        ORDER BY c.sealed_at, c.chunk_id
+      `SELECT s.chunk_id AS chunk_id
+         FROM (SELECT c.chunk_id AS chunk_id, c.sealed_at AS sealed_at,
+                      MIN(r.occurred_at) AS span_start, MAX(r.occurred_at) AS span_end
+                 FROM chunks c
+                 JOIN chunk_members m ON m.chunk_id = c.chunk_id
+                 JOIN source_records r ON r.source_id = m.source_id
+                WHERE c.session_id = ?
+                GROUP BY c.chunk_id) s
+        WHERE EXISTS (SELECT 1
+                        FROM source_records n
+                       WHERE n.source_id IN (${placeholders})
+                         AND n.occurred_at >= s.span_start
+                         AND n.occurred_at <= s.span_end)
+        ORDER BY s.sealed_at, s.chunk_id
         LIMIT ?`,
     )
-    .all(sessionId, earliest, earliest, limit) as { chunk_id: string }[];
-  return rows.map((row) => row.chunk_id);
+    .all(sessionId, ...sourceIds, limit + 1) as { chunk_id: string }[];
+  return {
+    chunkIds: rows.slice(0, limit).map((row) => row.chunk_id),
+    truncated: rows.length > limit,
+  };
 }
 
 export function readChunk(db: SqliteHandle, chunkId: string): SealedChunk | undefined {
@@ -173,20 +198,6 @@ export function chunkOfSource(db: SqliteHandle, sourceId: string): string | unde
   const row = db.prepare('SELECT chunk_id FROM chunk_members WHERE source_id = ?').get(sourceId) as
     { chunk_id: string } | undefined;
   return row?.chunk_id;
-}
-
-/** The earliest world time in a membership, which is where an overlap is measured from. */
-function earliestMemberWorldTime(
-  db: SqliteHandle,
-  sourceIds: readonly string[],
-): string | undefined {
-  const placeholders = new Array(sourceIds.length).fill('?').join(', ');
-  const row = db
-    .prepare(
-      `SELECT MIN(occurred_at) AS earliest FROM source_records WHERE source_id IN (${placeholders})`,
-    )
-    .get(...sourceIds) as { earliest: string | null };
-  return row.earliest ?? undefined;
 }
 
 export type ChunkSealInput = {
@@ -294,15 +305,11 @@ export function sealChunk(db: SqliteHandle, input: ChunkSealInput): ChunkSealOut
       const sealedAt = input.sealedAt.toISOString();
       // Computed inside the seal's own transaction, over the chunks that were already sealed when
       // this membership froze. Membership stays append-only: nothing about them moves.
-      const earliest = earliestMemberWorldTime(db, input.sourceIds);
-      const overlaps =
-        earliest === undefined
-          ? []
-          : overlappingChunks(db, input.sessionId, earliest, CHUNK_OVERLAP_LIMIT);
+      const overlaps = overlappingChunks(db, input.sessionId, input.sourceIds, CHUNK_OVERLAP_LIMIT);
       db.prepare(
         `INSERT INTO chunks (chunk_id, session_id, partition_policy_version, state, sealed_at,
-           member_count, created_at, overlaps_json)
-         VALUES (?, ?, ?, 'sealed', ?, ?, ?, ?)`,
+           member_count, created_at, overlaps_json, overlaps_truncated)
+         VALUES (?, ?, ?, 'sealed', ?, ?, ?, ?, ?)`,
       ).run(
         chunkId,
         input.sessionId,
@@ -310,7 +317,8 @@ export function sealChunk(db: SqliteHandle, input: ChunkSealInput): ChunkSealOut
         sealedAt,
         input.sourceIds.length,
         sealedAt,
-        JSON.stringify(overlaps),
+        JSON.stringify(overlaps.chunkIds),
+        overlaps.truncated ? 1 : 0,
       );
       const member = db.prepare(
         'INSERT INTO chunk_members (chunk_id, source_id, member_ordinal) VALUES (?, ?, ?)',
