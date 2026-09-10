@@ -36,6 +36,15 @@ export const NARRATIVE_PROPERTIES = {
   sentenceCount: 'sentence_count',
   /** Revision of the grounding rule the node was written under; the cleanup selects on it. */
   grounding: 'grounding',
+  /**
+   * Which family wrote this node. `chunk` is a revision of one sealed member set; the legacy
+   * whole-session narratives carry no value here, which is what tells the two apart at a glance.
+   */
+  family: 'narrative_family',
+  /** The sealed member set a chunk revision speaks for. Absent on a whole-session narrative. */
+  chunkId: 'chunk_id',
+  /** The manifest-allocated revision number, which is the chunk family's own version. */
+  revisionNo: 'revision_no',
 } as const;
 
 /**

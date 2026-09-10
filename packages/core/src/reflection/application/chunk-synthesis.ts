@@ -1,0 +1,136 @@
+import type { Driver } from 'neo4j-driver';
+
+import { loadSessionSourceNodes } from '../../infrastructure/graph/narrative-queries.js';
+import { deadlineFor } from '../../infrastructure/providers/deadline-signal.js';
+import type { Provider } from '../../infrastructure/providers/types.js';
+import {
+  renderSealedChunk,
+  type ChunkEnrichmentNode,
+  type ChunkRender,
+} from '../domain/chunk-render.js';
+import type { ChunkInputPlan, CoverageGap } from '../domain/chunk-revision.js';
+import {
+  assembleNarrative,
+  buildNarrativeMessages,
+  narrativeMaxTokens,
+  NARRATIVE_JSON_SCHEMA,
+  NarrativeOutputSchema,
+  type GroundedNarrative,
+} from '../domain/narrative.js';
+
+/**
+ * The model call a sealed chunk's revision is written by, and the exact record of its input.
+ *
+ * The whole-session path sizes itself off the route and clips what does not fit. This one does
+ * not: the plan has already decided what may be submitted, the render has already measured it,
+ * and what reaches the provider is that string. Grounding runs against the same render, so a
+ * sentence can only cite something the model was actually handed.
+ */
+
+/** Reflection reads closed material and checks its own answer; a sample of it is not the answer. */
+const CHUNK_TEMPERATURE = 0;
+
+export type ChunkSynthesisDeps = {
+  readonly driver: Driver;
+  readonly provider: Provider;
+};
+
+export type ChunkSynthesisInput = {
+  readonly sessionId: string;
+  readonly plan: Extract<ChunkInputPlan, { status: 'render' }>;
+  readonly allowance: number;
+  readonly now: Date;
+  readonly model?: string;
+  readonly timeoutMs?: number;
+  readonly maxSentences?: number;
+  readonly signal?: AbortSignal;
+};
+
+export type ChunkCitation = {
+  readonly targetId: string;
+  readonly targetKind: 'source' | 'part' | 'retained_node';
+};
+
+export type ChunkSynthesis = {
+  readonly render: ChunkRender;
+  readonly output: GroundedNarrative;
+  readonly citations: readonly ChunkCitation[];
+  /** The plan's gaps, with the oversized one carrying the ranges the render actually submitted. */
+  readonly gaps: readonly CoverageGap[];
+};
+
+const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_MODEL = 'qwen3:8b';
+
+/**
+ * Extracted nodes the remaining allowance can carry.
+ *
+ * Read for the whole session and filtered to the members this revision submits: a node produced by
+ * a member this render omits is that member's content arriving by another door, and the renderer
+ * drops it for the same reason.
+ */
+async function enrichmentFor(
+  deps: ChunkSynthesisDeps,
+  input: ChunkSynthesisInput,
+): Promise<readonly ChunkEnrichmentNode[]> {
+  const submitted = new Set(input.plan.members.map((member) => member.sourceId));
+  const nodes = await loadSessionSourceNodes(deps.driver, input.sessionId, input.now);
+  return nodes
+    .filter((node) => submitted.has(node.episodeId))
+    .map((node) => ({ id: node.id, kind: node.kind, text: node.text, sourceId: node.episodeId }));
+}
+
+/** The gap the render's own selection proves, rather than the one the plan guessed at. */
+function gapsWithRanges(
+  plan: ChunkSynthesisInput['plan'],
+  render: ChunkRender,
+): readonly CoverageGap[] {
+  return plan.gaps.map((gap) =>
+    gap.reason === 'oversized_member' ? { ...gap, submitted: render.submitted } : gap,
+  );
+}
+
+export async function synthesizeChunk(
+  deps: ChunkSynthesisDeps,
+  input: ChunkSynthesisInput,
+): Promise<ChunkSynthesis> {
+  const members = [...input.plan.members, ...input.plan.transition];
+  const render = renderSealedChunk({
+    members,
+    enrichment: await enrichmentFor(deps, input),
+    allowance: input.allowance,
+    ...(input.maxSentences === undefined ? {} : { maxSentences: input.maxSentences }),
+    ...(input.plan.boundedPartialOf === undefined
+      ? {}
+      : { boundedPartialOf: input.plan.boundedPartialOf }),
+  });
+
+  const deadline = deadlineFor(input.timeoutMs ?? DEFAULT_TIMEOUT_MS, input.signal);
+  let raw: unknown;
+  try {
+    raw = await deps.provider.generate({
+      surface: 'narrative_synthesis',
+      model: input.model ?? DEFAULT_MODEL,
+      messages: buildNarrativeMessages(render.source),
+      schema: NARRATIVE_JSON_SCHEMA,
+      maxTokens: narrativeMaxTokens(render.source.sentenceBudget),
+      temperature: CHUNK_TEMPERATURE,
+      think: false,
+      signal: deadline.signal,
+    });
+  } finally {
+    deadline.clear();
+  }
+
+  const output = assembleNarrative(NarrativeOutputSchema.parse(raw), render.source);
+  const sources = new Set(members.map((member) => member.sourceId));
+  return {
+    render,
+    output,
+    citations: output.citations.map((targetId) => ({
+      targetId,
+      targetKind: sources.has(targetId) ? ('source' as const) : ('retained_node' as const),
+    })),
+    gaps: gapsWithRanges(input.plan, render),
+  };
+}
