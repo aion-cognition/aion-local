@@ -16,6 +16,10 @@ import {
   type ChunkNarrativeDeps,
 } from '../../../reflection/application/chunk-narrative.js';
 import { CHUNK_MAX_MEMBERS } from '../../../reflection/domain/chunk-boundary.js';
+import {
+  STANDING_HEAD_REASON,
+  SYNTHESIS_ATTEMPTED_REASONS,
+} from '../../../reflection/domain/chunk-outcome.js';
 import { narrativeSealRelevance } from '../../domain/narrative-seal.js';
 import type {
   IntrospectionOperation,
@@ -194,15 +198,32 @@ async function sealDueTails(
 /**
  * What one publication attempt cost and what it settled.
  *
- * `standing` is a head that still reads the same: the chunk is narrated, nothing has invalidated
- * it, and the attempt asked no model. `synthesized` says a model call was made, which is the one
- * cost worth reporting apart from the outcome it bought.
+ * Two things a status word cannot say on its own, so both are read from the reason the lifecycle
+ * returned rather than inferred from the word.
+ *
+ * `standing` is a head that still reads the same, and ONLY that. A head whose stored evidence
+ * nobody could verify, or one whose coverage nobody could establish, is also reported `skipped`,
+ * and calling it standing says the chunk is narrated when what actually happened is that the
+ * substrate could not tell. That is `held`.
+ *
+ * `synthesized` says a provider was asked. `failed` covers both sides of the call — a coverage
+ * refusal before it and a generation that threw after it — so counting every failure as a call
+ * inflates the one cost measurement this operation contributes.
  */
 type AttemptResult = {
   readonly published: boolean;
   readonly standing: boolean;
+  readonly held: boolean;
   readonly blocked: boolean;
   readonly synthesized: boolean;
+};
+
+const NOTHING: AttemptResult = {
+  published: false,
+  standing: false,
+  held: false,
+  blocked: false,
+  synthesized: false,
 };
 
 /**
@@ -224,15 +245,26 @@ async function attemptPublication(
     signal: ctx.signal,
   });
   if (report.status === 'published') {
-    return { published: true, standing: false, blocked: false, synthesized: true };
+    return { ...NOTHING, published: true, synthesized: true };
   }
   if (report.status === 'skipped') {
-    return { published: false, standing: true, blocked: false, synthesized: false };
+    const standing = report.reason === STANDING_HEAD_REASON;
+    if (!standing) {
+      ctx.logger.info(
+        { chunkId, reason: report.reason },
+        'narrative seal is holding a chunk whose head it could not establish',
+      );
+    }
+    return { ...NOTHING, standing, held: !standing };
   }
   if (report.status === 'blocked') {
     ctx.logger.warn({ chunkId, reason: report.reason }, 'narrative seal blocked a chunk revision');
-    return { published: false, standing: false, blocked: true, synthesized: false };
+    return { ...NOTHING, blocked: true };
   }
+  // A deferral happens after the output exists, so it cost a call; a failure may be either side
+  // of one, and the lifecycle's own reason set is what says which.
+  const synthesized =
+    report.status === 'deferred' || SYNTHESIS_ATTEMPTED_REASONS.includes(report.reason);
   if (report.status === 'failed') {
     const row = readNarrativeRevision(ctx.db, CHUNK_REVISION_FAMILY, chunkId, report.revisionNo);
     deferRevisionAttempt(
@@ -247,7 +279,7 @@ async function attemptPublication(
     { chunkId, status: report.status, reason: report.reason },
     'narrative seal could not publish a chunk revision',
   );
-  return { published: false, standing: false, blocked: false, synthesized: true };
+  return { ...NOTHING, synthesized };
 }
 
 type RunTally = {
@@ -256,6 +288,7 @@ type RunTally = {
   readonly synthesized: number;
   readonly blocked: number;
   readonly standing: number;
+  readonly held: number;
 };
 
 function detailOf(
@@ -268,7 +301,8 @@ function detailOf(
     `${String(tally.published)} of ${String(tally.attempted)} chunk publication attempt(s) ` +
     `acknowledged, ${String(tally.synthesized)} reached synthesis; ` +
     `${String(seal.sealed)} membership(s) sealed over ${String(seal.members)} source(s); ` +
-    `${String(tally.standing)} standing head(s), ${String(tally.blocked)} blocked attempt(s) ` +
+    `${String(tally.standing)} standing head(s), ${String(tally.held)} held head(s), ` +
+    `${String(tally.blocked)} blocked attempt(s) ` +
     `over ${String(blockedSources)} held source(s), ${String(seal.refused)} refused tail(s), ` +
     `${String(recovered)} pending publication(s) recovered`
   );
@@ -300,7 +334,14 @@ async function runSeal(ctx: OperationContext, scales: SealScales): Promise<Opera
   }
 
   const seal = await sealDueTails(ctx, deps, scales);
-  let tally: RunTally = { attempted: 0, published: 0, synthesized: 0, blocked: 0, standing: 0 };
+  let tally: RunTally = {
+    attempted: 0,
+    published: 0,
+    synthesized: 0,
+    blocked: 0,
+    standing: 0,
+    held: 0,
+  };
   for (const chunkId of publicationQueue(ctx, seal, scales.batch)) {
     if (ctx.signal.aborted || tally.attempted >= scales.batch) {
       break;
@@ -312,6 +353,7 @@ async function runSeal(ctx: OperationContext, scales: SealScales): Promise<Opera
       synthesized: tally.synthesized + (result.synthesized ? 1 : 0),
       blocked: tally.blocked + (result.blocked ? 1 : 0),
       standing: tally.standing + (result.standing ? 1 : 0),
+      held: tally.held + (result.held ? 1 : 0),
     };
   }
 
