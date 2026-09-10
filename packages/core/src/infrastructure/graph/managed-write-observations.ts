@@ -176,11 +176,18 @@ function newAccumulation(missed: number): Accumulation {
  * Undefined when starting one failed, which leaves the caller unobserved rather than broken.
  * The miss is recorded against the driver first, so the next accumulation opened for it cannot
  * present the interval it never saw as a complete zero.
+ *
+ * An accumulation that already exists is asked the same question. A driver counted before the
+ * miss keeps counting after it, and the calls in between are missing from a total that would
+ * otherwise still call itself whole.
  */
 function accumulationFor(driver: Driver): Accumulation | undefined {
   try {
     const held = ACCUMULATIONS.get(driver);
     if (held !== undefined) {
+      if ((MISSED_CALLS.get(driver) ?? 0) > 0 || observationUnattributable) {
+        held.countsComplete = false;
+      }
       return held;
     }
     const fresh = newAccumulation(MISSED_CALLS.get(driver) ?? 0);
