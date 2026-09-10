@@ -110,8 +110,10 @@ export type ClaimRequest = {
    * How long this claim holds the number without publishing.
    *
    * A claim that never returns must not strand its number for good, and a claim that IS running
-   * must not be taken from underneath. Both are the same statement: the row is not due again
-   * until this moment, and `next_attempt_at` already means exactly that.
+   * must not be taken from underneath. It is written to `claim_expires_at` and nowhere else:
+   * `next_attempt_at` is the scheduler's retry date, read by the nomination that decides which
+   * chunks a run may try at all, and a lease written there says the whole chunk is not due yet —
+   * which stalls a reconsidered block for the length of a lease nobody is holding.
    */
   readonly leaseUntil: Date;
 };
@@ -124,9 +126,9 @@ export type ClaimRequest = {
  * identity. The claim is a write, in one immediate transaction, and what it writes is the binding
  * and the lease together.
  *
- * A row is claimable when it is DUE — which excludes a live claim and an attempt a scheduler has
- * dated forward — unblocked, and carries no durable intent for the identity its number implies.
- * That last test is what lets a dead claim be taken up again at lease expiry while an attempt the
+ * A row is claimable when it is unblocked, DUE by the scheduler's own retry date, unclaimed or
+ * claimed past its lease, and carries no durable intent for the identity its number implies. The
+ * last test is what lets a dead claim be taken up again at lease expiry while an attempt the
  * coordinator is still resolving is left alone, and it is why an abandoned number is never reused:
  * abandoned rows are not `allocated`.
  */
@@ -142,14 +144,19 @@ export function claimNarrativeRevision(
           `SELECT revision_no, node_id FROM ${family.revisionTable}
             WHERE ${family.keyColumn} = ? AND state = 'allocated' AND blocked_reason IS NULL
               AND COALESCE(next_attempt_at, allocated_at) <= ?
+              AND (claim_expires_at IS NULL OR claim_expires_at <= ?)
               AND NOT EXISTS (
                 SELECT 1 FROM publication_intents i
                  WHERE i.operation_id = ? || CAST(revision_no AS TEXT))
             ORDER BY COALESCE(next_attempt_at, allocated_at), revision_no
             LIMIT 1`,
         )
-        .get(request.familyKey, request.now.toISOString(), request.operationPrefix) as
-        { revision_no: number; node_id: string } | undefined;
+        .get(
+          request.familyKey,
+          request.now.toISOString(),
+          request.now.toISOString(),
+          request.operationPrefix,
+        ) as { revision_no: number; node_id: string } | undefined;
       const claimed =
         due ??
         (() => {
@@ -158,7 +165,7 @@ export function claimNarrativeRevision(
         })();
       db.prepare(
         `UPDATE ${family.revisionTable}
-            SET operation_id = ? || CAST(revision_no AS TEXT), next_attempt_at = ?
+            SET operation_id = ? || CAST(revision_no AS TEXT), claim_expires_at = ?
           WHERE ${family.keyColumn} = ? AND revision_no = ? AND state = 'allocated'`,
       ).run(
         request.operationPrefix,
@@ -200,7 +207,7 @@ export function releaseNarrativeClaim(
   return (
     db
       .prepare(
-        `UPDATE ${family.revisionTable} SET operation_id = NULL, next_attempt_at = NULL
+        `UPDATE ${family.revisionTable} SET operation_id = NULL, claim_expires_at = NULL
           WHERE ${family.keyColumn} = ? AND revision_no = ? AND state = 'allocated'`,
       )
       .run(request.familyKey, request.revisionNo).changes === 1

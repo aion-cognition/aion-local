@@ -114,6 +114,10 @@ const DEFAULT_SYNTHESIS_TIMEOUT_MS = 120_000;
  * The failure is already counted on the row; what the release adds is that the NEXT attempt takes
  * this number up rather than spending another beside it. A number an operation is holding is not
  * released here — the coordinator's own recovery settles that one.
+ *
+ * A block releases too. The block itself is what keeps the row out of nomination, and it clears on
+ * its prerequisite; leaving a lease on top of it would hold the number past the moment the work
+ * became runnable again.
  */
 function releaseClaim(deps: ChunkNarrativeDeps, chunkId: string, revisionNo: number): void {
   releaseNarrativeClaim(deps.db, CHUNK_REVISION_FAMILY, {
@@ -245,6 +249,7 @@ export async function publishChunkNarrative(
       renderedInputAllowance: policy.renderedInputAllowance,
       maxMembers: policy.maxMembers,
     });
+    releaseClaim(deps, chunkId, allocation.revisionNo);
     deps.logger.warn(
       { chunkId, reason: plan.reason, detail: plan.detail },
       'chunk revision blocked',
@@ -286,6 +291,7 @@ export async function publishChunkNarrative(
         renderedInputAllowance: policy.renderedInputAllowance,
         maxMembers: policy.maxMembers,
       });
+      releaseClaim(deps, chunkId, allocation.revisionNo);
       deps.logger.warn({ chunkId, reason: err.reason }, 'chunk revision input refused');
       return { status: 'blocked', chunkId, revisionNo: allocation.revisionNo, reason: err.reason };
     }

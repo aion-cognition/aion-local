@@ -58,8 +58,13 @@ export const NARRATIVE_SCHEMA_STATEMENTS: readonly string[] = [
    *
    * The four attempt columns schedule a retry of this revision rather than of the source
    * behind it. `blocked_reason` takes the row out of nomination until a prerequisite changes;
-   * `next_attempt_at` moves it later without taking it out, and it is also what a live attempt
-   * holds its claim with: a row nobody may take up again until its lease expires.
+   * `next_attempt_at` moves it later without taking it out.
+   *
+   * `claim_expires_at` is ownership, not scheduling, which is why it is its own column: a live
+   * attempt holds its number until that moment, and a claim that never returns strands nothing
+   * past it. Writing the lease into `next_attempt_at` conflates the two — the nomination reads
+   * that column to decide which CHUNKS a run may try, so a lease there stalls a reconsidered
+   * block behind a claim nobody is holding.
    *
    * `attempt_policy_json` records the bounds the attempt actually ran under. A block on a bound
    * clears when the bound changes, and a detector comparing the current policy to the one that
@@ -83,6 +88,7 @@ export const NARRATIVE_SCHEMA_STATEMENTS: readonly string[] = [
     blocked_reason TEXT,
     last_failure_reason TEXT,
     attempt_policy_json TEXT,
+    claim_expires_at TEXT,
     PRIMARY KEY (chunk_id, revision_no)
   )`,
   /**
@@ -120,6 +126,7 @@ export const NARRATIVE_SCHEMA_STATEMENTS: readonly string[] = [
     blocked_reason TEXT,
     last_failure_reason TEXT,
     attempt_policy_json TEXT,
+    claim_expires_at TEXT,
     PRIMARY KEY (family_key, revision_no)
   )`,
   /**
@@ -214,6 +221,7 @@ export const NARRATIVE_COLUMN_ADDITIONS: readonly ColumnAddition[] = [
   { table: 'chunk_revisions', column: 'blocked_reason', definition: 'TEXT' },
   { table: 'chunk_revisions', column: 'last_failure_reason', definition: 'TEXT' },
   { table: 'chunk_revisions', column: 'attempt_policy_json', definition: 'TEXT' },
+  { table: 'chunk_revisions', column: 'claim_expires_at', definition: 'TEXT' },
   {
     table: 'overview_revisions',
     column: 'attempts',
@@ -223,6 +231,7 @@ export const NARRATIVE_COLUMN_ADDITIONS: readonly ColumnAddition[] = [
   { table: 'overview_revisions', column: 'blocked_reason', definition: 'TEXT' },
   { table: 'overview_revisions', column: 'last_failure_reason', definition: 'TEXT' },
   { table: 'overview_revisions', column: 'attempt_policy_json', definition: 'TEXT' },
+  { table: 'overview_revisions', column: 'claim_expires_at', definition: 'TEXT' },
 ];
 
 export const NARRATIVE_INDEX_STATEMENTS: readonly string[] = [
