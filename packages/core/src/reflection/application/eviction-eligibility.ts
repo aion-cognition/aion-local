@@ -123,10 +123,12 @@ function qualificationAnchor(
  * nobody ever made. Condition 5 says remaining obligations are acknowledged or transferred, and
  * every one of these is one of them.
  *
- * They are named apart because they are different obligations with different owners. A statement
- * somebody made about this source is the reference machinery's; a legacy relationship a backfill
- * recorded is the materialization producer's; a retirement a merge appended is the merge's. One
- * reason covering all three would name the wrong cause for two of them.
+ * They are named apart because they are different obligations. A statement somebody made about
+ * this source is the reference machinery's. The other two name a class of record rather than one
+ * caller: `materialized` is written by the legacy record producer and by the opening half of a
+ * legacy-coverage write, `retired` by a merge and by that same write's closing half. One reason
+ * covering all three would name the wrong cause for two of them; the operation that prepared the
+ * version is what names which of a class's two writers is owed.
  */
 const SETTLEMENT_PINS: Readonly<Record<string, string>> = {
   stated: 'reference_settlement_owed',
@@ -140,13 +142,17 @@ const SETTLEMENT_PINS: Readonly<Record<string, string>> = {
  * A class the table above does not name still pins. Fail-closed is the rule and an unnamed class
  * is exactly the case it exists for: something writes versions of a kind this fence was never
  * taught, and the honest answer is that an obligation is owed and nobody here can say whose.
+ *
+ * The lookup asks whether the table owns the key rather than whether indexing it returns
+ * something, so a future state named `constructor` or `toString` reaches the unnamed branch
+ * instead of pinning with a reason inherited from Object.
  */
 function settlementOwed(db: SqliteHandle, sourceId: string): string | undefined {
   const unsettled = unsettledLinkStates(db, sourceId);
   if (unsettled.length === 0) {
     return undefined;
   }
-  const named = unsettled.find((state) => SETTLEMENT_PINS[state] !== undefined);
+  const named = unsettled.find((state) => Object.hasOwn(SETTLEMENT_PINS, state));
   return named === undefined ? 'link_settlement_owed' : SETTLEMENT_PINS[named];
 }
 

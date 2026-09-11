@@ -439,6 +439,39 @@ it('names the merge when a retirement version is the one left unsettled', async 
   expect(await nodeExists(driver, sourceId)).toBe(true);
 });
 
+// Constructed, not written by a production path: the three preparers write `stated`,
+// `materialized` and `retired` and nothing else. `closed` is the fourth state probe-incidence.ts
+// already reads for; `constructor` is a name Object's prototype answers to, which a pin table
+// asked by plain indexing would resolve to a reason nobody wrote.
+it.each(['closed', 'constructor'])(
+  'pins without naming an owner when the unsettled class is %s, which no writer declares',
+  async (state) => {
+    const sourceId = await eligibleSource(`evict-unnamed-${state}`, 'S1');
+    const target = `unnamed-${state}-target`;
+    const linkId = evidenceLinkId('mention', 'retained_node', sourceId, target);
+    expect(durableEligibility(store.db, sourceId, POLICY).status).toBe('eligible');
+
+    store.db
+      .prepare(
+        `INSERT INTO evidence_links (link_id, kind, qualifier, from_id, to_id, record_source,
+           created_at) VALUES (?, 'mention', 'retained_node', ?, ?, 'legacy_narrative', ?)`,
+      )
+      .run(linkId, sourceId, target, NOW.toISOString());
+    store.db
+      .prepare(
+        `INSERT INTO evidence_link_versions (link_id, version, state, recorded_values_json,
+           temporal_proof_json, observed_at, operation_key) VALUES (?, 1, ?, '{}', '{}', ?, ?)`,
+      )
+      .run(linkId, state, NOW.toISOString(), `unnamed-${state}-key-${sourceId}`);
+
+    expect(durableEligibility(store.db, sourceId, POLICY)).toEqual({
+      status: 'pinned',
+      reason: 'link_settlement_owed',
+    });
+    expect(await nodeExists(driver, sourceId)).toBe(true);
+  },
+);
+
 it('refuses an edge reaching an endpoint the node registry does not name', async () => {
   const sourceId = await eligibleSource('evict-foreign-endpoint', 'S1');
   const nomination = await nominate(sourceId);
