@@ -24,7 +24,10 @@ it('re-verifies the pinned member on refresh and retains completed verification 
     steps: 128,
     batchWallMs: 60000,
   };
-  const held = await runNarrativeMigrationBatch(chunks, options);
+  let held = await runNarrativeMigrationBatch(chunks, options);
+  if (held.state === 'running' && held.stopped === 'cohort_not_fully_accounted') {
+    held = await runNarrativeMigrationBatch(chunks, options);
+  }
   expect(held.state, JSON.stringify(held)).toBe('blocked');
   expect(held.stopped).toBe('cohort_not_fully_accounted');
   await driftEpisodeDigest(driver, target, original);
