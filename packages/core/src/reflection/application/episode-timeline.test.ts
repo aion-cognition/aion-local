@@ -210,8 +210,8 @@ describe('buildEpisodeTimeline over injected rows', () => {
           operationId: 'clamped',
           kind: 'stated_references',
           state: 'acknowledged',
-          // The knowledge clock was held back to a predecessor's, so it sits after the moment
-          // the acknowledgment was observed. Reporting one number would hide exactly that.
+          // The knowledge clock was clamped to the previous acknowledgment's, so it sits after
+          // the moment this one was observed. Reporting one number would hide exactly that.
           knownFrom: '2026-01-01T00:09:00.000Z',
           observedAckAt: '2026-01-01T00:05:00.000Z',
           clockClamped: true,
@@ -279,7 +279,7 @@ describe('buildEpisodeTimeline over injected rows', () => {
       events.find((event) => event.detail.operation_id === operationId)?.note;
 
     expect(note('clamped')).toBe(
-      'knowledge 2026-01-01T00:09:00.000Z, observed ack 2026-01-01T00:05:00.000Z (held back to a predecessor)',
+      'knowledge 2026-01-01T00:09:00.000Z, observed ack 2026-01-01T00:05:00.000Z (clamped to the previous knowledge time)',
     );
     expect(note('ordinary')).toBe(
       'knowledge 2026-01-01T00:10:00.000Z, observed ack 2026-01-01T00:10:00.000Z',

@@ -199,10 +199,15 @@ function acceptedEvent(input: EpisodeTimelineInput): TimelineEvent | undefined {
 /**
  * Both clock roles under their own labels, because the event itself is placed on one of them
  * and a reader who sees a single stamp cannot tell which. The two differ exactly when the
- * knowledge clock was held back, which is the case the disclosure exists for.
+ * knowledge clock was clamped, which is the case the disclosure exists for.
+ *
+ * The note says which clock moved and to what. A publication whose host stepped backwards takes
+ * the previous acknowledgment's knowledge time rather than its own wall time, so the number the
+ * reader sees belongs to this publication and is the earlier one's value; naming a predecessor
+ * instead reads as though the event were placed on another record.
  */
 function clockNote(knownFrom: string, observedAckAt: string, clamped: boolean): string {
-  const held = clamped ? ' (held back to a predecessor)' : '';
+  const held = clamped ? ' (clamped to the previous knowledge time)' : '';
   return `knowledge ${knownFrom}, observed ack ${observedAckAt}${held}`;
 }
 
