@@ -152,10 +152,13 @@ function noop(detail: string): OperationOutcome {
  * One key's attempt. The publication is where the guarded lookup and the settle happen; this
  * only asks for it and reads what the records say afterwards.
  *
- * A publication that refuses, defers or throws leaves the key exactly where it was: owed, and
- * offered again on a later run. The obligation is durable, so nothing is lost, and a repair that
- * failed the whole tick would take the rest of the batch and every operation after it with one
- * busy coordinator.
+ * A publication that refuses or defers leaves the key exactly where it was: owed, and offered
+ * again on a later run. A throw is reported the same way and proves less: the failure can reach
+ * this caller after the publication was acknowledged, so a thrown attempt undercounts completed
+ * work rather than establishing that the key is still owed. The durable row is the authority in
+ * both cases, so nothing is lost and a later nomination reads what it says. A repair that failed
+ * the whole tick would take the rest of the batch and every operation after it with one busy
+ * coordinator.
  */
 async function attempt(
   ctx: OperationContext,

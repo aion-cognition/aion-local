@@ -3,19 +3,21 @@ import type { SqliteHandle } from './database.js';
 /**
  * Whether an endpoint still owes a link version somebody prepared.
  *
- * Split out of `evidence-links.ts` because that file sits at the 500-line lint cap, the way the
- * maintenance knobs are split out of the knob table. It is one read over the same two tables and
- * belongs to the same contract; nothing about the version chain is decided here.
+ * Written here rather than added to `evidence-links.ts` because that file sits at the 500-line
+ * lint cap. Nothing moved: this is a new read over the same two tables, and it belongs to the
+ * same contract; nothing about the version chain is decided here.
  */
 
 /**
  * The version classes one endpoint holds that are durable and not yet acknowledged.
  *
  * A caller deciding whether something is still owed has to know WHICH kind of record is waiting:
- * a statement somebody made, a legacy relationship a backfill recorded, and a retirement a merge
- * appended are three different obligations with three different owners, and one reason naming all
- * of them would name the wrong cause for two. Distinct and ordered, so a caller's answer does not
- * depend on how many rows of one class happen to exist.
+ * a statement somebody made, a legacy relationship a producer recorded, and a retirement a merge
+ * or a legacy-coverage close appended are three different obligations, and one reason naming all
+ * of them would name the wrong cause for two. A class is not one caller: the legacy and retirement
+ * classes each have two production writers, so the state names the record that is waiting and the
+ * operation that prepared it names who. Distinct and ordered, so a caller's answer does not depend
+ * on how many rows of one class happen to exist.
  */
 export function unsettledLinkStates(db: SqliteHandle, fromId: string): readonly string[] {
   const rows = db

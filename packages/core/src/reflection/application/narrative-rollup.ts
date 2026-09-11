@@ -147,7 +147,11 @@ type WindowOutcome = 'created' | 'skipped' | 'vetoed' | 'failed' | 'blocked' | '
 type WindowResult = {
   readonly outcome: WindowOutcome;
   readonly absorbed: number;
-  /** Why V1 refused the window, where it did. */
+  /**
+   * Why V1 refused the window, where it did. Carried for the record and read by nothing: the
+   * pass counts outcomes, so a caller wanting the cause reads the warning this field was built
+   * beside rather than this field.
+   */
   readonly blockedReason?: string;
   /** The window reached a provider before this outcome, so the attempt budget charges it. */
   readonly spent?: boolean;

@@ -49,7 +49,7 @@ import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-
  * readings of one number instead of a shipped default and a live one.
  *
  * Ten of the thirty-one declare a `measure`, a number in the health snapshot their run is
- * scored on moving. The other twenty-one are recorded as unmeasured rather than scored. Fifteen
+ * scored on moving. The other twenty-one are recorded as unmeasured rather than scored. Seventeen
  * of those are waiting on a gauge the snapshot does not carry yet:
  *
  * - `claim_dedup`: a near-duplicate claim-pair count.
@@ -69,6 +69,12 @@ import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-
  * - `orphan_cleanup`: it used to move the disconnection share, which now describes a
  *   different population than the one it repairs. A replacement has to be validated
  *   against the demand it is scored on before it can score the runs.
+ * - `narrative_regrounding`: the same shape one family over. The count it used to declare was
+ *   the legacy grounding marker, which describes the family it is leaving rather than the
+ *   invalidated chunk heads it now regrounds, and a baseline over that population has to exist
+ *   before a run over it can be scored.
+ * - `confirmation_signal_completion`: an owed-signal backlog and the rate keys are completed at.
+ *   Nothing counts either today, which is why it reaches the threshold on waiting time.
  *
  * Each is a graph read nothing computes on the tick today. Until one exists, its operation is
  * scored on relevance, waiting time, and cost alone, which is everything known about it.
