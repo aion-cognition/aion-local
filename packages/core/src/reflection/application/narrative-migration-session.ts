@@ -89,12 +89,7 @@ export async function migrateSessionStep(
           if (coverage.status !== 'checked') {
             return coverage.refusal.reason;
           }
-          const measured = await measureChunkCandidates(
-            deps,
-            rows.map((row) => ({ ...row, createdAt: row.captureOrderValue })),
-            coverage.context,
-            job.policy,
-          );
+          const measured = await measureChunkCandidates(deps, rows, coverage.context, job.policy);
           if (measured.status === 'refused') {
             effects.issue(session.sessionId, measured.reason);
           } else {

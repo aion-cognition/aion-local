@@ -61,11 +61,25 @@ export function revalidateFamilyPolicy(
     return view;
   }
   const reading = revalidateNarrativeRepresentations(db, view.narrativeFamilies.values, context);
+  const refreshed = new Set(reading.values.keys());
+  const owned = new Set(
+    [...view.narrativeFamilies.values].flatMap(([id, value]) =>
+      refreshed.has(id) ? (value.policyIssues ?? []) : [],
+    ),
+  );
+  const retained = view.issues.filter(
+    (issue) =>
+      !(
+        issue.address.kind === 'id' &&
+        refreshed.has(issue.address.id) &&
+        (issue.field === 'representation_preference' || owned.has(issue))
+      ),
+  );
   return discloseFamilyGaps(
     {
       ...view,
       narrativeFamilies: { ...view.narrativeFamilies, values: reading.values },
-      issues: [...reading.issues, ...view.issues],
+      issues: [...reading.issues, ...retained],
     },
     candidates,
   );

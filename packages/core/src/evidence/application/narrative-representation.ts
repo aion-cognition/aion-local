@@ -21,6 +21,8 @@ export type NarrativeRepresentation = {
   readonly publication: 'established' | 'unknown';
   /** Immutable graph identity retained for one policy-only revalidation. */
   readonly identity?: NarrativeFamilyIdentity;
+  /** Request-local issue identities let policy revalidation replace only the evidence it reread. */
+  readonly policyIssues?: readonly EvidenceIssue[];
   readonly knownAtVantage?: false;
   readonly retired?: { readonly operationId: string; readonly knownFrom: string };
 };
@@ -300,6 +302,9 @@ class RepresentationReader {
       selection: selected,
       publication,
       identity,
+      policyIssues: this.issues.filter(
+        (issue) => issue.address.kind === 'id' && issue.address.id === nodeId,
+      ),
       ...(known ? {} : { knownAtVantage: false as const }),
       ...(retired === undefined ? {} : { retired }),
     });

@@ -36,7 +36,6 @@ export type ResolvedEvidenceView = {
   /** Every issue the reading named, required and optional alike, for the coverage statement. */
   readonly issues: readonly EvidenceIssue[];
   readonly narrativeFamilies?: {
-    readonly historical: boolean;
     readonly values: ReadonlyMap<string, NarrativeRepresentation>;
   };
 };

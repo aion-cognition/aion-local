@@ -104,6 +104,7 @@ describe('fixed historical partition records', () => {
       sourceId: 'a',
       captureOrderValue: OLD,
       captureOrderBasis: 'graph_tx_from',
+      createdAt: NOW.toISOString(),
     });
   });
 

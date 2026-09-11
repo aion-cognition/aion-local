@@ -470,3 +470,23 @@ export function readStatedLinkValues(
     ? undefined
     : (JSON.parse(row.recorded_values_json) as Record<string, unknown>);
 }
+
+/** The final version this operation acknowledged, including a retirement written after its positive record. */
+export function lastLinkVersionForOperation(
+  db: SqliteHandle,
+  linkId: string,
+  operationId: string,
+): number | undefined {
+  const row = db
+    .prepare(
+      'SELECT MAX(version) AS version FROM evidence_link_versions WHERE link_id = ? AND operation_id = ?',
+    )
+    .get(linkId, operationId) as { version: number | null };
+  if (row.version === null) {
+    return undefined;
+  }
+  if (!Number.isSafeInteger(row.version)) {
+    throw new Error('evidence link version exceeds its exact-integer bound');
+  }
+  return row.version;
+}

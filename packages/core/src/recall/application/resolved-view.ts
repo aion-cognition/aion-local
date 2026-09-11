@@ -18,7 +18,7 @@ import {
 } from '../../evidence/domain/result.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 import type { ItemOrigin } from '../../infrastructure/graph/origin-queries.js';
-import { isTimeTravel, type ReadMode } from '../../infrastructure/graph/read-modes.js';
+import type { ReadMode } from '../../infrastructure/graph/read-modes.js';
 import type { ResolvedEvidenceView } from '../domain/resolved-view.js';
 
 /**
@@ -33,7 +33,6 @@ export type EvidenceReading =
       readonly kind: 'resolved';
       readonly results: ReadonlyMap<string, EvidenceResult<ItemMetadata>>;
       readonly issues: ResolvedEvidenceView['issues'];
-      readonly historical?: boolean;
     }
   | {
       readonly kind: 'stage';
@@ -74,7 +73,6 @@ export async function readEvidence(
       kind: 'resolved',
       results: batch.results,
       issues: batch.issues,
-      historical: isTimeTravel(input.mode),
     };
   }
   const [provenance, origins] = await Promise.all([
@@ -164,7 +162,6 @@ export function resolvedView(input: ResolvedViewInput): ResolvedEvidenceView {
       degraded: folded.degraded,
       issues: reading.issues,
       narrativeFamilies: {
-        historical: reading.historical ?? false,
         values: new Map(
           [...reading.results.values()].flatMap((result) => {
             if (result.address.kind !== 'id') {

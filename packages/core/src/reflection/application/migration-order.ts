@@ -13,7 +13,10 @@ import {
   readMigrationPolicy,
   rememberMigrationOrder,
 } from '../../infrastructure/sqlite/migration-partition.js';
-import { readSourceRecord } from '../../infrastructure/sqlite/source-identity.js';
+import {
+  readSourceRecord,
+  readSourceGraphClocksJson,
+} from '../../infrastructure/sqlite/source-identity.js';
 import { readSourceResidency } from '../../infrastructure/sqlite/source-lifecycle.js';
 
 const Payload = z.strictObject({
@@ -43,13 +46,8 @@ export const migrationOrderPublication = new PublicationOperation({
   async prepare(context, payload) {
     const record = readSourceRecord(context.db, payload.sourceId);
     const generation = readSourceResidency(context.db, payload.sourceId)?.projectionGeneration ?? 0;
-    const saved = context.db
-      .prepare('SELECT graph_clocks_json FROM source_records WHERE source_id = ?')
-      .get(payload.sourceId) as { graph_clocks_json: string | null } | undefined;
-    const original =
-      saved?.graph_clocks_json == null
-        ? undefined
-        : (JSON.parse(saved.graph_clocks_json) as { tx_from?: unknown });
+    const saved = readSourceGraphClocksJson(context.db, payload.sourceId);
+    const original = saved === undefined ? undefined : (JSON.parse(saved) as { tx_from?: unknown });
     const graph =
       recordedInstant(original?.tx_from) ??
       (generation === 0

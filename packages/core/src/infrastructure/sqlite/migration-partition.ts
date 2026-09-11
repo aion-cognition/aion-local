@@ -31,6 +31,7 @@ export type MigrationOrderedSource = {
   readonly captureOrderValue: string;
   readonly captureOrderBasis: 'graph_tx_from' | 'archive_acceptance';
   readonly occurredAt: string;
+  readonly createdAt: string;
 };
 
 /** Reserving a fixed cohort also fixes the policy used for every later seal in that cohort. */
@@ -143,7 +144,7 @@ export function listMigrationRemainder(
 ): readonly MigrationOrderedSource[] {
   const rows = db
     .prepare(
-      `SELECT m.source_id, s.session_id, m.capture_order_value, m.capture_order_basis, s.occurred_at
+      `SELECT m.source_id, s.session_id, m.capture_order_value, m.capture_order_basis, s.occurred_at, s.created_at
        FROM migration_progress m JOIN source_records s ON s.source_id = m.source_id
       WHERE m.cohort_id = ? AND s.session_id = ? AND m.status = 'verified'
         AND s.verification_status = 'verified'
@@ -157,6 +158,7 @@ export function listMigrationRemainder(
     capture_order_value: string;
     capture_order_basis: 'graph_tx_from' | 'archive_acceptance';
     occurred_at: string;
+    created_at: string;
   }[];
   return rows.map((row) => ({
     sourceId: row.source_id,
@@ -164,6 +166,7 @@ export function listMigrationRemainder(
     captureOrderValue: row.capture_order_value,
     captureOrderBasis: row.capture_order_basis,
     occurredAt: row.occurred_at,
+    createdAt: row.created_at,
   }));
 }
 

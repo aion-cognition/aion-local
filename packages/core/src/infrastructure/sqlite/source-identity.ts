@@ -460,3 +460,11 @@ export function readReferenceDelivery(
   }
   return readReferenceDeliveryReceipt(db, sourceId, operationKey);
 }
+
+/** Preserved projection clocks are evidence distinct from the current projection's creation time. */
+export function readSourceGraphClocksJson(db: SqliteHandle, sourceId: string): string | undefined {
+  const row = db
+    .prepare('SELECT graph_clocks_json FROM source_records WHERE source_id = ?')
+    .get(sourceId) as { graph_clocks_json: string | null } | undefined;
+  return row?.graph_clocks_json ?? undefined;
+}

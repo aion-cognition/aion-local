@@ -4,6 +4,7 @@ import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   acknowledgeStatedLinkVersions,
   evidenceLinkId,
+  lastLinkVersionForOperation,
   prepareMaterializedLinkVersion,
   prepareRetirementVersion,
 } from '../../infrastructure/sqlite/evidence-links.js';
@@ -131,18 +132,14 @@ export function acknowledgeLegacyCoverage(
 ): void {
   acknowledgeStatedLinkVersions(db, operationId, knownFrom, observedAckAt);
   for (const link of linksOf(input)) {
-    const row = db
-      .prepare(
-        'SELECT MAX(version) AS version FROM evidence_link_versions WHERE link_id = ? AND operation_id = ?',
-      )
-      .get(link.linkId, operationId) as { version: number | null };
-    if (row.version !== null) {
+    const version = lastLinkVersionForOperation(db, link.linkId, operationId);
+    if (version !== undefined) {
       commitSourceIncidence(db, {
         sourceId: link.sourceId,
         nodeId: link.narrativeId,
         role: 'source_coverage',
         linkId: link.linkId,
-        linkVersion: row.version,
+        linkVersion: version,
         currency: link.closed ? 'closed' : 'open',
         clocks: {
           ...link.clocks,

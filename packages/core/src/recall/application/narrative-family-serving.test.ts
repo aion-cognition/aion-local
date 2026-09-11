@@ -1,7 +1,11 @@
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 
-import { discloseFamilyGaps } from './family-serving-policy.js';
+import { discloseFamilyGaps, revalidateFamilyPolicy } from './family-serving-policy.js';
 import { serveFrom, type ServingAssembly } from './serving-assembly.js';
+import * as representations from '../../evidence/application/narrative-representation.js';
+import type { EvidenceIssue } from '../../evidence/domain/result.js';
+import { checkedContext } from '../../evidence/test-support/evidence.fixture.js';
+import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import type { PackDecision } from '../domain/pack-decisions.js';
 import { uncertifiedThroughout, type ResolvedEvidenceView } from '../domain/resolved-view.js';
 import { emittedPackIds } from '../domain/session-dedup.js';
@@ -43,7 +47,6 @@ const view: ResolvedEvidenceView = {
   degraded: new Set(),
   issues: [],
   narrativeFamilies: {
-    historical: false,
     values: new Map([
       [
         'legacy',
@@ -101,7 +104,7 @@ it('keeps only the committed family when a present publication boundary becomes 
 it('withholds only the unproved narrative representation at a historical vantage', () => {
   const historical = {
     ...view,
-    narrativeFamilies: { historical: true, values: new Map() },
+    narrativeFamilies: { values: new Map() },
   };
   const answer = serveFrom(
     input,
@@ -117,7 +120,6 @@ it('withholds unknown family and unpublished narratives with different named gap
   const uncertain: ResolvedEvidenceView = {
     ...view,
     narrativeFamilies: {
-      historical: false,
       values: new Map([
         [
           'legacy',
@@ -151,4 +153,58 @@ it('withholds unknown family and unpublished narratives with different named gap
       }),
     ]),
   );
+});
+
+it('serves different families from different sessions while filtering each session independently', () => {
+  const values = new Map(view.narrativeFamilies!.values);
+  values.set('chunk', {
+    family: 'chunk',
+    sessions: ['other-session'],
+    selection: 'selected',
+    publication: 'established',
+  });
+  const mixed = { ...view, narrativeFamilies: { values } };
+  expect([...emittedPackIds(serveFrom(input, mixed).pack)].sort()).toEqual([
+    'chunk',
+    'fact',
+    'legacy',
+  ]);
+});
+
+it('replaces reread policy issues while preserving an independent citation issue with the same vocabulary', () => {
+  const old: EvidenceIssue = {
+    address: { kind: 'id', id: 'legacy' },
+    field: 'narrative_revision',
+    reason: 'unverified_scope',
+    required: false,
+  };
+  const independent: EvidenceIssue = { ...old };
+  const values = new Map(view.narrativeFamilies!.values);
+  values.set('legacy', {
+    family: 'legacy_session_overview',
+    sessions: ['session'],
+    selection: 'selected',
+    publication: 'unknown',
+    policyIssues: [old],
+  });
+  const store = new SqliteStore({ filePath: ':memory:' });
+  const reread = vi.spyOn(representations, 'revalidateNarrativeRepresentations').mockReturnValue({
+    values: new Map(view.narrativeFamilies!.values),
+    dependencies: [],
+    issues: [],
+  });
+  try {
+    const refreshed = revalidateFamilyPolicy(
+      store.db,
+      { ...view, issues: [old, independent], narrativeFamilies: { values } },
+      checkedContext(),
+      ranked,
+    );
+    expect(refreshed.issues).toHaveLength(1);
+    expect(refreshed.issues[0]).toBe(independent);
+    expect([...emittedPackIds(serveFrom(input, refreshed).pack)]).toContain('legacy');
+  } finally {
+    reread.mockRestore();
+    store.close();
+  }
 });
