@@ -382,7 +382,7 @@ describe('the census seal', () => {
 
     expect(certifyNodeSupport(store.db, 'entity-empty')).toMatchObject({
       support: 'unsupported',
-      reason: 'every support census is established and empty',
+      reason: 'every support census is established and empty, and no revision cites it',
     });
   });
 

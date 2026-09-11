@@ -50,7 +50,8 @@ export const SUPPORT_ROLES: readonly DurableRole[] = [
  *
  * A census writer takes its node scope set from here rather than listing its own, because a
  * census established under a scope this reader does not ask for leaves the answer unknown while
- * looking established.
+ * looking established. The citation scope is in the set because the answer moves with that
+ * population, not because a census over it is required.
  */
 /**
  * The statement kinds a stated link may carry. They are the wire spelling of the three stated
@@ -68,10 +69,10 @@ export const NODE_SUPPORT_SCOPES: readonly string[] = [
 /**
  * The subset a source-side census may count: the incidence roles, and not the citation scope.
  *
- * The citation population is the revision records C2 owns. A pass that walks source relationships
- * has not looked at them and cannot prove a legacy graph citation is represented among them, so it
- * counts what it walked and leaves that scope unknown — which keeps the support answer unknown
- * too, honestly, until whoever owns those records counts them.
+ * The citation population is the revision records, and a pass that walks source relationships has
+ * not looked at them. Its walk classifies graph relationships into role scopes, so the citation
+ * scope would take the no-contribution branch and be sealed as a proved zero over a population
+ * nobody read. It stays out, and the support reading asks the citation records directly instead.
  */
 export const NODE_SUPPORT_ROLE_SCOPES: readonly string[] = SUPPORT_ROLES.map((role) =>
   nodeRoleScope(role),
@@ -92,9 +93,9 @@ export type NodeSupportReading = {
  * What the committed records say about one node, with the tokens the answer rests on.
  *
  * A node with committed incidence in any support role is supported outright. A node with none is
- * unsupported only when every one of those scopes carries an established census and no narrative
- * cites it; a single uncounted scope makes the whole answer unknown, because the missing count is
- * exactly where the support would have been recorded.
+ * unsupported only when every one of those ROLE scopes carries an established census and no
+ * published revision cites it; a single uncounted role makes the whole answer unknown, because the
+ * missing count is exactly where the support would have been recorded.
  */
 /**
  * What the GRAPH says this node is, read from an authoritative label by the caller that has one.
@@ -123,8 +124,6 @@ export function certifyNodeSupport(
     evidenceRevision[scope] =
       publishedScopeToken(db, { endpointId: nodeId, relationClass: scope }) ?? 'absent';
   }
-  const citationScope = NARRATIVE_SCOPES[0];
-
   for (const role of SUPPORT_ROLES) {
     if (countCommittedIncidenceForNode(db, nodeId, role) > 0) {
       return { support: 'supported', reason: `committed ${role} incidence`, evidenceRevision };
@@ -186,16 +185,18 @@ export function certifyNodeSupport(
       evidenceRevision,
     };
   }
-  if (!scopeSupportsVerifiedEmpty(db, { endpointId: nodeId, relationClass: citationScope })) {
-    return {
-      support: 'unknown',
-      reason: `no established census for ${citationScope}`,
-      evidenceRevision,
-    };
-  }
+  // The citation population carries no census requirement, and that is deliberate. The scope is
+  // filed per endpoint, and on a node that is a citation TARGET no producer establishes it: a
+  // narrative publication counts only the set it authored on its own node, and the cohort seal
+  // walks source relationships and has never read the revision records. Requiring it here asked
+  // for a count nothing writes, so every ordinary node answered unknown for good and the repair
+  // lifecycle was inert by construction rather than by policy. What answers the question is the
+  // citation records read above: a revision records what it cited in the transaction that
+  // acknowledges it. The token stays on the reading, so a qualification breaks when that
+  // population moves.
   return {
     support: 'unsupported',
-    reason: 'every support census is established and empty',
+    reason: 'every support census is established and empty, and no revision cites it',
     evidenceRevision,
   };
 }
