@@ -21,6 +21,7 @@ import type { PublicationBoundary } from '../../infrastructure/publication/types
 import { committedIncidenceForNode } from '../../infrastructure/sqlite/committed-evidence.js';
 import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
+import { unsettledLinkStates } from '../../infrastructure/sqlite/evidence-link-settlement.js';
 import { evidenceLinkId } from '../../infrastructure/sqlite/evidence-links.js';
 import {
   acknowledgePublicationIntent,
@@ -186,6 +187,36 @@ it('carries the absorbed claim’s evidence to the survivor and retires its own 
   expect(committedIncidenceForNode(store.db, loser, 'mention')).toMatchObject([
     { sourceId: 'episode-1', currency: 'closed' },
   ]);
+}, 120_000);
+
+it('owes nothing after a merge the graph declined', async () => {
+  const survivor = `survivor-declined-${String(serial)}`;
+  const loser = `loser-declined-${String(serial)}`;
+  await seedRetainedClaim(substrate.harness.driver, { id: survivor, sourceId: 'episode-3' });
+  // The loser is not a current claim, which is the ordinary race with a concurrent supersession.
+  mention('episode-3', loser, `seed-declined-${String(serial)}`);
+
+  const outcome = await coordinator.publish({
+    kind: 'semantic_write',
+    operationId: `merge-declined-${String(serial)}`,
+    payload: {
+      survivorId: survivor,
+      loserId: loser,
+      now: NOW.toISOString(),
+      judged: judged('episode-3'),
+      coverageEpoch: epoch(),
+    },
+  });
+
+  expect(outcome.status).toBe('acknowledged');
+  expect(outcome.status === 'acknowledged' && outcome.result).toMatchObject({ merged: false });
+  // Nothing carried and nothing retired, and nothing left owed either: the source that stood
+  // behind the absorbed claim keeps no obligation the eviction fence would pin it on.
+  expect(committedIncidenceForNode(store.db, survivor, 'mention')).toEqual([]);
+  expect(committedIncidenceForNode(store.db, loser, 'mention')).toMatchObject([
+    { currency: 'open' },
+  ]);
+  expect(unsettledLinkStates(store.db, 'episode-3')).toEqual([]);
 }, 120_000);
 
 it('recovers a merge interrupted between the graph write and the acknowledgment', async () => {

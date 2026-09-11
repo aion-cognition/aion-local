@@ -58,3 +58,20 @@ export function unsettledLinkVersions(
     .filter((key) => statement.get(key.linkId, key.operationKey) !== undefined)
     .map((key) => key.operationKey);
 }
+
+/**
+ * Drops the versions one rejected operation prepared and nothing can ever adopt.
+ *
+ * A version keyed on the operation that wrote it cannot be found again: the retry carries a new
+ * operation id, so it takes a new key and leaves the old row owed by an operation that will never
+ * acknowledge. Nothing was in the committed view and no projection points at it, so releasing it
+ * is a return to the state before the attempt rather than a correction of a recorded fact. A
+ * delivery-keyed version is NOT released here; that one is re-adopted by its own retry.
+ *
+ * Returns how many were released.
+ */
+export function releasePreparedLinkVersions(db: SqliteHandle, operationId: string): number {
+  return db
+    .prepare('DELETE FROM evidence_link_versions WHERE operation_id = ? AND known_from IS NULL')
+    .run(operationId).changes;
+}

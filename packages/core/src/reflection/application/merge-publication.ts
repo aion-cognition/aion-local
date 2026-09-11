@@ -22,6 +22,7 @@ import type { PublicationContext } from '../../infrastructure/publication/types.
 import { committedIncidenceForNodesAt } from '../../infrastructure/sqlite/committed-evidence.js';
 import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { releasePreparedLinkVersions } from '../../infrastructure/sqlite/evidence-link-settlement.js';
 import {
   evidenceLinkId,
   prepareRetirementVersion,
@@ -342,10 +343,16 @@ export const claimMergePublication = new PublicationOperation({
     return undefined;
   },
   acknowledgeSqlite(context, data, result) {
-    // A write the graph declined changed nothing there and must change nothing here. Everything
-    // this operation prepared stays durable and outside the committed view, and the numbers it
-    // parked go back, so the tokens a reader already holds stay current.
+    // A write the graph declined changed nothing there and must change nothing here. The numbers
+    // this operation parked go back, so the tokens a reader already holds stay current, and the
+    // versions it prepared are released rather than left owed.
+    //
+    // Left, they would be owed forever: this operation is acknowledged, so no recovery revisits
+    // it, and its versions are keyed on its own id, so no later merge can find them. The eviction
+    // fence reads any unacknowledged version as an obligation and would pin every source behind
+    // the absorbed claim on one no repair could discharge.
     if (!result.merged) {
+      releasePreparedLinkVersions(context.db, context.operationId);
       discardMaterialization(context.db, {
         sourceId: data.survivorId,
         operationId: context.operationId,
@@ -386,6 +393,9 @@ export const claimMergePublication = new PublicationOperation({
     return undefined;
   },
   discardSqlite(context, data) {
+    // Same release on the rejected path. A discard is terminal for the operation, so a version it
+    // prepared under its own key has no later attempt that could adopt or settle it.
+    releasePreparedLinkVersions(context.db, context.operationId);
     discardMaterialization(context.db, {
       sourceId: data.survivorId,
       operationId: context.operationId,
