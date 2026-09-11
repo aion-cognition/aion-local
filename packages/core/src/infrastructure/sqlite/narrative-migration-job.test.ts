@@ -4,15 +4,25 @@ import { join } from 'node:path';
 import { beforeEach, afterEach, expect, it } from 'vitest';
 
 import { SqliteStore } from './database.js';
-import { recordIngest, countMigrationProgress, readMigrationCohort } from './migration-cohorts.js';
+import {
+  recordIngest,
+  countMigrationProgress,
+  readMigrationCohort,
+  freezeMigrationCohort,
+} from './migration-cohorts.js';
 import { sourceReservedForMigration } from './migration-partition.js';
 import {
   beginNarrativeMigration,
+  MIGRATION_COHORT_LIMIT,
   readNarrativeMigration,
   advanceNarrativeMigration,
   captureNarrativeMigrationPage,
   freezeNarrativeMigrationCapture,
 } from './narrative-migration-job.js';
+import {
+  abandonNarrativeMigration,
+  refreshNarrativeMigration,
+} from './narrative-migration-state.js';
 
 const NOW = new Date('2026-09-10T10:00:00.000Z');
 const policy = {
@@ -107,7 +117,7 @@ it('freezes the complete captured denominator without claiming raw verification 
   expect(freezeNarrativeMigrationCapture(store.db, complete, NOW)).toBe(false);
 });
 
-it('rejects a stale second driver and policy changes while retaining the saved job', () => {
+it('rejects a stale second driver while retaining the saved policy across config changes', () => {
   const initial = beginNarrativeMigration(store.db, { cohortId: 'cohort', policy, now: NOW });
   const other = new SqliteStore({ filePath: path });
   try {
@@ -115,13 +125,13 @@ it('rejects a stale second driver and policy changes while retaining the saved j
     expect(advanceNarrativeMigration(store.db, initial, 'complete', 'stale', NOW)).toBe(false);
     const held = readNarrativeMigration(store.db, 'cohort');
     expect(held).toMatchObject({ phase: 'graph', cursor: 'first' });
-    expect(() =>
+    expect(
       beginNarrativeMigration(store.db, {
         cohortId: 'cohort',
         policy: { ...policy, maxMembers: 25 },
         now: NOW,
       }),
-    ).toThrow('frozen policy');
+    ).toEqual(held);
     expect(readNarrativeMigration(store.db, 'cohort')).toEqual(held);
   } finally {
     other.close();
@@ -138,4 +148,70 @@ it('refuses an inexact revision instead of comparing rounded cursor versions', (
     'unsafe cursor',
   );
   expect(store.db.prepare('SELECT source_id FROM narrative_migration_capture').all()).toEqual([]);
+});
+
+it('holds at the capture bound before persisting an overflowing page', () => {
+  recordIngest(store.db, 'overflow', NOW);
+  const job = beginNarrativeMigration(store.db, { cohortId: 'bounded', policy, now: NOW });
+  store.db
+    .prepare(
+      `WITH RECURSIVE positions(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM positions WHERE n < ?)
+    INSERT INTO narrative_migration_capture (cohort_id, source_id, archive_seen, graph_seen)
+    SELECT 'bounded', 'captured-' || n, 1, 0 FROM positions`,
+    )
+    .run(MIGRATION_COHORT_LIMIT);
+  captureNarrativeMigrationPage(store.db, job, ['overflow'], 'past-bound', NOW);
+  const row = store.db
+    .prepare('SELECT COUNT(*) AS n FROM narrative_migration_capture WHERE cohort_id = ?')
+    .get('bounded') as { n: number };
+  expect(row.n).toBe(MIGRATION_COHORT_LIMIT);
+  expect(readNarrativeMigration(store.db, 'bounded')).toMatchObject({
+    state: 'blocked',
+    cursor: '',
+    blockedReason: 'capture_member_bound',
+  });
+});
+
+it('releases frozen reservations on abandonment and rejects the stale runner', () => {
+  const job = beginNarrativeMigration(store.db, { cohortId: 'retired-job', policy, now: NOW });
+  captureNarrativeMigrationPage(store.db, job, ['old'], 'captured', NOW);
+  const captured = readNarrativeMigration(store.db, job.cohortId)!;
+  advanceNarrativeMigration(store.db, captured, 'graph', '', NOW);
+  freezeNarrativeMigrationCapture(store.db, readNarrativeMigration(store.db, job.cohortId)!, NOW);
+  const frozen = readNarrativeMigration(store.db, job.cohortId)!;
+  expect(sourceReservedForMigration(store.db, 'old')).toBe(true);
+  expect(abandonNarrativeMigration(store.db, job.cohortId, NOW)).toBe('abandoned');
+  expect(sourceReservedForMigration(store.db, 'old')).toBe(false);
+  expect(advanceNarrativeMigration(store.db, frozen, 'order', 'stale', NOW)).toBe(false);
+  expect(
+    refreshNarrativeMigration(store.db, readNarrativeMigration(store.db, job.cohortId)!, NOW),
+  ).toBe(false);
+  expect(readMigrationCohort(store.db, job.cohortId)).toBeDefined();
+  expect(countMigrationProgress(store.db, job.cohortId).accounted).toBe(1);
+  store.close();
+  store = new SqliteStore({ filePath: path });
+  expect(readNarrativeMigration(store.db, job.cohortId)?.state).toBe('abandoned');
+});
+
+it('refuses a partition policy that conflicts with an older frozen cohort', () => {
+  freezeMigrationCohort(store.db, {
+    cohortId: 'older',
+    cohortDigest: 'old',
+    intakeWatermark: 1,
+    archiveRowidLow: 0,
+    archiveRowidHigh: 0,
+    graphCensusDigest: 'old',
+    orderingPolicyVersion: 2,
+    createdAt: NOW,
+    members: ['old'],
+  });
+  expect(() => beginNarrativeMigration(store.db, { cohortId: 'older', policy, now: NOW })).toThrow(
+    'migration_ordering_policy_mismatch',
+  );
+  expect(readNarrativeMigration(store.db, 'older')).toBeUndefined();
+  expect(
+    store.db
+      .prepare('SELECT partition_policy_json FROM migration_cohorts WHERE cohort_id = ?')
+      .get('older'),
+  ).toEqual({ partition_policy_json: null });
 });

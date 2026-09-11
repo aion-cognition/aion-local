@@ -10,9 +10,16 @@ import {
 } from './migration-cohorts.js';
 import {
   parseMigrationPartitionPolicy,
+  readMigrationPolicy,
   rememberMigrationPolicy,
   type MigrationPartitionPolicy,
 } from './migration-partition.js';
+import { MigrationRefused } from './migration-refusal.js';
+import {
+  migrationState,
+  holdNarrativeMigration,
+  type NarrativeMigrationState,
+} from './narrative-migration-state.js';
 import { hashContent } from '../../reflection/domain/content.js';
 
 const Phase = z.enum([
@@ -33,6 +40,8 @@ export const MIGRATION_COHORT_LIMIT = 65_536;
 export type NarrativeMigrationJob = {
   readonly cohortId: string;
   readonly phase: NarrativeMigrationPhase;
+  readonly state: NarrativeMigrationState;
+  readonly blockedReason?: string;
   readonly revision: number;
   readonly cursor: string;
   readonly intakeWatermark: number;
@@ -51,6 +60,8 @@ export function readNarrativeMigration(
     | {
         cohort_id: string;
         phase: string;
+        lifecycle_state?: string;
+        blocked_reason?: string | null;
         revision: number;
         cursor: string;
         intake_watermark: number;
@@ -72,6 +83,8 @@ export function readNarrativeMigration(
     : {
         cohortId: row.cohort_id,
         phase: Phase.parse(row.phase),
+        state: migrationState(row.phase, row.lifecycle_state),
+        ...(row.blocked_reason == null ? {} : { blockedReason: row.blocked_reason }),
         revision: row.revision,
         cursor: row.cursor,
         intakeWatermark: row.intake_watermark,
@@ -90,17 +103,18 @@ export function beginNarrativeMigration(
     readonly now: Date;
   },
 ): NarrativeMigrationJob {
-  const policy = parseMigrationPartitionPolicy(input.policy);
   return db
     .transaction(() => {
       const held = readNarrativeMigration(db, input.cohortId);
       if (held !== undefined) {
-        if (JSON.stringify(held.policy) !== JSON.stringify(policy)) {
-          throw new Error('a narrative migration cannot change its frozen policy');
-        }
         return held;
       }
       const frozen = readMigrationCohort(db, input.cohortId);
+      const policy =
+        readMigrationPolicy(db, input.cohortId) ?? parseMigrationPartitionPolicy(input.policy);
+      if (frozen !== undefined && frozen.orderingPolicyVersion !== policy.partitionPolicyVersion) {
+        throw new MigrationRefused(input.cohortId, 'migration_ordering_policy_mismatch');
+      }
       const bounds = archiveRowidBounds(db);
       db.prepare(
         `INSERT INTO narrative_migration_jobs
@@ -142,10 +156,11 @@ export function advanceNarrativeMigration(
   return (
     db
       .prepare(
-        `UPDATE narrative_migration_jobs SET phase = ?, cursor = ?, revision = revision + 1, updated_at = ?
-      WHERE cohort_id = ? AND phase = ? AND revision = ?`,
+        `UPDATE narrative_migration_jobs SET phase = ?, cursor = ?, lifecycle_state = CASE WHEN ? = 'complete' THEN 'complete' ELSE lifecycle_state END, revision = revision + 1, updated_at = ?
+      WHERE cohort_id = ? AND phase = ? AND revision = ? AND lifecycle_state = 'running'`,
       )
-      .run(phase, cursor, now.toISOString(), job.cohortId, job.phase, job.revision).changes === 1
+      .run(phase, cursor, phase, now.toISOString(), job.cohortId, job.phase, job.revision)
+      .changes === 1
   );
 }
 
@@ -163,23 +178,38 @@ export function captureNarrativeMigrationPage(
   return db
     .transaction(() => {
       const current = readNarrativeMigration(db, job.cohortId);
-      if (current?.revision !== job.revision || current.phase !== job.phase) {
+      if (
+        current?.revision !== job.revision ||
+        current.phase !== job.phase ||
+        current.state !== 'running'
+      ) {
+        return false;
+      }
+      const eligible = [...new Set(sourceIds)].filter((sourceId) => {
+        const arrived = readIngestPosition(db, sourceId);
+        return arrived === undefined || arrived <= job.intakeWatermark;
+      });
+      const exists = db.prepare(
+        'SELECT 1 FROM narrative_migration_capture WHERE cohort_id = ? AND source_id = ?',
+      );
+      const additions = eligible.filter(
+        (sourceId) => exists.get(job.cohortId, sourceId) === undefined,
+      ).length;
+      if (countCapturedMigrationSources(db, job.cohortId) + additions > MIGRATION_COHORT_LIMIT) {
+        holdNarrativeMigration(db, job, 'capture_member_bound', now);
         return false;
       }
       const insert =
         db.prepare(`INSERT INTO narrative_migration_capture (cohort_id, source_id, archive_seen, graph_seen)
-      VALUES (?, ?, ?, ?) ON CONFLICT(cohort_id, source_id) DO UPDATE SET
+        VALUES (?, ?, ?, ?) ON CONFLICT(cohort_id, source_id) DO UPDATE SET
         archive_seen = MAX(archive_seen, excluded.archive_seen), graph_seen = MAX(graph_seen, excluded.graph_seen)`);
-      for (const sourceId of sourceIds) {
-        const arrived = readIngestPosition(db, sourceId);
-        if (arrived === undefined || arrived <= job.intakeWatermark) {
-          insert.run(
-            job.cohortId,
-            sourceId,
-            job.phase === 'archive' ? 1 : 0,
-            job.phase === 'graph' ? 1 : 0,
-          );
-        }
+      for (const sourceId of eligible) {
+        insert.run(
+          job.cohortId,
+          sourceId,
+          job.phase === 'archive' ? 1 : 0,
+          job.phase === 'graph' ? 1 : 0,
+        );
       }
       return advanceNarrativeMigration(db, job, job.phase, nextCursor, now);
     })
@@ -195,7 +225,11 @@ export function freezeNarrativeMigrationCapture(
   return db
     .transaction(() => {
       const current = readNarrativeMigration(db, job.cohortId);
-      if (current?.revision !== job.revision || current.phase !== 'graph') {
+      if (
+        current?.revision !== job.revision ||
+        current.phase !== 'graph' ||
+        current.state !== 'running'
+      ) {
         return false;
       }
       const rows = db
@@ -233,4 +267,12 @@ export function freezeNarrativeMigrationCapture(
       return advanceNarrativeMigration(db, job, 'verify', '', now);
     })
     .immediate();
+}
+
+/** The captured population is provisional until the fixed cohort is frozen. */
+export function countCapturedMigrationSources(db: SqliteHandle, cohortId: string): number {
+  const row = db
+    .prepare('SELECT COUNT(*) AS n FROM narrative_migration_capture WHERE cohort_id = ?')
+    .get(cohortId) as { n: number };
+  return row.n;
 }

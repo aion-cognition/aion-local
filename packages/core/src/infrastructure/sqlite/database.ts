@@ -5,7 +5,11 @@ import { dirname } from 'node:path';
 import type { ColumnAddition } from './column-additions.js';
 import { IDENTITY_INDEX_STATEMENTS, IDENTITY_SCHEMA_STATEMENTS } from './identity-schema.js';
 import { migrateUnversionedLedgerKeys } from './ledger-version-migration.js';
-import { NARRATIVE_MIGRATION_SCHEMA_STATEMENTS } from './narrative-migration-schema.js';
+import {
+  NARRATIVE_MIGRATION_SCHEMA_STATEMENTS,
+  NARRATIVE_MIGRATION_COLUMN_ADDITIONS,
+  NARRATIVE_MIGRATION_INDEX_STATEMENTS,
+} from './narrative-migration-schema.js';
 import {
   NARRATIVE_COLUMN_ADDITIONS,
   NARRATIVE_INDEX_STATEMENTS,
@@ -312,6 +316,7 @@ const INDEX_STATEMENTS: readonly string[] = [
      ON reflection_queue (episode_id, job_type) WHERE episode_id IS NOT NULL`,
   ...IDENTITY_INDEX_STATEMENTS,
   ...NARRATIVE_INDEX_STATEMENTS,
+  ...NARRATIVE_MIGRATION_INDEX_STATEMENTS,
   ...READINESS_INDEX_STATEMENTS,
   ...SOURCE_SEARCH_INDEX_STATEMENTS,
 ];
@@ -350,6 +355,7 @@ const COLUMN_ADDITIONS: readonly ColumnAddition[] = [
     definition: 'INTEGER NOT NULL DEFAULT 0',
   },
   ...NARRATIVE_COLUMN_ADDITIONS,
+  ...NARRATIVE_MIGRATION_COLUMN_ADDITIONS,
   ...READINESS_COLUMN_ADDITIONS,
 ];
 

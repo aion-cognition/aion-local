@@ -42,7 +42,7 @@ it('continues past a pre-sealed session whose other member fails verification', 
     policy,
     now: NOW,
     steps: 1,
-    betweenStepsMs: 60000,
+    batchWallMs: 60000,
   };
   for (
     let attempt = 0;

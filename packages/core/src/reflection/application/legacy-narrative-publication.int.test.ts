@@ -148,7 +148,7 @@ it('rejects a delayed legacy synthesis after cutover and dispatches the current 
       cohortId: 'legacy-delayed-migration',
       now: NOW,
       steps: 128,
-      betweenStepsMs: 60_000,
+      batchWallMs: 60_000,
       policy: { ...CHUNK_BOUNDARY_POLICY, partitionPolicyVersion: 1 },
     };
     let migration = await runNarrativeMigrationBatch(chunks, options);

@@ -80,7 +80,7 @@ it('carries a 914-source legacy session through bounded batches without rewritin
     now,
     steps: 128,
     pageSize: 64,
-    betweenStepsMs: 60_000,
+    batchWallMs: 60_000,
     policy: { ...CHUNK_BOUNDARY_POLICY, partitionPolicyVersion: 1 },
   };
   let result = await runNarrativeMigrationBatch(deps, options);
@@ -94,7 +94,7 @@ it('carries a 914-source legacy session through bounded batches without rewritin
       }),
     );
     expect(
-      result.stopped === undefined || result.stopped === 'between_steps_budget',
+      result.stopped === undefined || result.stopped === 'batch_wall_budget',
       JSON.stringify(result),
     ).toBe(true);
     result = await runNarrativeMigrationBatch(deps, options);

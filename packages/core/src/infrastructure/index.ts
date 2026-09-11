@@ -45,7 +45,7 @@ export type { ExperienceArchiveRow } from './sqlite/experience-archive.js';
 export { listReferenceBatches, readSourceRecord } from './sqlite/source-identity.js';
 export { readNarrativeMigration } from './sqlite/narrative-migration-job.js';
 export { PARTITION_POLICY_VERSION } from './sqlite/chunk-manifest.js';
-export { openReadOnlySqliteHandle } from './sqlite/database.js';
+export { openReadOnlySqliteHandle, sqliteTableExists } from './sqlite/database.js';
 
 export { countUsageEvents } from './sqlite/usage-events.js';
 
@@ -249,3 +249,6 @@ export {
   type ApiUsageGroup,
 } from './sqlite/api-usage.js';
 export { estimateApiCost } from './providers/api-pricing.js';
+
+export { abandonNarrativeMigration } from './sqlite/narrative-migration-state.js';
+export { MigrationRefused } from './sqlite/migration-refusal.js';

@@ -47,7 +47,7 @@ it('resumes a fixed partition while late backdated intake keeps its own live pat
     now: NOW,
     steps: 1,
     pageSize: 1,
-    betweenStepsMs: 60_000,
+    batchWallMs: 60_000,
   };
   const first = await runNarrativeMigrationBatch(chunks, options);
   expect(first.cohort.status).toBe('capturing');
@@ -110,7 +110,7 @@ it('keeps an unproved capture clock as a separate gap and repairs it without rep
     policy: POLICY,
     now: NOW,
     steps: 64,
-    betweenStepsMs: 60_000,
+    batchWallMs: 60_000,
   };
   let progress = await runNarrativeMigrationBatch(chunks, options);
   expect(progress.complete).toBe(false);

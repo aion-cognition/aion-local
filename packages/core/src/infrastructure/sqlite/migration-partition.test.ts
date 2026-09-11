@@ -17,6 +17,7 @@ import {
   sourceReservedForMigration,
   sealMigrationMembership,
 } from './migration-partition.js';
+import { beginNarrativeMigration } from './narrative-migration-job.js';
 import { readSourceRecord } from './source-identity.js';
 import { seedSource } from '../../evidence/test-support/evidence.fixture.js';
 
@@ -80,9 +81,11 @@ describe('fixed historical partition records', () => {
       .immediate();
   }
 
-  it('reserves only the frozen cohort when its partition policy is recorded', () => {
+  it('reserves only the frozen cohort while a nonterminal job owns it', () => {
     expect(sourceReservedForMigration(store.db, 'a')).toBe(false);
     rememberMigrationPolicy(store.db, 'cohort', POLICY);
+    expect(sourceReservedForMigration(store.db, 'a')).toBe(false);
+    beginNarrativeMigration(store.db, { cohortId: 'cohort', policy: POLICY, now: NOW });
     expect(sourceReservedForMigration(store.db, 'a')).toBe(true);
     expect(sourceReservedForMigration(store.db, 'tail')).toBe(false);
     expect(readMigrationPolicy(store.db, 'cohort')).toEqual(POLICY);

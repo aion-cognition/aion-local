@@ -20,6 +20,7 @@ import {
   advanceNarrativeMigration,
   beginNarrativeMigration,
   captureNarrativeMigrationPage,
+  countCapturedMigrationSources,
   freezeNarrativeMigrationCapture,
   readNarrativeMigration,
   type NarrativeMigrationJob,
@@ -29,6 +30,7 @@ import {
   nextMigrationChunk,
   nextMigrationSource,
 } from '../../infrastructure/sqlite/narrative-migration-read.js';
+import { refreshNarrativeMigration } from '../../infrastructure/sqlite/narrative-migration-state.js';
 import { markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 
 /** Each limit belongs to one batch or one existing domain operation, never to an unbounded retry loop. */
@@ -36,7 +38,7 @@ export const NARRATIVE_MIGRATION_LIMITS = {
   steps: 16,
   page: 32,
   relations: 500,
-  betweenStepsMs: 5000,
+  batchWallMs: 5000,
 } as const;
 
 export type NarrativeMigrationOptions = {
@@ -46,7 +48,7 @@ export type NarrativeMigrationOptions = {
   readonly steps?: number;
   readonly pageSize?: number;
   readonly relationLimit?: number;
-  readonly betweenStepsMs?: number;
+  readonly batchWallMs?: number;
   readonly signal?: AbortSignal;
   /** Explicitly re-prove the frozen sources; assignments and the first saved order remain immutable. */
   readonly refresh?: boolean;
@@ -58,6 +60,7 @@ export type NarrativeMigrationReport = {
   readonly cohortId: string;
   readonly phase: NarrativeMigrationJob['phase'];
   readonly complete: boolean;
+  readonly state: NarrativeMigrationJob['state'];
   readonly steps: number;
   readonly verifiedOutcomes: number;
   readonly sealed: number;
@@ -136,20 +139,27 @@ export async function runNarrativeMigrationBatch(
   const limit = positive(options.steps ?? NARRATIVE_MIGRATION_LIMITS.steps);
   const page = positive(options.pageSize ?? NARRATIVE_MIGRATION_LIMITS.page);
   const relations = positive(options.relationLimit ?? NARRATIVE_MIGRATION_LIMITS.relations);
-  const deadline = positive(options.betweenStepsMs ?? NARRATIVE_MIGRATION_LIMITS.betweenStepsMs);
-  await deps.publications.recover();
-  let job = beginNarrativeMigration(deps.db, options);
-  if (options.refresh && job.phase !== 'archive' && job.phase !== 'graph') {
-    advanceNarrativeMigration(deps.db, job, 'verify', '', options.now);
-    job = resumedJob(deps.db, options.cohortId);
+  const deadline = positive(options.batchWallMs ?? NARRATIVE_MIGRATION_LIMITS.batchWallMs);
+  let job = readNarrativeMigration(deps.db, options.cohortId);
+  if (
+    job === undefined ||
+    job.state === 'running' ||
+    (options.refresh && job.state !== 'abandoned')
+  ) {
+    await deps.publications.recover();
+    job = beginNarrativeMigration(deps.db, options);
+    if (options.refresh) {
+      refreshNarrativeMigration(deps.db, job, options.now);
+      job = resumedJob(deps.db, options.cohortId);
+    }
   }
   const counts = new Counts();
   const started = performance.now();
   let steps = 0;
   let stopped: string | undefined;
-  while (steps < limit && job.phase !== 'complete') {
+  while (steps < limit && job.state === 'running') {
     if (options.signal?.aborted || performance.now() - started >= deadline) {
-      stopped = options.signal?.aborted ? 'aborted' : 'between_steps_budget';
+      stopped = options.signal?.aborted ? 'aborted' : 'batch_wall_budget';
       break;
     }
     stopped = await step(deps, job, options, { page, relations }, counts);
@@ -159,15 +169,17 @@ export async function runNarrativeMigrationBatch(
       break;
     }
   }
+  if (job.state === 'blocked') {
+    stopped = job.blockedReason ?? 'migration_blocked';
+    issue(deps, job, counts, job.cohortId, stopped);
+  } else if (job.state === 'abandoned') {
+    stopped = 'migration_abandoned';
+  }
   const cohort =
     readMigrationCohort(deps.db, options.cohortId) === undefined
       ? {
           status: 'capturing' as const,
-          captured: (
-            deps.db
-              .prepare('SELECT COUNT(*) AS n FROM narrative_migration_capture WHERE cohort_id = ?')
-              .get(options.cohortId) as { n: number }
-          ).n,
+          captured: countCapturedMigrationSources(deps.db, options.cohortId),
         }
       : {
           status: 'frozen' as const,
@@ -177,7 +189,8 @@ export async function runNarrativeMigrationBatch(
   return {
     cohortId: options.cohortId,
     phase: job.phase,
-    complete: job.phase === 'complete',
+    complete: job.state === 'complete',
+    state: job.state,
     steps,
     ...counts.snapshot(),
     cohort,

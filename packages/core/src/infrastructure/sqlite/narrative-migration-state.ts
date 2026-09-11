@@ -1,0 +1,92 @@
+import { z } from 'zod';
+
+import type { SqliteHandle } from './database.js';
+
+const State = z.enum(['running', 'blocked', 'complete', 'abandoned']);
+export type NarrativeMigrationState = z.infer<typeof State>;
+/** Every reservation reads this lifecycle predicate, including old rows whose phase is complete. */
+export const ACTIVE_MIGRATION_JOB =
+  "job.phase <> 'complete' AND job.lifecycle_state IN ('running','blocked')";
+
+export function migrationState(phase: string, stored: unknown): NarrativeMigrationState {
+  const state = stored === undefined || stored === null ? 'running' : State.parse(stored);
+  if (state === 'running' && phase === 'complete') {
+    return 'complete';
+  }
+  return state;
+}
+
+/** Abandoning retires scheduling authority, not accepted inputs, frozen membership or published output. */
+export function abandonNarrativeMigration(
+  db: SqliteHandle,
+  cohortId: string,
+  now: Date,
+): NarrativeMigrationState | undefined {
+  return db
+    .transaction(() => {
+      const row = db
+        .prepare(
+          'SELECT phase, lifecycle_state, revision FROM narrative_migration_jobs WHERE cohort_id = ?',
+        )
+        .get(cohortId) as { phase: string; lifecycle_state: string; revision: number } | undefined;
+      if (row === undefined) {
+        return undefined;
+      }
+      const state = migrationState(row.phase, row.lifecycle_state);
+      if (state === 'complete' || state === 'abandoned') {
+        return state;
+      }
+      if (!Number.isSafeInteger(row.revision) || row.revision >= Number.MAX_SAFE_INTEGER) {
+        throw new Error('migration revision reached its exact-integer bound');
+      }
+      db.prepare(
+        "UPDATE narrative_migration_jobs SET lifecycle_state = 'abandoned', revision = revision + 1, updated_at = ? WHERE cohort_id = ?",
+      ).run(now.toISOString(), cohortId);
+      return 'abandoned';
+    })
+    .immediate();
+}
+
+/** The cursor stays at the uncompleted action; a stale runner cannot block or revive another state. */
+export function holdNarrativeMigration(
+  db: SqliteHandle,
+  job: { readonly cohortId: string; readonly phase: string; readonly revision: number },
+  reason: string,
+  now: Date,
+): boolean {
+  if (!Number.isSafeInteger(job.revision) || job.revision >= Number.MAX_SAFE_INTEGER) {
+    throw new Error('migration revision reached its exact-integer bound');
+  }
+  return (
+    db
+      .prepare(
+        "UPDATE narrative_migration_jobs SET lifecycle_state = 'blocked', blocked_reason = ?, revision = revision + 1, updated_at = ? WHERE cohort_id = ? AND phase = ? AND revision = ? AND lifecycle_state = 'running'",
+      )
+      .run(reason, now.toISOString(), job.cohortId, job.phase, job.revision).changes === 1
+  );
+}
+
+/** Explicit re-entry re-verifies evidence while retaining the captured denominator and policy. */
+export function refreshNarrativeMigration(
+  db: SqliteHandle,
+  job: { readonly cohortId: string; readonly phase: string; readonly revision: number },
+  now: Date,
+): boolean {
+  if (!Number.isSafeInteger(job.revision) || job.revision >= Number.MAX_SAFE_INTEGER) {
+    throw new Error('migration revision reached its exact-integer bound');
+  }
+  const capture = job.phase === 'archive' || job.phase === 'graph';
+  return (
+    db
+      .prepare(
+        "UPDATE narrative_migration_jobs SET lifecycle_state = 'running', blocked_reason = NULL, phase = ?, cursor = CASE WHEN ? THEN cursor ELSE '' END, revision = revision + 1, updated_at = ? WHERE cohort_id = ? AND revision = ? AND lifecycle_state <> 'abandoned'",
+      )
+      .run(
+        capture ? job.phase : 'verify',
+        capture ? 1 : 0,
+        now.toISOString(),
+        job.cohortId,
+        job.revision,
+      ).changes === 1
+  );
+}

@@ -24,7 +24,7 @@ it('records a late seal refusal and continues to the next session', async () => 
     policy: { ...boundary.CHUNK_BOUNDARY_POLICY, partitionPolicyVersion: 1 },
     now: NOW,
     steps: 1,
-    betweenStepsMs: 60000,
+    batchWallMs: 60000,
   };
   for (
     let attempt = 0;

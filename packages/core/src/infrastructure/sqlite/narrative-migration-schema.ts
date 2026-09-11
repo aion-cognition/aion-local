@@ -1,3 +1,5 @@
+import type { ColumnAddition } from './column-additions.js';
+
 /** Capture is resumable, but only the completed census becomes a frozen cohort. */
 export const NARRATIVE_MIGRATION_SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS narrative_migration_jobs (
@@ -5,6 +7,8 @@ export const NARRATIVE_MIGRATION_SCHEMA_STATEMENTS = [
     phase TEXT NOT NULL CHECK (phase IN ('archive','graph','verify','order','inventory','census','partition','publish','cutover','complete')),
     revision INTEGER NOT NULL DEFAULT 0,
     cursor TEXT NOT NULL DEFAULT '',
+    blocked_reason TEXT,
+    lifecycle_state TEXT NOT NULL DEFAULT 'running' CHECK (lifecycle_state IN ('running','blocked','complete','abandoned') AND (lifecycle_state <> 'blocked' OR blocked_reason IS NOT NULL)),
     intake_watermark INTEGER NOT NULL,
     archive_rowid_low INTEGER NOT NULL,
     archive_rowid_high INTEGER NOT NULL,
@@ -19,5 +23,17 @@ export const NARRATIVE_MIGRATION_SCHEMA_STATEMENTS = [
     graph_seen INTEGER NOT NULL DEFAULT 0 CHECK (graph_seen IN (0,1)),
     PRIMARY KEY (cohort_id, source_id)
   )`,
-  `CREATE INDEX IF NOT EXISTS migration_progress_partition ON migration_progress (partition_assignment, cohort_id)`,
+] as const;
+
+export const NARRATIVE_MIGRATION_COLUMN_ADDITIONS: readonly ColumnAddition[] = [
+  { table: 'narrative_migration_jobs', column: 'blocked_reason', definition: 'TEXT' },
+  {
+    table: 'narrative_migration_jobs',
+    column: 'lifecycle_state',
+    definition:
+      "TEXT NOT NULL DEFAULT 'running' CHECK (lifecycle_state IN ('running','blocked','complete','abandoned') AND (lifecycle_state <> 'blocked' OR blocked_reason IS NOT NULL))",
+  },
+];
+export const NARRATIVE_MIGRATION_INDEX_STATEMENTS = [
+  'CREATE INDEX IF NOT EXISTS migration_progress_partition ON migration_progress (partition_assignment, cohort_id)',
 ] as const;

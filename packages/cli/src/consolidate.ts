@@ -1,8 +1,9 @@
 import {
   ApiUsageRecorder,
+  abandonNarrativeMigration,
+  MigrationRefused,
   CHUNK_BOUNDARY_POLICY,
   NARRATIVE_MIGRATION_LIMITS,
-  openReadOnlySqliteHandle,
   PARTITION_POLICY_VERSION,
   ProviderRouter,
   readNarrativeMigration,
@@ -10,15 +11,17 @@ import {
 } from '@aion/core';
 
 import { CliUsageError, parseArgs, type ArgSpec } from './args.js';
+import { inspectMigration, writeMigrationStatus } from './consolidate-status.js';
 import { lifecycleNarrativeDeps } from './lifecycle.js';
 import { stdoutWriter, type Writer } from './output.js';
 import { abortOnInterrupt } from './replay.js';
 import { withSubstrate } from './substrate.js';
 
-const SPEC: ArgSpec<'status' | 'run'> = {
+const SPEC: ArgSpec<'status' | 'run' | 'abandon'> = {
   command: 'consolidate',
-  usage: 'aion consolidate [status | run] --cohort <id> [--steps <n>] [--refresh] [--json]',
-  subcommands: ['status', 'run'],
+  usage:
+    'aion consolidate [status | run | abandon] --cohort <id> [--steps <n>] [--refresh] [--json]',
+  subcommands: ['status', 'run', 'abandon'],
   options: [
     { flag: '--cohort', takesValue: true },
     { flag: '--steps', takesValue: true },
@@ -38,7 +41,7 @@ export function parseConsolidateFlags(argv: readonly string[]) {
   if (!Number.isSafeInteger(steps) || steps < 1 || steps > 256) {
     throw new CliUsageError('--steps must be a whole number between 1 and 256');
   }
-  if (args.subcommand === 'status' && (args.flags.has('--refresh') || args.values.has('--steps'))) {
+  if (args.subcommand !== 'run' && (args.flags.has('--refresh') || args.values.has('--steps'))) {
     throw new CliUsageError('--steps and --refresh apply to consolidate run');
   }
   return {
@@ -61,19 +64,34 @@ export function runConsolidate(
     write,
     parse: parseConsolidateFlags,
     run: async (substrate, flags) => {
+      const status = inspectMigration(substrate.config.sqlite.path, flags.cohortId);
       if (flags.action === 'status') {
-        const db = openReadOnlySqliteHandle({ filePath: substrate.config.sqlite.path });
-        try {
-          const job = readNarrativeMigration(db, flags.cohortId);
-          const line =
-            job === undefined
-              ? `no migration named ${flags.cohortId}`
-              : `${job.cohortId}: ${job.phase}, checkpoint ${String(job.revision)}`;
-          write(flags.json ? JSON.stringify({ job: job ?? null }) : line);
-          return job === undefined ? 1 : 0;
-        } finally {
-          db.close();
+        writeMigrationStatus(status, flags.json, write);
+        return status.status === 'read' && status.job.state !== 'blocked' ? 0 : 1;
+      }
+      if (flags.action === 'abandon') {
+        if (status.status !== 'read') {
+          writeMigrationStatus(status, flags.json, write);
+          return 1;
         }
+        abandonNarrativeMigration(substrate.db(), flags.cohortId, new Date());
+        writeMigrationStatus(
+          inspectMigration(substrate.config.sqlite.path, flags.cohortId),
+          flags.json,
+          write,
+        );
+        return 0;
+      }
+      if (status.status === 'unavailable') {
+        writeMigrationStatus(status, flags.json, write);
+        return 1;
+      }
+      if (
+        status.status === 'read' &&
+        (status.job.state === 'abandoned' || (!flags.refresh && status.job.state !== 'running'))
+      ) {
+        writeMigrationStatus(status, flags.json, write);
+        return status.job.state === 'complete' ? 0 : 1;
       }
       const connection = await substrate.requireGraph('consolidate run');
       if (connection === undefined) {
@@ -86,26 +104,44 @@ export function runConsolidate(
         config: substrate.config,
         recordApiCall: new ApiUsageRecorder(db, logger).recordApiCall,
       }).forRole('reflect');
-      const result = await runNarrativeMigrationBatch(
-        { ...shared, driver: connection.driver, db, logger, provider },
-        {
-          cohortId: flags.cohortId,
-          steps: flags.steps,
-          refresh: flags.refresh,
-          now: new Date(),
-          signal: abortOnInterrupt().signal,
-          policy: {
-            ...CHUNK_BOUNDARY_POLICY,
-            renderedInputAllowance: substrate.config.maintenance.chunkRenderedInputAllowance,
-            maxSpanMs: substrate.config.maintenance.chunkMaxSpanMs,
-            partitionPolicyVersion: PARTITION_POLICY_VERSION,
+      let result;
+      try {
+        result = await runNarrativeMigrationBatch(
+          { ...shared, driver: connection.driver, db, logger, provider },
+          {
+            cohortId: flags.cohortId,
+            steps: flags.steps,
+            refresh: flags.refresh,
+            now: new Date(),
+            signal: abortOnInterrupt().signal,
+            policy: readNarrativeMigration(db, flags.cohortId)?.policy ?? {
+              ...CHUNK_BOUNDARY_POLICY,
+              renderedInputAllowance: substrate.config.maintenance.chunkRenderedInputAllowance,
+              maxSpanMs: substrate.config.maintenance.chunkMaxSpanMs,
+              partitionPolicyVersion: PARTITION_POLICY_VERSION,
+            },
           },
-        },
-      );
+        );
+      } catch (error) {
+        if (!(error instanceof MigrationRefused)) {
+          throw error;
+        }
+        write(
+          flags.json
+            ? JSON.stringify({
+                status: 'refused',
+                cohortId: flags.cohortId,
+                issue: { id: error.id, reason: error.reason },
+              })
+            : error.message,
+        );
+        return 1;
+      }
+
       write(
         flags.json
           ? JSON.stringify(result)
-          : `${result.cohortId}: ${result.phase}; ${String(result.steps)} steps, ` +
+          : `${result.cohortId}: ${result.state}, ${result.phase}; ${String(result.steps)} steps, ` +
               `${String(result.sealed)} chunks sealed, ${String(result.published)} published, ${String(result.cutovers)} cutovers`,
       );
       if (!flags.json) {
@@ -116,9 +152,11 @@ export function runConsolidate(
           write(`  stopped: ${result.stopped}`);
         }
       }
-      return result.stopped === undefined ||
-        result.stopped === 'between_steps_budget' ||
-        result.stopped === 'aborted'
+      return result.state !== 'blocked' &&
+        result.state !== 'abandoned' &&
+        (result.stopped === undefined ||
+          result.stopped === 'batch_wall_budget' ||
+          result.stopped === 'aborted')
         ? 0
         : 1;
     },
