@@ -28,6 +28,10 @@ import {
 import { countNodesWithId } from '../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import { readEvictionManifest } from '../../infrastructure/sqlite/eviction-manifests.js';
 import {
+  acknowledgeStatedLinkVersions,
+  evidenceLinkId,
+  prepareMaterializedLinkVersion,
+  prepareRetirementVersion,
   prepareStatedLinkVersion,
   statedLinkId,
 } from '../../infrastructure/sqlite/evidence-links.js';
@@ -38,7 +42,9 @@ import {
 } from '../../infrastructure/sqlite/processing-generations.js';
 import {
   acceptReferenceBatch,
+  readSourceParts,
   readSourcePartTurnIds,
+  recordSourceParts,
 } from '../../infrastructure/sqlite/source-identity.js';
 import { readSourceResidency } from '../../infrastructure/sqlite/source-lifecycle.js';
 
@@ -316,13 +322,47 @@ it('pins a source whose accepted statement is still waiting to be published', as
   expect(await nodeExists(driver, sourceId)).toBe(true);
 });
 
-it('refuses when the archive digest the manifest proves is rewritten under it', async () => {
+it('refuses a prepared attempt when a re-verification rewrites a part hash under it', async () => {
   const sourceId = await eligibleSource('evict-digest-rewrite', 'S1');
   const nomination = await nominate(sourceId);
 
-  // What T9's guarded re-verification producer does to a source whose bytes it re-read: the part
-  // set is unchanged, so nothing else about the candidate moves, and the digest the manifest
-  // exists to prove is no longer the one the archive carries.
+  // The production writer the re-verification producer uses: `recordSourceParts` refreshes a
+  // part's content hash unconditionally and preserves its identity and clocks, so the turn set
+  // the candidate compares does not move.
+  const parts = readSourceParts(store.db, sourceId);
+  expect(parts.length).toBeGreaterThan(0);
+  recordSourceParts(
+    store.db,
+    sourceId,
+    parts.map((part) => ({
+      partKind: part.partKind as 'turn' | 'observation' | 'tool_execution',
+      ordinal: part.ordinal,
+      contentHash: `reverified-${part.contentHash}`,
+      ...(part.turnId === null ? {} : { turnId: part.turnId }),
+      ...(part.role === null ? {} : { role: part.role }),
+    })),
+  );
+  expect(readSourcePartTurnIds(store.db, sourceId)).toEqual(nomination.candidate.turnIds);
+
+  const outcome = await publishEviction(nomination);
+
+  // Refused, and refused EARLIER than the digest comparison: the search projection's coverage is
+  // keyed on the recorded hash, so a part whose hash moved is uncovered, and condition 6 answers
+  // before condition 2's proof is compared. Re-indexing cannot clear it either — the resolver
+  // will not resolve a source whose recorded hash disagrees with its bytes. Nothing is removed on
+  // any of those paths, which is what this case is about.
+  expect(outcome).toMatchObject({ status: 'deferred', reason: 'search_unindexed_parts' });
+  expect(await nodeExists(driver, sourceId)).toBe(true);
+});
+
+it('refuses when the archive digest the manifest proves no longer matches the record', async () => {
+  const sourceId = await eligibleSource('evict-digest-compare', 'S1');
+  const nomination = await nominate(sourceId);
+
+  // Constructed, not written by a production path: `recordSourceRecord` COALESCEs both
+  // record-level digests, so nothing in the workspace can rewrite one today. The comparison is
+  // defence in depth behind the search fence above, and this is what proves the comparison itself
+  // rather than the fence in front of it.
   store.db
     .prepare('UPDATE source_records SET verified_content_digest = ? WHERE source_id = ?')
     .run(`reverified-${sourceId}`, sourceId);
@@ -330,6 +370,72 @@ it('refuses when the archive digest the manifest proves is rewritten under it', 
   const outcome = await publishEviction(nomination);
 
   expect(outcome).toMatchObject({ status: 'deferred', reason: 'content_digests_changed' });
+  expect(await nodeExists(driver, sourceId)).toBe(true);
+});
+
+it('names the materialization producer when a legacy version is the one left unsettled', async () => {
+  const sourceId = await eligibleSource('evict-materialized-owed', 'S1');
+  expect(durableEligibility(store.db, sourceId, POLICY).status).toBe('eligible');
+
+  // The legacy producer's own preparation writer, left unacknowledged. It is not a statement
+  // anybody made about this source, and the pin says so.
+  prepareMaterializedLinkVersion(store.db, {
+    linkId: evidenceLinkId('mention', 'retained_node', sourceId, 'materialized-target'),
+    kind: 'mention',
+    qualifier: 'retained_node',
+    fromId: sourceId,
+    toId: 'materialized-target',
+    originalRelId: `rel-${sourceId}`,
+    operationId: `owed-materialization-${sourceId}`,
+    operationKey: `owed-materialization-key-${sourceId}`,
+    recordedValues: {},
+    temporalProof: {},
+    observedAt: NOW,
+  });
+
+  expect(durableEligibility(store.db, sourceId, POLICY)).toEqual({
+    status: 'pinned',
+    reason: 'materialization_settlement_owed',
+  });
+  expect(await nodeExists(driver, sourceId)).toBe(true);
+});
+
+it('names the merge when a retirement version is the one left unsettled', async () => {
+  const sourceId = await eligibleSource('evict-retired-owed', 'S1');
+  const linkId = statedLinkId('confirms', 'retained_node', sourceId, 'retired-target');
+  const settled = `settled-statement-${sourceId}`;
+  prepareStatedLinkVersion(store.db, {
+    linkId,
+    kind: 'confirms',
+    qualifier: 'retained_node',
+    fromId: sourceId,
+    toId: 'retired-target',
+    operationId: settled,
+    operationKey: `${settled}-key`,
+    recordedValues: {},
+    temporalProof: {},
+    observedAt: NOW,
+    referenceSourceId: sourceId,
+    referenceVersion: 1,
+  });
+  acknowledgeStatedLinkVersions(store.db, settled, NOW.toISOString(), NOW.toISOString());
+  expect(durableEligibility(store.db, sourceId, POLICY).status).toBe('eligible');
+
+  // A merge's retirement, appended and not yet acknowledged. The statement under it is settled;
+  // what is owed is the close, and the pin names that rather than the acceptance.
+  prepareRetirementVersion(store.db, {
+    linkId,
+    operationId: `owed-retirement-${sourceId}`,
+    operationKey: `owed-retirement-key-${sourceId}`,
+    recordedValues: {},
+    temporalProof: {},
+    observedAt: NOW,
+  });
+
+  expect(durableEligibility(store.db, sourceId, POLICY)).toEqual({
+    status: 'pinned',
+    reason: 'retirement_settlement_owed',
+  });
   expect(await nodeExists(driver, sourceId)).toBe(true);
 });
 

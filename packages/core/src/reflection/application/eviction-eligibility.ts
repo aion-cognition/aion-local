@@ -9,6 +9,7 @@ import { committedIncidenceForSource } from '../../infrastructure/sqlite/committ
 import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { SURVIVOR_WORK_KIND } from '../../infrastructure/sqlite/eviction-manifests.js';
+import { unsettledLinkStates } from '../../infrastructure/sqlite/evidence-link-settlement.js';
 import { listStatedLinks } from '../../infrastructure/sqlite/evidence-links.js';
 import { readSearchCapability } from '../../infrastructure/sqlite/fts-capability.js';
 import {
@@ -114,16 +115,39 @@ function qualificationAnchor(
 }
 
 /**
- * Whether a statement accepted about this source is still waiting to be published.
+ * The pin each class of unsettled link version earns.
  *
- * A stated link version with no `known_from` is durable, accepted and unsettled: the acceptance
- * landed in the records and its graph projection has not been written. Removing the projection
- * underneath one strands it — the write it is waiting for names a node that will not exist, and
- * no later pass can tell that from a statement nobody ever made. Condition 5 says remaining
- * obligations are acknowledged or transferred, and this is one of them.
+ * A version with no `known_from` is durable and invisible at the same time: the record landed and
+ * the graph write it is waiting for has not. Removing the projection underneath one strands that
+ * write — it names a node that will not exist, and no later pass can tell that from a record
+ * nobody ever made. Condition 5 says remaining obligations are acknowledged or transferred, and
+ * every one of these is one of them.
+ *
+ * They are named apart because they are different obligations with different owners. A statement
+ * somebody made about this source is the reference machinery's; a legacy relationship a backfill
+ * recorded is the materialization producer's; a retirement a merge appended is the merge's. One
+ * reason covering all three would name the wrong cause for two of them.
  */
-function referenceSettlementOwed(db: SqliteHandle, sourceId: string): boolean {
-  return listStatedLinks(db, sourceId).some((link) => link.knownFrom === null);
+const SETTLEMENT_PINS: Readonly<Record<string, string>> = {
+  stated: 'reference_settlement_owed',
+  materialized: 'materialization_settlement_owed',
+  retired: 'retirement_settlement_owed',
+};
+
+/**
+ * The first unsettled version class this source holds, as its own pin.
+ *
+ * A class the table above does not name still pins. Fail-closed is the rule and an unnamed class
+ * is exactly the case it exists for: something writes versions of a kind this fence was never
+ * taught, and the honest answer is that an obligation is owed and nobody here can say whose.
+ */
+function settlementOwed(db: SqliteHandle, sourceId: string): string | undefined {
+  const unsettled = unsettledLinkStates(db, sourceId);
+  if (unsettled.length === 0) {
+    return undefined;
+  }
+  const named = unsettled.find((state) => SETTLEMENT_PINS[state] !== undefined);
+  return named === undefined ? 'link_settlement_owed' : SETTLEMENT_PINS[named];
 }
 
 /**
@@ -252,8 +276,9 @@ export function durableEligibility(
   if (owesWork(db, sourceId, generation.processingGeneration)) {
     return pinned('source_work_outstanding');
   }
-  if (referenceSettlementOwed(db, sourceId)) {
-    return pinned('reference_settlement_owed');
+  const owedSettlement = settlementOwed(db, sourceId);
+  if (owedSettlement !== undefined) {
+    return pinned(owedSettlement);
   }
   if (readSearchCapability(db).status !== 'available') {
     return pinned('search_capability_unavailable');
