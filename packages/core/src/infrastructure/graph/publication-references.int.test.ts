@@ -18,7 +18,10 @@ import { PIPELINE_VERSION } from '../../reflection/domain/version.js';
 import { SessionManager } from '../../session/session-manager.js';
 import { PublicationCoordinator } from '../publication/coordinator.js';
 import { PUBLICATION_HANDLERS } from '../publication/handlers.js';
+import type { PublicationBoundary } from '../publication/types.js';
+import { readCurrentCoverageContract } from '../sqlite/coverage-contract.js';
 import { SqliteStore } from '../sqlite/database.js';
+import { unsettledLinkStates } from '../sqlite/evidence-link-settlement.js';
 import { listStatedLinks } from '../sqlite/evidence-links.js';
 import { listReferenceBatches } from '../sqlite/source-identity.js';
 import {
@@ -36,6 +39,7 @@ let store: SqliteStore;
 let coordinator: PublicationCoordinator;
 let sessionId: string;
 let serial = 0;
+let failAt: PublicationBoundary | undefined;
 
 function content(marker: string): ReflectionContent {
   return {
@@ -104,6 +108,12 @@ beforeAll(async () => {
       projectionRebuildPublication,
     ],
     now: () => NOW,
+    boundary: ({ boundary }) => {
+      if (boundary === failAt) {
+        failAt = undefined;
+        throw new Error('interrupted publication');
+      }
+    },
   });
   await coordinator.initialize();
 }, 120_000);
@@ -244,6 +254,92 @@ it('takes a retried delivery as one accepted version, not two', async () => {
       (entry) => entry.effectKind === 'stated_references',
     ),
   ).toMatchObject([{ referenceVersion: 2, state: 'completed' }]);
+});
+
+/** The version row behind one statement, as the records hold it rather than as a reader sees it. */
+function versionRow(linkId: string): { operation_id: string | null; known_from: string | null } {
+  return store.db
+    .prepare('SELECT operation_id, known_from FROM evidence_link_versions WHERE link_id = ?')
+    .get(linkId) as { operation_id: string | null; known_from: string | null };
+}
+
+it('settles a delivery whose first attempt was prepared and then discarded', async () => {
+  const marker = `readopted-${String(serial)}`;
+  const target = await acceptSource(`${marker}-target`);
+  const source = await acceptSource(`${marker}-source`);
+  const payload = statePayload(source, marker, { derivedFrom: [target] });
+
+  failAt = 'prepared';
+  await expect(
+    coordinator.publish({
+      kind: 'stated_references',
+      operationId: `references-${marker}-1`,
+      payload,
+    }),
+  ).rejects.toThrow();
+  expect(listStatedLinks(store.db, source)[0]?.knownFrom).toBeNull();
+
+  // An activation lands in the gap, so the recovery's recheck defers and the attempt is discarded
+  // with its prepared version left where a retry can find it.
+  const epoch = readCurrentCoverageContract(store.db)?.epoch;
+  store.db
+    .prepare('UPDATE coverage_contract SET epoch = ? WHERE epoch = ?')
+    .run(`${marker}-activation`, epoch);
+  expect(await coordinator.recover()).toMatchObject({ status: 'deferred' });
+  expect(unsettledLinkStates(store.db, source)).toEqual(['stated']);
+
+  const retry = await coordinator.publish({
+    kind: 'stated_references',
+    operationId: `references-${marker}-2`,
+    payload,
+  });
+
+  expect(retry.status).toBe('acknowledged');
+  const links = listStatedLinks(store.db, source);
+  expect(links).toHaveLength(1);
+  expect(links[0]?.knownFrom).not.toBeNull();
+  expect(versionRow(links[0]?.linkId ?? '')).toMatchObject({
+    operation_id: `references-${marker}-2`,
+  });
+  // Nothing is owed, so the eviction fence has no settlement to pin this source on.
+  expect(unsettledLinkStates(store.db, source)).toEqual([]);
+  expect(
+    listEvidenceAcknowledgments(store.db, source).filter(
+      (entry) => entry.effectKind === 'stated_references',
+    ),
+  ).toMatchObject([{ state: 'completed' }]);
+});
+
+it('leaves a settled version with the operation that committed it', async () => {
+  const marker = `committed-${String(serial)}`;
+  const target = await acceptSource(`${marker}-target`);
+  const source = await acceptSource(`${marker}-source`);
+  const payload = statePayload(source, marker, { derivedFrom: [target] });
+
+  expect(
+    (
+      await coordinator.publish({
+        kind: 'stated_references',
+        operationId: `references-${marker}-1`,
+        payload,
+      })
+    ).status,
+  ).toBe('acknowledged');
+  const linkId = listStatedLinks(store.db, source)[0]?.linkId ?? '';
+  const settled = versionRow(linkId);
+
+  const later = await coordinator.publish({
+    kind: 'stated_references',
+    operationId: `references-${marker}-2`,
+    payload,
+  });
+
+  expect(later.status).toBe('acknowledged');
+  // A later attempt on the same delivery has no standing over a version that already published:
+  // the row keeps the operation that settled it and the moment it entered the committed view.
+  expect(versionRow(linkId)).toEqual(settled);
+  expect(settled.operation_id).toBe(`references-${marker}-1`);
+  expect(listStatedLinks(store.db, source)).toHaveLength(1);
 });
 
 it('refuses a statement about a source the records do not hold', async () => {

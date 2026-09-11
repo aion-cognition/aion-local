@@ -6,6 +6,10 @@ import type { GraphTransaction } from '../../infrastructure/graph/connection.js'
 import { presentNodeIds } from '../../infrastructure/graph/projection-presence.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
+  unsettledLinkVersions,
+  type LinkVersionKey,
+} from '../../infrastructure/sqlite/evidence-link-settlement.js';
+import {
   acknowledgeStatedLinkVersions,
   listStatedLinks,
   prepareStatedLinkVersion,
@@ -202,6 +206,22 @@ export function classifyStatedReferences(
   }));
 }
 
+/**
+ * Where each statement in one delivery is recorded: its link, and the key that delivery owns on it.
+ *
+ * Derived in one place because two halves depend on agreeing about it. The prepare writes under
+ * these keys and the acknowledgment asks about exactly the same ones, so a settlement cannot
+ * report an effect on a row it never addressed.
+ */
+function statedLinkKeys(
+  acceptance: Pick<ReferenceAcceptance, 'sourceId' | 'targets' | 'deliveryKey'>,
+): readonly LinkVersionKey[] {
+  return acceptance.targets.map((target) => {
+    const linkId = statedLinkId(target.kind, target.targetClass, acceptance.sourceId, target.id);
+    return { linkId, operationKey: `${acceptance.deliveryKey}:${linkId}` };
+  });
+}
+
 /** The hash of the set a delivery accepts, over the exact statements it carries. */
 export function acceptedTargetsHash(targets: readonly ReferenceTargetPlan[]): string {
   return referenceSetHash({
@@ -238,16 +258,20 @@ export function prepareReferenceAcceptance(
     operationKey: acceptance.deliveryKey,
     introduced: acceptance.targets.map((target) => target.id),
   });
-  for (const target of acceptance.targets) {
-    const linkId = statedLinkId(target.kind, target.targetClass, acceptance.sourceId, target.id);
+  const keys = statedLinkKeys(acceptance);
+  for (const [index, target] of acceptance.targets.entries()) {
+    const key = keys[index];
+    if (key === undefined) {
+      throw new Error(`stated reference ${target.id} has no recorded link address`);
+    }
     prepareStatedLinkVersion(db, {
-      linkId,
+      linkId: key.linkId,
       kind: target.kind,
       qualifier: target.targetClass,
       fromId: acceptance.sourceId,
       toId: target.id,
       operationId: acceptance.operationId,
-      operationKey: `${acceptance.deliveryKey}:${linkId}`,
+      operationKey: key.operationKey,
       // Both clock roles: when the statement says it happened, and when this substrate took it.
       recordedValues: {
         targetClass: target.targetClass,
@@ -372,6 +396,15 @@ export function acknowledgeReferenceAcceptance(
     settlement.knownFrom,
     settlement.observedAckAt,
   );
+  // Membership in the operation is not proof of effect. The versions are addressed by delivery and
+  // promoted by operation, so a row left behind under another operation would stay outside the
+  // committed view while this acknowledgment recorded the obligation settled.
+  const owed = unsettledLinkVersions(db, statedLinkKeys(settlement));
+  if (owed.length > 0) {
+    throw new Error(
+      `reference delivery ${settlement.deliveryKey} left ${String(owed.length)} stated link version(s) unsettled`,
+    );
+  }
   for (const scope of affectedScopes(settlement)) {
     acknowledgeScopeAdvance(db, {
       ...scope,

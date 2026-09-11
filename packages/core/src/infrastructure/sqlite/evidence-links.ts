@@ -68,7 +68,7 @@ export function statedLinkId(
  * statement about the same pair adds a version rather than a second link, and the version is
  * keyed on the delivery so a retried batch writes one row.
  *
- * Returns the version it took, or the one the delivery already produced.
+ * Returns the version it took, or the one the delivery already produced and this attempt owns.
  */
 export function prepareStatedLinkVersion(db: SqliteHandle, input: StatedLinkVersion): number {
   if (!STATED_LINK_KINDS.includes(input.kind)) {
@@ -92,6 +92,13 @@ export function prepareStatedLinkVersion(db: SqliteHandle, input: StatedLinkVers
         input.toId,
         input.observedAt.toISOString(),
       );
+      // A version an earlier attempt prepared and never committed is re-adopted here, so the
+      // acknowledgment that promotes it names the operation the row carries. One already in the
+      // committed view belongs to a publication that settled, and this attempt does not move it.
+      db.prepare(
+        `UPDATE evidence_link_versions SET operation_id = ?
+         WHERE link_id = ? AND operation_key = ? AND known_from IS NULL`,
+      ).run(input.operationId, input.linkId, input.operationKey);
       const held = db
         .prepare(
           'SELECT version FROM evidence_link_versions WHERE link_id = ? AND operation_key = ?',

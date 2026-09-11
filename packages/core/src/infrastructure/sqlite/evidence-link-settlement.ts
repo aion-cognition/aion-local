@@ -31,3 +31,30 @@ export function unsettledLinkStates(db: SqliteHandle, fromId: string): readonly 
     .all(fromId) as { state: string }[];
   return rows.map((row) => row.state);
 }
+
+/** One prepared version's address: the link it belongs to, and the key its delivery wrote it under. */
+export type LinkVersionKey = {
+  readonly linkId: string;
+  readonly operationKey: string;
+};
+
+/**
+ * Which of the versions an acknowledgment covers are still outside the committed view.
+ *
+ * The acknowledgment moves rows by operation, and the row it means to move is addressed by
+ * delivery. Those are two identities, so a count of changed rows says how many moved and not
+ * whether the ones this settlement named are among them. This asks about exactly those, after
+ * the update, and an answer that is not empty is a settlement reporting an effect it did not have.
+ */
+export function unsettledLinkVersions(
+  db: SqliteHandle,
+  keys: readonly LinkVersionKey[],
+): readonly string[] {
+  const statement = db.prepare(
+    `SELECT 1 AS owed FROM evidence_link_versions
+     WHERE link_id = ? AND operation_key = ? AND known_from IS NULL`,
+  );
+  return keys
+    .filter((key) => statement.get(key.linkId, key.operationKey) !== undefined)
+    .map((key) => key.operationKey);
+}
