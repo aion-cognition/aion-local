@@ -44,6 +44,7 @@ import {
   prepareNarrativeRevision,
   publishNarrativeRevision,
   readPublishedRevision,
+  releaseNarrativeRevision,
 } from '../../infrastructure/sqlite/narrative-revisions.js';
 import { overviewWindowOf } from '../../infrastructure/sqlite/overview-membership.js';
 import { NARRATIVE_GROUNDING } from '../domain/narrative.js';
@@ -107,6 +108,14 @@ const Payload = z.strictObject({
 });
 
 const Data = Payload.extend({
+  /**
+   * When the substrate observed this write, taken under the guard.
+   *
+   * Distinct from `occurredAt`, which is the end of the window the prose is about. A scope
+   * counter's stamp says when something happened to the counter, so a backdated window would
+   * otherwise date a counter movement to a moment nothing moved it.
+   */
+  observedAt: z.string().min(1),
   /** The prior head this publication closes, resolved under the guard. Empty for the first. */
   supersedes: z.string(),
   /**
@@ -300,6 +309,7 @@ export const overviewPublication = new PublicationOperation({
     const supersedes = headNodeId(context.db, payload.familyKey);
     const data: OverviewData = {
       ...payload,
+      observedAt: context.now.toISOString(),
       supersedes,
       priorCitations:
         supersedes === ''
@@ -422,7 +432,7 @@ export const overviewPublication = new PublicationOperation({
         endpointId: entry.endpointId,
         relationClass: entry.scope,
         operationId: context.operationId,
-        updatedAt: new Date(data.occurredAt),
+        updatedAt: new Date(data.observedAt),
       });
     }
     return undefined;
@@ -470,12 +480,17 @@ export const overviewPublication = new PublicationOperation({
     return undefined;
   },
   discardSqlite(context, data) {
+    // The number stays spent and the row stays; what is released is the binding to this operation.
+    // Left prepared, the row is unreachable: the claim refuses while a durable intent exists, and
+    // both the stale-allocation sweep and the due query read `allocated` only. Nothing else could
+    // ever move it, and the node it speaks for would answer unknown for the life of the substrate.
+    releaseNarrativeRevision(context.db, OVERVIEW_REVISION_FAMILY, data.familyKey, data.revisionNo);
     for (const entry of citationScopes(data)) {
       rejectScopeAdvance(context.db, {
         endpointId: entry.endpointId,
         relationClass: entry.scope,
         operationId: context.operationId,
-        updatedAt: new Date(data.occurredAt),
+        updatedAt: new Date(data.observedAt),
       });
     }
     return undefined;

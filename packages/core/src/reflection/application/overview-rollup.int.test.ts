@@ -35,6 +35,7 @@ import type { Provider, StructuredRequest } from '../../infrastructure/providers
 import { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
 import type { PublicationBoundary } from '../../infrastructure/publication/types.js';
 import { chunkOfSource } from '../../infrastructure/sqlite/chunk-manifest.js';
+import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import { readAttemptPolicy } from '../../infrastructure/sqlite/narrative-allocations.js';
 import { readCitationsFrom } from '../../infrastructure/sqlite/narrative-citations.js';
@@ -439,6 +440,37 @@ it('finishes an interrupted overview publication exactly once', async () => {
   const after = await roll();
   expect(after.published).toBe(0);
   expect(prompts).toEqual([]);
+});
+
+it('releases the revision it bound when recovery turns the attempt away', async () => {
+  await publishChunk('overview-released', 'released-window', new Date('2026-04-03T08:00:00.000Z'));
+
+  failAt = 'prepared';
+  await roll();
+  expect(coordinator.hasPending()).toBe(true);
+  const bound = store.db
+    .prepare(
+      `SELECT family_key AS familyKey, revision_no AS revisionNo FROM overview_revisions
+       WHERE state = 'prepared'`,
+    )
+    .all() as { familyKey: string; revisionNo: number }[];
+  expect(bound).toHaveLength(1);
+  const held = bound[0] ?? { familyKey: '', revisionNo: 0 };
+
+  // An activation lands in the gap, so the recheck defers and the attempt is discarded.
+  const epoch = readCurrentCoverageContract(store.db)?.epoch;
+  store.db
+    .prepare('UPDATE coverage_contract SET epoch = ? WHERE epoch = ?')
+    .run('released-window-activation', epoch);
+  expect(await coordinator.recover()).toMatchObject({ status: 'deferred' });
+
+  // The number stays spent and the binding goes back, so a later attempt can take the row up.
+  // Left prepared, nothing in the family could ever move it again.
+  expect(
+    readNarrativeRevision(store.db, OVERVIEW_REVISION_FAMILY, held.familyKey, held.revisionNo),
+  ).toMatchObject({ state: 'allocated', operationId: null });
+  expect((await roll()).published).toBeGreaterThan(0);
+  expect(headOf(held.familyKey)).toBeDefined();
 });
 
 /**
