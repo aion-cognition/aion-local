@@ -199,6 +199,7 @@ export async function writeNarrative(
     operationId: `legacy-narrative:${randomUUID()}`,
     payload: {
       mode: 'publish',
+      closes: input.decision.supersedes,
       sessionId: input.sessionId,
       nodeId: input.narrativeId,
       coverageKey: input.decision.coverageKey,
@@ -240,6 +241,7 @@ export async function closeSuperseded(
     operationId: `legacy-repair:${randomUUID()}`,
     payload: {
       mode: 'repair',
+      closes: decision.supersedes,
       sessionId: fence.familyDependency.id,
       nodeId: narrativeId,
       coverageKey: decision.coverageKey,

@@ -8,6 +8,7 @@ import type { EvidenceDependency } from '../../infrastructure/publication/precon
 export type LegacyNarrativeFence = {
   readonly familyVersion: number;
   readonly familyDependency: EvidenceDependency;
+  readonly sourceDependencies: readonly EvidenceDependency[];
   readonly heads: readonly string[];
   readonly coverageEpoch: string;
   readonly inputDigest: string;

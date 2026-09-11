@@ -34,6 +34,7 @@ import {
   readLegacyNarrative,
   recordLegacyNarrative,
 } from '../../infrastructure/sqlite/legacy-narratives.js';
+import { readSourceRecord } from '../../infrastructure/sqlite/source-identity.js';
 import { legacyInputDigest } from '../domain/legacy-narrative-fence.js';
 import { coverageKey } from '../domain/narrative.js';
 
@@ -45,6 +46,16 @@ const Fence = z.strictObject({
     scope: z.literal(FAMILY_SELECTION_SCOPE),
     version: z.string().min(1),
   }),
+  sourceDependencies: z
+    .array(
+      z.strictObject({
+        kind: z.literal('source'),
+        id: z.string().min(1),
+        scope: z.enum(['source.content', 'source.parts']),
+        version: z.string().min(1),
+      }),
+    )
+    .max(LEGACY_NARRATIVE_LIMITS.episodes * 2),
   heads: z.array(z.string().min(1)).max(LEGACY_HEAD_LIMIT),
   coverageEpoch: z.string().min(1),
   inputDigest: z.string().min(1),
@@ -52,6 +63,7 @@ const Fence = z.strictObject({
 });
 const Payload = z.strictObject({
   mode: z.enum(['publish', 'repair']),
+  closes: z.array(z.string().min(1)).max(LEGACY_HEAD_LIMIT),
   sessionId: z.string().min(1),
   nodeId: z.string().min(1),
   sourceIds: z.array(z.string().min(1)).min(1).max(LEGACY_NARRATIVE_LIMITS.episodes),
@@ -76,7 +88,6 @@ const CoverageEdge = z.strictObject({
   clocks: z.record(z.string(), z.string()),
 });
 const Data = Payload.extend({
-  closes: z.array(z.string()),
   closedEdges: z.array(CoverageEdge),
   observedAt: z.string(),
 });
@@ -105,7 +116,7 @@ export const legacyNarrativePublication = new PublicationOperation({
   data: Data,
   result: Result,
   async prepare(context, payload) {
-    const closes = payload.fence.heads.filter((id) => id !== payload.nodeId);
+    const closes = payload.closes.filter((id) => id !== payload.nodeId);
     const closedEdges = await readLegacyCoverageEdges(context.graph, closes);
     const data = {
       ...payload,
@@ -117,7 +128,10 @@ export const legacyNarrativePublication = new PublicationOperation({
       data,
       expected: {
         coverageEpoch: payload.fence.coverageEpoch,
-        evidence: buildEvidenceRevision([payload.fence.familyDependency]),
+        evidence: buildEvidenceRevision([
+          payload.fence.familyDependency,
+          ...payload.fence.sourceDependencies,
+        ]),
         sources: [],
         heads: [],
       },
@@ -138,6 +152,18 @@ export const legacyNarrativePublication = new PublicationOperation({
     };
   },
   async check(context, data, expected) {
+    const sourceKeys = data.sourceIds
+      .flatMap((id) => ['source.content', 'source.parts'].map((scope) => `${id}\n${scope}`))
+      .sort();
+    const boundKeys = data.fence.sourceDependencies.map((dep) => `${dep.id}\n${dep.scope}`).sort();
+    if (
+      JSON.stringify(sourceKeys) !== JSON.stringify(boundKeys) ||
+      data.sourceIds.some(
+        (id) => readSourceRecord(context.db, id)?.verificationStatus !== 'verified',
+      )
+    ) {
+      return { status: 'deferred', reason: 'legacy_source_verification_unproved' };
+    }
     const selected = readFamilySelection(context.db, data.sessionId);
     if (
       selected?.family !== 'legacy_session_overview' ||
@@ -153,6 +179,12 @@ export const legacyNarrativePublication = new PublicationOperation({
     if (JSON.stringify(heads) !== JSON.stringify([...data.fence.heads].sort())) {
       return { status: 'deferred', reason: 'legacy_head_changed' };
     }
+    if (
+      new Set(data.closes).size !== data.closes.length ||
+      data.closes.some((id) => !heads.includes(id))
+    ) {
+      return { status: 'deferred', reason: 'legacy_closure_outside_heads' };
+    }
     const identities = await readNarrativeFamilyIdentities(context.graph, heads);
     if (
       identities.some(
@@ -166,6 +198,12 @@ export const legacyNarrativePublication = new PublicationOperation({
       data.closedEdges.some((edge) => !edge.sourceIsEpisode)
     ) {
       return { status: 'deferred', reason: 'legacy_closure_unproved' };
+    }
+    const closingNow = await readLegacyCoverageEdges(context.graph, data.closes);
+    const sortedEdges = (edges: readonly z.infer<typeof CoverageEdge>[]) =>
+      [...edges].sort((a, b) => a.relationId.localeCompare(b.relationId));
+    if (JSON.stringify(sortedEdges(closingNow)) !== JSON.stringify(sortedEdges(data.closedEdges))) {
+      return { status: 'deferred', reason: 'legacy_closure_changed' };
     }
     if (
       data.mode === 'publish' &&

@@ -11,6 +11,7 @@ import {
   writeNarrative,
   type NarrativeWrite,
 } from './narrative-write.js';
+import { sourceScopeDependencies } from '../../evidence/application/dependencies.js';
 import type { EvidenceResolver } from '../../evidence/application/resolver.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
@@ -27,6 +28,7 @@ import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import type { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { readSourceRecord } from '../../infrastructure/sqlite/source-identity.js';
 import { checkPresentCoverage } from '../../recall/application/coverage-checker.js';
 import type { ChunkBoundaryPolicy } from '../domain/chunk-boundary.js';
 import {
@@ -218,6 +220,25 @@ async function narrateSession(
     return skipped(sessionId, 0, 'the session holds no episodes');
   }
 
+  const { db } = deps;
+  const sourceDependencies = episodes.flatMap((episode) =>
+    sourceScopeDependencies(db, episode.id).filter(
+      (entry) => entry.scope === 'source.content' || entry.scope === 'source.parts',
+    ),
+  );
+  if (
+    episodes.some(
+      (episode) => readSourceRecord(db, episode.id)?.verificationStatus !== 'verified',
+    ) ||
+    sourceDependencies.length !== episodes.length * 2
+  ) {
+    return {
+      status: 'failed',
+      sessionId,
+      episodes: episodes.length,
+      summary: 'legacy_source_verification_unproved',
+    };
+  }
   const existing = await findSessionNarratives(deps.driver, sessionId);
 
   if (requireIdle) {
@@ -244,6 +265,7 @@ async function narrateSession(
   const fence: LegacyNarrativeFence = {
     familyVersion: family.reading.selection.version,
     familyDependency: family.reading.dependency,
+    sourceDependencies,
     coverageEpoch: coverage.context.coverageEpoch,
     heads,
     inputDigest: legacyInputDigest(episodes, []),

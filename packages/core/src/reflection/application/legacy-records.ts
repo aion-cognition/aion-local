@@ -230,6 +230,9 @@ export function unaccountedCohortMembers(db: SqliteHandle, cohortId: string): nu
  * under the same page limit. Nothing is reset, no established bit is cleared, and nothing is
  * written here; whether a nominated scope can be counted is still the seal's own proof.
  */
+const CENSUS_LINK_RECORD =
+  "(l.record_source = 'legacy_materialization' OR (l.record_source = 'legacy_narrative' AND l.kind = 'source_coverage'))";
+
 export function pageUncountedEndpoints(
   db: SqliteHandle,
   cohortId: string,
@@ -242,11 +245,11 @@ export function pageUncountedEndpoints(
       `SELECT e.endpoint_id AS endpoint_id FROM (
          SELECT l.from_id AS endpoint_id FROM evidence_links l
          JOIN migration_progress m ON m.source_id = l.from_id AND m.cohort_id = ?
-         WHERE l.record_source = 'legacy_materialization'
+         WHERE ${CENSUS_LINK_RECORD}
          UNION
          SELECT l.to_id AS endpoint_id FROM evidence_links l
          JOIN migration_progress m ON m.source_id = l.from_id AND m.cohort_id = ?
-         WHERE l.record_source = 'legacy_materialization'
+         WHERE ${CENSUS_LINK_RECORD}
        ) e
        WHERE e.endpoint_id > ?
          AND (
@@ -330,8 +333,8 @@ export function isSourceEndpoint(db: SqliteHandle, endpointId: string): boolean 
 export function endpointCensusScopes(db: SqliteHandle, endpointId: string): readonly string[] {
   const rows = db
     .prepare(
-      `SELECT kind, from_id AS from_id FROM evidence_links
-       WHERE record_source = 'legacy_materialization' AND (from_id = ? OR to_id = ?)`,
+      `SELECT l.kind, l.from_id FROM evidence_links l
+       WHERE ${CENSUS_LINK_RECORD} AND (l.from_id = ? OR l.to_id = ?)`,
     )
     .all(endpointId, endpointId) as { kind: string; from_id: string }[];
   const scopes = new Set<string>();

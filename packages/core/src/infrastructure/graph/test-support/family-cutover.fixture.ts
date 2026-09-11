@@ -2,7 +2,7 @@ import type { Driver } from 'neo4j-driver';
 
 import { coverageKey } from '../../../reflection/domain/narrative.js';
 import { writeStampedDerivedNodeInTransaction } from '../bitemporal.js';
-import { inWriteTransaction, runRead, runWrite } from '../connection.js';
+import { inWriteTransaction, runRead, runWrite, type GraphTransaction } from '../connection.js';
 import { upsertEdgeInTransaction } from '../edges.js';
 import { DERIVES_FROM_TYPE, SUMMARIZED_BY_TYPE } from '../narrative-queries.js';
 
@@ -92,6 +92,20 @@ export async function setSourceCaptureClock(
         'MATCH (e:Episode {id: $sourceId}) SET e.tx_from = CASE WHEN $stamp IS NULL THEN null ELSE datetime($stamp) END',
       parameters: { sourceId, stamp },
     },
+    () => undefined,
+  );
+}
+
+/** Introduces a closure-set change inside the already held test publication transaction. */
+export async function addLegacyCoverageDuringPrepare(
+  tx: GraphTransaction,
+  sourceId: string,
+  narrativeId: string,
+): Promise<void> {
+  await tx.run(
+    `MATCH (s:Episode {id:$sourceId}), (n:Narrative {id:$narrativeId})
+    CREATE (s)-[:SUMMARIZED_BY {id:'late-closure-edge', created_at:datetime('2026-09-10T10:00:00Z')}]->(n)`,
+    { sourceId, narrativeId },
     () => undefined,
   );
 }
