@@ -266,12 +266,13 @@ export function recordMigrationRetryFailure(
           `INSERT INTO narrative_migration_issues (cohort_id,phase,subject_id,reason,active,retry_failures)
       SELECT ?, 'publication_retry', ?, ?, 1, 1 WHERE EXISTS (SELECT 1 FROM narrative_migration_jobs
         WHERE cohort_id = ? AND revision = ? AND lifecycle_state = 'running')
+        AND EXISTS (SELECT 1 FROM chunks c WHERE c.chunk_id = ? AND c.published_revision_no IS NULL)
       ON CONFLICT(cohort_id,phase,subject_id) DO UPDATE SET
         retry_failures = CASE WHEN active = 1 THEN retry_failures + 1 ELSE 1 END,
         reason = excluded.reason, active = 1
     `,
         )
-        .run(job.cohortId, chunkId, reason, job.cohortId, job.revision).changes;
+        .run(job.cohortId, chunkId, reason, job.cohortId, job.revision, chunkId).changes;
       if (changed === 0) {
         return undefined;
       }
@@ -281,6 +282,32 @@ export function recordMigrationRetryFailure(
         )
         .get(job.cohortId, chunkId) as { retry_failures: number };
       return row.retry_failures;
+    })
+    .immediate();
+}
+
+/** A retry-budget hold has the same complete blocker record as a full-pass hold. */
+export function holdMigrationRetryBudget(
+  db: SqliteHandle,
+  job: NarrativeMigrationJob,
+  chunkId: string,
+  now: Date,
+): boolean {
+  return db
+    .transaction(() => {
+      if (!current(db, job)) {
+        return false;
+      }
+      recordMigrationMemberIssues(db, job);
+      recordMigrationChunkIssues(db, job);
+      if (
+        db
+          .prepare('SELECT 1 FROM chunks WHERE chunk_id = ? AND published_revision_no IS NULL')
+          .get(chunkId) === undefined
+      ) {
+        return false;
+      }
+      return holdNarrativeMigration(db, job, 'publication_retry_exhausted', now);
     })
     .immediate();
 }

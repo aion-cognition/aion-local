@@ -9,8 +9,8 @@ import {
 import {
   recordMigrationIssue,
   recordMigrationRetryFailure,
+  holdMigrationRetryBudget,
 } from '../../infrastructure/sqlite/narrative-migration-pass.js';
-import { holdNarrativeMigration } from '../../infrastructure/sqlite/narrative-migration-state.js';
 import {
   CHUNK_REVISION_FAMILY,
   clearRevisionBlock,
@@ -37,8 +37,9 @@ export function scheduleMigrationPublicationRetry(
     return undefined;
   }
   if (failures >= MIGRATION_PUBLICATION_FAILURE_LIMIT) {
-    holdNarrativeMigration(db, job, 'publication_retry_exhausted', now);
-    return 'publication_retry_exhausted';
+    return holdMigrationRetryBudget(db, job, result.chunkId, now)
+      ? 'publication_retry_exhausted'
+      : undefined;
   }
   if (result.revisionNo === 0) {
     advanceNarrativeMigration(
