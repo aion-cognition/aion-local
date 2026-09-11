@@ -94,21 +94,45 @@ export function readEvictionManifest(
 
 export type SurvivorObligation = {
   readonly nodeId: string;
-  /** The physical neighbourhood revision the task was bound to, so a later change retries it. */
+  /**
+   * The physical neighbourhood the eviction saw, recorded as provenance for the obligation. It is
+   * NOT what the repair pass retries against: the removal itself moves the neighbourhood, so a
+   * comparison against this reading would always differ. The retry comparison spans the read the
+   * recomputation was taken over, and lives in the repair pass.
+   */
   readonly neighborhoodRevision: string;
 };
+
+/** The reason a discarded attempt's obligation carries while it waits to be re-adopted. */
+export const SURVIVOR_DISCARDED_REASON = 'eviction_discarded';
 
 export function survivorWorkId(operationId: string, nodeId: string): string {
   return `${SURVIVOR_WORK_KIND}:${operationId}:${nodeId}`;
 }
 
 /**
- * Writes one pinned task per affected survivor, inside the caller's durable preparation.
+ * Writes one pinned task per affected survivor, inside the caller's durable preparation, and
+ * RE-ADOPTS one an earlier attempt left behind.
+ *
+ * The re-adoption is the load-bearing half. `source_work` is unique on
+ * (source, generation, kind, key), so an attempt that prepared a row and then died leaves that
+ * key taken; an insert that did nothing on conflict would let the retry commit a deletion while
+ * the obligation for it stayed parked under the earlier, rejected operation — owed by nobody,
+ * released by nothing, and invisible to a runnability read that only follows acknowledged
+ * intents. The survivor would keep a context vector computed from a neighbourhood that no longer
+ * exists, permanently.
+ *
+ * So a row this attempt finds in a state that owes something and cannot run — `pinned` from an
+ * interrupted attempt, `obsolete` from a discarded one — is repointed at this operation with this
+ * attempt's binding. A row that is already runnable or completed is left exactly as it is: it
+ * belongs to a removal that committed, and this attempt has no standing to reset it.
  *
  * The operational revision is deliberately NOT advanced here. A pinned row is not runnable and
  * owes nothing yet, and advancing the counter would invalidate the readiness proof this very
  * attempt bound a moment earlier, so the guard's recheck would refuse the operation that wrote
- * it. The acknowledgment below advances it, which is where the work actually starts to exist.
+ * it. The acknowledgment is where the work starts to exist.
+ *
+ * Returns the number of rows this attempt now owns.
  */
 export function prepareSurvivorWork(
   db: SqliteHandle,
@@ -118,13 +142,19 @@ export function prepareSurvivorWork(
     readonly processingGeneration: number;
     readonly obligations: readonly SurvivorObligation[];
   },
-): void {
+): number {
   const insert = db.prepare(
     `INSERT INTO source_work
        (work_id, source_id, processing_generation, kind, work_key, state,
         input_revision_json, publication_operation_id)
      VALUES (?, ?, ?, ?, ?, 'pinned', ?, ?)
-     ON CONFLICT (source_id, processing_generation, kind, work_key) DO NOTHING`,
+     ON CONFLICT (source_id, processing_generation, kind, work_key) DO UPDATE SET
+       state = 'pinned',
+       reason = NULL,
+       due_at = NULL,
+       input_revision_json = excluded.input_revision_json,
+       publication_operation_id = excluded.publication_operation_id
+     WHERE source_work.state IN ('pinned', 'obsolete')`,
   );
   for (const obligation of input.obligations) {
     insert.run(
@@ -137,12 +167,16 @@ export function prepareSurvivorWork(
       input.operationId,
     );
   }
+  // Read back rather than counted from the loop: a row already runnable under an acknowledged
+  // removal is left alone by the conflict clause, so what this attempt asked for and what it owns
+  // are two different numbers and only the second one is true.
+  return countSurvivorWorkOf(db, input.operationId);
 }
 
 /**
  * Makes this operation's pinned survivor tasks runnable, and returns how many moved.
  *
- * Scoped to the operation that wrote them and to the pinned state, so a repeated acknowledgment
+ * Scoped to the operation that owns them and to the pinned state, so a repeated acknowledgment
  * dates nothing twice and a task another pass already completed stays completed.
  */
 export function releaseSurvivorWork(db: SqliteHandle, operationId: string, dueAt: Date): number {
@@ -154,6 +188,35 @@ export function releaseSurvivorWork(db: SqliteHandle, operationId: string, dueAt
     .run(dueAt.toISOString(), operationId, SURVIVOR_WORK_KIND).changes;
 }
 
+/**
+ * Parks this attempt's still-pinned obligations when the attempt is rejected.
+ *
+ * Nothing was deleted, so nothing is owed on the topology as it stands — but the row is kept
+ * rather than removed, because it is the record that an attempt intended to create that work and
+ * a later attempt has to be able to find it. `prepareSurvivorWork` re-adopts it; until then it is
+ * explicitly obsolete with a reason instead of sitting pinned forever with no owner that can
+ * release it. Returns how many were parked.
+ */
+export function discardSurvivorWork(db: SqliteHandle, operationId: string): number {
+  return db
+    .prepare(
+      `UPDATE source_work SET state = 'obsolete', reason = ?
+       WHERE publication_operation_id = ? AND kind = ? AND state = 'pinned'`,
+    )
+    .run(SURVIVOR_DISCARDED_REASON, operationId, SURVIVOR_WORK_KIND).changes;
+}
+
+/** How many survivor obligations one operation currently owns, whatever state they are in. */
+export function countSurvivorWorkOf(db: SqliteHandle, operationId: string): number {
+  const row = db
+    .prepare(
+      `SELECT count(*) AS n FROM source_work
+       WHERE publication_operation_id = ? AND kind = ?`,
+    )
+    .get(operationId, SURVIVOR_WORK_KIND) as { n: number };
+  return row.n;
+}
+
 export type SurvivorTask = {
   readonly workId: string;
   readonly sourceId: string;
@@ -161,6 +224,7 @@ export type SurvivorTask = {
   readonly nodeId: string;
   readonly operationId: string | null;
   readonly neighborhoodRevision: string | null;
+  readonly state: string;
   readonly attempts: number;
 };
 
@@ -171,6 +235,7 @@ function toTask(row: {
   work_key: string;
   publication_operation_id: string | null;
   input_revision_json: string | null;
+  state: string;
   attempts: number;
 }): SurvivorTask {
   const bound =
@@ -184,6 +249,7 @@ function toTask(row: {
     nodeId: row.work_key,
     operationId: row.publication_operation_id,
     neighborhoodRevision: bound?.neighborhoodRevision ?? null,
+    state: row.state,
     attempts: row.attempts,
   };
 }
@@ -205,7 +271,7 @@ export function listRunnableSurvivorWork(
   const rows = db
     .prepare(
       `SELECT w.work_id, w.source_id, w.processing_generation, w.work_key,
-              w.publication_operation_id, w.input_revision_json, w.attempts
+              w.publication_operation_id, w.input_revision_json, w.state, w.attempts
        FROM source_work w
        JOIN publication_intents i ON i.operation_id = w.publication_operation_id
         AND i.state = 'acknowledged'
@@ -220,6 +286,7 @@ export function listRunnableSurvivorWork(
     work_key: string;
     publication_operation_id: string | null;
     input_revision_json: string | null;
+    state: string;
     attempts: number;
   }[];
   return rows.map(toTask);
@@ -230,7 +297,7 @@ export function survivorWorkOf(db: SqliteHandle, operationId: string): readonly 
   const rows = db
     .prepare(
       `SELECT work_id, source_id, processing_generation, work_key, publication_operation_id,
-              input_revision_json, attempts
+              input_revision_json, state, attempts
        FROM source_work WHERE publication_operation_id = ? AND kind = ?
        ORDER BY work_key`,
     )
@@ -241,6 +308,7 @@ export function survivorWorkOf(db: SqliteHandle, operationId: string): readonly 
     work_key: string;
     publication_operation_id: string | null;
     input_revision_json: string | null;
+    state: string;
     attempts: number;
   }[];
   return rows.map(toTask);

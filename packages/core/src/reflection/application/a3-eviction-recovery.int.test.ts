@@ -17,8 +17,11 @@ import {
 import { inWriteTransaction } from '../../infrastructure/graph/connection.js';
 import { upsertEdge } from '../../infrastructure/graph/edges.js';
 import {
+  edgeStrengthOf,
+  moveEdgeStrength,
   nodeExists,
   seedUnknownEdge,
+  seedUnvectoredNeighbour,
   seedVectoredEntity,
   storedVectors,
 } from '../../infrastructure/graph/test-support/a3-eviction-graph.fixture.js';
@@ -68,6 +71,7 @@ async function payloadFor(sourceId: string): Promise<Record<string, unknown>> {
     operationalRevision: candidate.operationalRevision,
     readinessPolicyRevision: candidate.readinessPolicyRevision,
     projectionGeneration: candidate.projectionGeneration,
+    acceptedReferenceVersion: candidate.acceptedReferenceVersion,
     qualifiedAt: candidate.qualifiedAt,
     nodeIds: [...plan.nodeIds],
     relationIds: [...plan.relationIds],
@@ -80,8 +84,23 @@ async function payloadFor(sourceId: string): Promise<Record<string, unknown>> {
   };
 }
 
+/** The association edge each survivor fixture wrote, so a case can move and restore its weight. */
+const associations = new Map<string, string>();
+
+function associationOf(survivorId: string): string {
+  const relationId = associations.get(survivorId);
+  if (relationId === undefined) {
+    throw new Error(`no association recorded for ${survivorId}`);
+  }
+  return relationId;
+}
+
 /** A source with one disposable association to a retained, vectored neighbour. */
-async function sourceWithSurvivor(identity: string, survivorId: string): Promise<string> {
+async function sourceWithSurvivor(
+  identity: string,
+  survivorId: string,
+  strength = 0.5,
+): Promise<string> {
   await seedVectoredEntity(driver, {
     id: survivorId,
     name: `${identity} neighbour`,
@@ -89,17 +108,18 @@ async function sourceWithSurvivor(identity: string, survivorId: string): Promise
     now: NOW,
   });
   const sourceId = await eligibleSource(identity, 'S1');
-  await upsertEdge(driver, {
+  const edge = await upsertEdge(driver, {
     type: 'CO_OCCURS',
     sourceId,
     targetId: survivorId,
-    strength: 0.5,
+    strength,
     confidence: 1,
     signals: ['co_occurrence'],
     provenance: ['reflection_associations'],
     count: 1,
     now: NOW,
   });
+  associations.set(survivorId, edge.id);
   return sourceId;
 }
 
@@ -179,8 +199,10 @@ it('restores a retiring source when its preconditions moved under the interrupti
   // Another generation, not the one the attempt spent: a late writer holding the old number
   // cannot land in the place the next attempt will take.
   expect(residency?.projectionGeneration).toBeGreaterThan(generationBefore + 1);
-  // The obligations the attempt recorded are preserved and still not runnable.
-  expect(survivorWorkOf(store.db, operationId).length).toBe(0);
+  // This source has no disposable association, so the attempt prepared no obligation at all.
+  // That it recorded none is what is asserted here; what happens to one it DID record is the
+  // discard-then-retry case below.
+  expect(survivorWorkOf(store.db, operationId)).toEqual([]);
 });
 
 it('keeps survivor work unrunnable until a receipt proves the removal', async () => {
@@ -229,5 +251,107 @@ it('clears a survivor context vector whose last vectored neighbour was removed',
   // recomputing the same neighbourhood again.
   expect(
     listRunnableSurvivorWork(store.db, NOW, 8).filter((task) => task.operationId === operationId),
+  ).toEqual([]);
+});
+
+it('carries a discarded attempt\u2019s obligation into the attempt that commits', async () => {
+  const survivorId = 'survivor-readopted';
+  const sourceId = await sourceWithSurvivor('recover-readopt', survivorId, 0.5);
+  const first = randomUUID();
+  const nomination = await payloadFor(sourceId);
+  const association = associationOf(survivorId);
+  const strength = await edgeStrengthOf(driver, association);
+  expect(strength).toBeDefined();
+
+  // Interrupted after its durable preparation, with a preserved weight moved underneath it so the
+  // recheck refuses on the way back and the attempt is discarded rather than resumed.
+  atBoundary(
+    'prepared',
+    async () => {
+      await moveEdgeStrength(driver, association, 0.25);
+      throw new Error('interrupted after preparation');
+    },
+    first,
+  );
+  await expect(
+    publications.publish({ kind: 'episode_eviction', operationId: first, payload: nomination }),
+  ).rejects.toThrow();
+  expect(await publications.recover()).toMatchObject({
+    status: 'deferred',
+    reason: 'removal_categories_moved',
+  });
+
+  // The obligation is parked, not lost: still this source's, still owed, and not runnable.
+  const parked = survivorWorkOf(store.db, first);
+  expect(parked.map((task) => [task.nodeId, task.state])).toEqual([[survivorId, 'obsolete']]);
+  expect(listRunnableSurvivorWork(store.db, NOW, 8)).toEqual([]);
+
+  // The weight goes back to what it was, the source qualifies again, and a second attempt takes it.
+  await moveEdgeStrength(driver, association, strength ?? 0.5);
+  const second = randomUUID();
+  const outcome = await publications.publish({
+    kind: 'episode_eviction',
+    operationId: second,
+    payload: await payloadFor(sourceId),
+  });
+
+  expect(outcome.status).toBe('acknowledged');
+  // Re-adopted rather than duplicated: one row, owned by the attempt that committed, and the
+  // result reports the obligation this attempt actually holds.
+  expect(survivorWorkOf(store.db, first)).toEqual([]);
+  expect(survivorWorkOf(store.db, second).map((task) => task.nodeId)).toEqual([survivorId]);
+  expect(outcome.status === 'acknowledged' ? outcome.result : undefined).toMatchObject({
+    survivorTasks: 1,
+  });
+  const runnable = listRunnableSurvivorWork(store.db, NOW, 8).filter(
+    (task) => task.nodeId === survivorId,
+  );
+  expect(runnable.length).toBe(1);
+
+  // And it completes exactly once: the second pass finds this operation owing nothing.
+  const repaired = await repairSurvivors({ driver, db: store.db, now: NOW }, 8);
+  expect(repaired.cleared + repaired.recomputed).toBeGreaterThanOrEqual(1);
+  expect(
+    listRunnableSurvivorWork(store.db, NOW, 8).filter((task) => task.nodeId === survivorId),
+  ).toEqual([]);
+  expect(survivorWorkOf(store.db, second).map((task) => task.state)).toEqual(['completed']);
+});
+
+it('settles a survivor that carries no context vector instead of retrying it forever', async () => {
+  const survivorId = 'survivor-unvectored';
+  await seedUnvectoredNeighbour(driver, { id: survivorId, now: NOW });
+  const sourceId = await eligibleSource('recover-unvectored', 'S1');
+  const edge = await upsertEdge(driver, {
+    type: 'CO_OCCURS',
+    sourceId,
+    targetId: survivorId,
+    strength: 0.5,
+    confidence: 1,
+    signals: ['co_occurrence'],
+    provenance: ['reflection_associations'],
+    count: 1,
+    now: NOW,
+  });
+  expect(edge.id).toBeDefined();
+  const operationId = randomUUID();
+
+  expect(
+    (
+      await publications.publish({
+        kind: 'episode_eviction',
+        operationId,
+        payload: await payloadFor(sourceId),
+      })
+    ).status,
+  ).toBe('acknowledged');
+
+  const repaired = await repairSurvivors({ driver, db: store.db, now: NOW }, 8);
+
+  expect(repaired.classified).toBeGreaterThanOrEqual(1);
+  // Settled from durable state with what it actually is, not deferred into a fifteen-minute loop
+  // nothing can ever end.
+  expect(survivorWorkOf(store.db, operationId).map((task) => task.state)).toEqual(['completed']);
+  expect(
+    listRunnableSurvivorWork(store.db, NOW, 8).filter((task) => task.nodeId === survivorId),
   ).toEqual([]);
 });

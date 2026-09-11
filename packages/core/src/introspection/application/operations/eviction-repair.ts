@@ -33,9 +33,13 @@ import { computeContextVectors } from '../../../reflection/domain/context-vector
  * cleared and the sync stamped — but only behind a reading the pass can certify complete. An
  * unreadable neighbourhood never clears anything.
  *
- * Nothing is discharged by an attempt. A neighbourhood that moved between the read and the write
- * dates the task forward and leaves it owed, because a stamp written over an unseen generation is
- * a claim that the recomputation covered a graph it never saw.
+ * Nothing is discharged by an attempt. The comparison that retries is the one spanning THIS
+ * pass's own read: the neighbourhood revision is taken before the neighbours are read and again
+ * after, and a difference dates the task forward and leaves it owed, because a stamp written over
+ * an unseen generation is a claim that the recomputation covered a graph it never saw. The
+ * revision recorded on the task at eviction is not that comparison and cannot be — the removal
+ * itself moved the neighbourhood, so it would differ every time. It is provenance: what the
+ * eviction saw when it decided this node was affected.
  */
 
 export type SurvivorRepairDeps = {
@@ -48,13 +52,21 @@ export type SurvivorRepairReport = {
   readonly attempted: number;
   readonly recomputed: number;
   readonly cleared: number;
+  /** Settled without a recomputation because the survivor carries no context vector at all. */
+  readonly classified: number;
   readonly deferred: number;
 };
 
 /** A moved neighbourhood comes back on the ordinary cadence, not immediately and not never. */
 const RETRY_DELAY_MS = 15 * 60 * 1000;
 
-const NOTHING: SurvivorRepairReport = { attempted: 0, recomputed: 0, cleared: 0, deferred: 0 };
+const NOTHING: SurvivorRepairReport = {
+  attempted: 0,
+  recomputed: 0,
+  cleared: 0,
+  classified: 0,
+  deferred: 0,
+};
 
 function acknowledge(
   deps: SurvivorRepairDeps,
@@ -125,22 +137,34 @@ export async function repairSurvivors(
   const missed = stable
     .map((task) => task.nodeId)
     .filter((id) => !written.has(id) && !emptied.has(id));
-  await markContextVectorSynced(deps.driver, missed, deps.now);
+  const stamped = new Set(await markContextVectorSynced(deps.driver, missed, deps.now));
+  let classified = 0;
   for (const task of stable) {
     const revision = after.get(task.nodeId) ?? '';
     if (written.has(task.nodeId)) {
       acknowledge(deps, task, 'context_vector_recomputed', revision);
     } else if (emptied.has(task.nodeId)) {
       acknowledge(deps, task, 'context_vector_cleared', revision);
-    } else {
+    } else if (stamped.has(task.nodeId)) {
+      // Reachable and vector-bearing, but this pass could not write it. The stamp keeps the
+      // ordinary scan from meeting it first every tick; the task stays owed, because a stamp is
+      // not a recomputation.
       deferSurvivorWork(deps.db, task.workId, new Date(deps.now.getTime() + RETRY_DELAY_MS));
       deferred += 1;
+    } else {
+      // Present, and not a node this path can write at all: every context-vector statement
+      // matches `:Memory`, so a retained neighbour outside that label has no context vector to
+      // recompute or clear. Deferring it would re-read the same neighbourhood every fifteen
+      // minutes for ever and never settle, so it is completed with what it actually is.
+      acknowledge(deps, task, 'survivor_not_vectored', revision);
+      classified += 1;
     }
   }
   return {
     attempted: tasks.length,
     recomputed: written.size,
     cleared: emptied.size,
+    classified,
     deferred,
   };
 }

@@ -12,6 +12,7 @@ import {
   classifyRemovalSet,
   EVICTION_BOUNDS,
   nodeSetDigest,
+  rawLabelsOnly,
   removalSetBound,
   sortedIdentities,
   type ClassifiedEdge,
@@ -74,11 +75,14 @@ export async function planRemoval(
     if (!carries(node.labels, expected)) {
       return pinned('removal_label_unexpected');
     }
-    if (
+    // Both halves of C9 section 3's mixed-label rule: an Episode that is also a Turn, and a raw
+    // container carrying any label outside the raw set. A node two writers disagree about is not
+    // a node whose whole identity is the capture, and only that kind may go.
+    const crossed =
       node.id === candidate.sourceId
         ? carries(node.labels, 'Turn')
-        : carries(node.labels, 'Episode')
-    ) {
+        : carries(node.labels, 'Episode');
+    if (crossed || !rawLabelsOnly(node.labels)) {
       return pinned('removal_label_mixed');
     }
   }

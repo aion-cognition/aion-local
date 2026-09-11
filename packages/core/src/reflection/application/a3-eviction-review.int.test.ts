@@ -20,17 +20,26 @@ import { inWriteTransaction } from '../../infrastructure/graph/connection.js';
 import {
   moveEdgeStrength,
   nodeExists,
+  seedForeignEndpointEdge,
   seedStrayTurn,
   seedUnknownEdge,
+  setNodeLabel,
 } from '../../infrastructure/graph/test-support/a3-eviction-graph.fixture.js';
 import { countNodesWithId } from '../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import { readEvictionManifest } from '../../infrastructure/sqlite/eviction-manifests.js';
+import {
+  prepareStatedLinkVersion,
+  statedLinkId,
+} from '../../infrastructure/sqlite/evidence-links.js';
 import {
   completeSourceWork,
   createSourceWork,
   readActiveGeneration,
 } from '../../infrastructure/sqlite/processing-generations.js';
-import { readSourcePartTurnIds } from '../../infrastructure/sqlite/source-identity.js';
+import {
+  acceptReferenceBatch,
+  readSourcePartTurnIds,
+} from '../../infrastructure/sqlite/source-identity.js';
 import { readSourceResidency } from '../../infrastructure/sqlite/source-lifecycle.js';
 
 /**
@@ -74,6 +83,7 @@ function payloadOf(nomination: Nomination): Record<string, unknown> {
     operationalRevision: candidate.operationalRevision,
     readinessPolicyRevision: candidate.readinessPolicyRevision,
     projectionGeneration: candidate.projectionGeneration,
+    acceptedReferenceVersion: candidate.acceptedReferenceVersion,
     qualifiedAt: candidate.qualifiedAt,
     nodeIds: [...plan.nodeIds],
     relationIds: [...plan.relationIds],
@@ -256,4 +266,96 @@ it('returns the recorded result when the same operation is delivered twice', asy
 
   expect(first.status).toBe('acknowledged');
   expect(repeat).toEqual(first);
+});
+
+it('refuses when a reference is accepted between nomination and the guard', async () => {
+  const sourceId = await eligibleSource('evict-reference-accepted', 'S1');
+  const nomination = await nominate(sourceId);
+
+  // The acceptance path's own durable writer. A statement about this source arrived after the
+  // removal was decided, so the decision was not taken against it.
+  acceptReferenceBatch(store.db, {
+    sourceId,
+    acceptedHash: `accepted-${sourceId}`,
+    receivedAt: NOW,
+    operationKey: `late-delivery-${sourceId}`,
+    introduced: ['some-target'],
+  });
+
+  const outcome = await publishEviction(nomination);
+
+  expect(outcome).toMatchObject({ status: 'deferred', reason: 'reference_accepted' });
+  expect(await nodeExists(driver, sourceId)).toBe(true);
+});
+
+it('pins a source whose accepted statement is still waiting to be published', async () => {
+  const sourceId = await eligibleSource('evict-reference-owed', 'S1');
+  expect(durableEligibility(store.db, sourceId, POLICY).status).toBe('eligible');
+
+  // Prepared, not acknowledged: the statement is durable and its graph projection is not written.
+  // Deleting the projection underneath it would strand a write that names a node about to go.
+  prepareStatedLinkVersion(store.db, {
+    linkId: statedLinkId('confirms', 'retained_node', sourceId, 'some-retained-node'),
+    kind: 'confirms',
+    qualifier: 'retained_node',
+    fromId: sourceId,
+    toId: 'some-retained-node',
+    operationId: `owed-reference-${sourceId}`,
+    operationKey: `owed-reference-key-${sourceId}`,
+    recordedValues: {},
+    temporalProof: {},
+    observedAt: NOW,
+    referenceSourceId: sourceId,
+    referenceVersion: 1,
+  });
+
+  expect(durableEligibility(store.db, sourceId, POLICY)).toEqual({
+    status: 'pinned',
+    reason: 'reference_settlement_owed',
+  });
+  expect(await nodeExists(driver, sourceId)).toBe(true);
+});
+
+it('refuses when the archive digest the manifest proves is rewritten under it', async () => {
+  const sourceId = await eligibleSource('evict-digest-rewrite', 'S1');
+  const nomination = await nominate(sourceId);
+
+  // What T9's guarded re-verification producer does to a source whose bytes it re-read: the part
+  // set is unchanged, so nothing else about the candidate moves, and the digest the manifest
+  // exists to prove is no longer the one the archive carries.
+  store.db
+    .prepare('UPDATE source_records SET verified_content_digest = ? WHERE source_id = ?')
+    .run(`reverified-${sourceId}`, sourceId);
+
+  const outcome = await publishEviction(nomination);
+
+  expect(outcome).toMatchObject({ status: 'deferred', reason: 'content_digests_changed' });
+  expect(await nodeExists(driver, sourceId)).toBe(true);
+});
+
+it('refuses an edge reaching an endpoint the node registry does not name', async () => {
+  const sourceId = await eligibleSource('evict-foreign-endpoint', 'S1');
+  const nomination = await nominate(sourceId);
+  await seedForeignEndpointEdge(driver, {
+    fromId: sourceId,
+    relationId: `foreign-edge-${sourceId}`,
+    foreignId: `admin-probe-${sourceId}`,
+  });
+
+  const outcome = await publishEviction(nomination);
+
+  expect(outcome).toMatchObject({ status: 'deferred', reason: 'endpoint_outside_node_registry' });
+  expect(await nodeExists(driver, sourceId)).toBe(true);
+});
+
+it('refuses a raw container carrying a semantic label as well', async () => {
+  const sourceId = await eligibleSource('evict-mixed-labels', 'S1');
+  const nomination = await nominate(sourceId);
+  await setNodeLabel(driver, { id: sourceId, label: 'Insight', present: true });
+
+  const outcome = await publishEviction(nomination);
+
+  expect(outcome).toMatchObject({ status: 'deferred', reason: 'removal_label_mixed' });
+  expect(await nodeExists(driver, sourceId)).toBe(true);
+  await setNodeLabel(driver, { id: sourceId, label: 'Insight', present: false });
 });

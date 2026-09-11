@@ -18,6 +18,7 @@ import {
 import { readActiveGeneration } from '../../infrastructure/sqlite/processing-generations.js';
 import { readSubstratePairing } from '../../infrastructure/sqlite/publication-control.js';
 import {
+  listReferenceBatches,
   readSourceParts,
   readSourcePartTurnIds,
   readSourceRecord,
@@ -66,6 +67,8 @@ export type EvictionCandidate = {
   /** The archive digests the manifest records, so a changed byte invalidates the attempt. */
   readonly contentDigests: Readonly<Record<string, string>>;
   readonly searchCoverageProof: Readonly<Record<string, unknown>>;
+  /** The newest accepted reference batch, bound as the source fence's third value. */
+  readonly acceptedReferenceVersion: number;
   /** The latest of acceptance, chunk acknowledgment and reference settlement. */
   readonly qualifiedAt: string;
 };
@@ -108,6 +111,19 @@ function qualificationAnchor(
   return [acceptedAt, chunkKnownFrom, ...settled].reduce((newest, clock) =>
     clock > newest ? clock : newest,
   );
+}
+
+/**
+ * Whether a statement accepted about this source is still waiting to be published.
+ *
+ * A stated link version with no `known_from` is durable, accepted and unsettled: the acceptance
+ * landed in the records and its graph projection has not been written. Removing the projection
+ * underneath one strands it — the write it is waiting for names a node that will not exist, and
+ * no later pass can tell that from a statement nobody ever made. Condition 5 says remaining
+ * obligations are acknowledged or transferred, and this is one of them.
+ */
+function referenceSettlementOwed(db: SqliteHandle, sourceId: string): boolean {
+  return listStatedLinks(db, sourceId).some((link) => link.knownFrom === null);
 }
 
 /**
@@ -236,6 +252,9 @@ export function durableEligibility(
   if (owesWork(db, sourceId, generation.processingGeneration)) {
     return pinned('source_work_outstanding');
   }
+  if (referenceSettlementOwed(db, sourceId)) {
+    return pinned('reference_settlement_owed');
+  }
   if (readSearchCapability(db).status !== 'available') {
     return pinned('search_capability_unavailable');
   }
@@ -268,6 +287,7 @@ export function durableEligibility(
         parts: readSourceParts(db, sourceId).length,
         complete: true,
       },
+      acceptedReferenceVersion: listReferenceBatches(db, sourceId).at(-1)?.referenceVersion ?? 0,
       qualifiedAt,
     },
   };

@@ -2,11 +2,14 @@ import { z } from 'zod';
 
 import { durableEligibility, type EvictionCandidate } from './eviction-eligibility.js';
 import { planRemoval } from './eviction-plan.js';
+import { verifyEvidenceRevision } from '../../evidence/application/dependencies.js';
 import { removeRawProjection } from '../../infrastructure/graph/episode-eviction.js';
 import { PublicationOperation } from '../../infrastructure/publication/operation.js';
 import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
 import type { PublicationContext } from '../../infrastructure/publication/types.js';
 import {
+  countSurvivorWorkOf,
+  discardSurvivorWork,
   prepareSurvivorWork,
   releaseSurvivorWork,
   writeEvictionManifest,
@@ -64,6 +67,8 @@ const Payload = z.strictObject({
   operationalRevision: z.number().int().nonnegative(),
   readinessPolicyRevision: z.number().int().nonnegative(),
   projectionGeneration: z.number().int().positive(),
+  /** The newest accepted reference batch the nomination read, bound as the source fence. */
+  acceptedReferenceVersion: z.number().int().nonnegative(),
   qualifiedAt: z.string().min(1),
   /** The removal set as nomination bound it, outside the guard. */
   nodeIds: z.array(z.string().min(1)).min(1),
@@ -94,6 +99,15 @@ type EvictionData = z.infer<typeof Data>;
 
 function sortedKey(ids: readonly string[]): string {
   return JSON.stringify([...new Set(ids)].sort());
+}
+
+/** A digest map as one comparable value, key order removed. */
+function digestKey(digests: Readonly<Record<string, string>>): string {
+  return JSON.stringify(
+    Object.keys(digests)
+      .sort()
+      .map((key) => [key, digests[key]]),
+  );
 }
 
 /** The policy a recheck runs under: this attempt's own transition is not another writer's. */
@@ -134,6 +148,18 @@ function candidateMatches(data: EvictionData, candidate: EvictionCandidate): str
   if (sortedKey([...candidate.turnIds, candidate.sourceId]) !== sortedKey(data.nodeIds)) {
     return 'source_parts_changed';
   }
+  // The archive proof the manifest records. A guarded re-verification can rewrite a verified
+  // content digest over an unchanged part set, and the manifest exists to prove exactly those
+  // bytes: a digest bound at nomination and never reconfirmed would be a proof about an archive
+  // reading nobody holds any more.
+  if (digestKey(candidate.contentDigests) !== digestKey(data.contentDigests)) {
+    return 'content_digests_changed';
+  }
+  // The source fence's third value. An acceptance that landed between nomination and the guard is
+  // a statement about this source that the removal was not decided against.
+  if (candidate.acceptedReferenceVersion !== data.acceptedReferenceVersion) {
+    return 'reference_accepted';
+  }
   return undefined;
 }
 
@@ -152,6 +178,16 @@ async function recheck(
   const drift = candidateMatches(data, verdict.candidate);
   if (drift !== undefined) {
     return drift;
+  }
+  // The four fixed source scopes this intent bound, checked rather than only carried. Content,
+  // parts, state and references each move for their own reason, and a dependency set that is
+  // written into an intent and never verified is a record of what was read rather than a fence.
+  const revision = verifyEvidenceRevision(
+    context.db,
+    buildEvidenceRevision([...data.dependencies]),
+  );
+  if (revision.status !== 'current') {
+    return `source_evidence_${revision.status}`;
   }
   const planned = await planRemoval(context.db, context.graph, verdict.candidate);
   if (planned.status !== 'planned') {
@@ -224,7 +260,13 @@ export const episodeEvictionPublication = new PublicationOperation({
       expected: {
         coverageEpoch: payload.coverageEpoch,
         evidence: buildEvidenceRevision([...payload.dependencies]),
-        sources: [],
+        sources: [
+          {
+            sourceId: payload.sourceId,
+            generation: String(payload.processingGeneration),
+            acceptedReferenceVersion: String(payload.acceptedReferenceVersion),
+          },
+        ],
         heads: [{ chunkId: payload.chunkId, publishedRevisionNo: payload.publishedRevisionNo }],
       },
       scopes: [{ kind: 'source', id: payload.sourceId, scope: 'sqlite:source_residency' }],
@@ -262,7 +304,10 @@ export const episodeEvictionPublication = new PublicationOperation({
       sourceId: data.sourceId,
       removedNodes: outcome.nodes.length,
       removedRelationships: outcome.relationships.length,
-      survivorTasks: data.survivors.length,
+      // Read back from the records rather than counted off the plan. What the attempt asked for
+      // and what it owns differ whenever a row was already runnable under an acknowledged
+      // removal, and the result has to say what this attempt actually wrote.
+      survivorTasks: countSurvivorWorkOf(context.db, context.operationId),
     };
   },
   prepareSqlite(context, data) {
@@ -280,9 +325,10 @@ export const episodeEvictionPublication = new PublicationOperation({
         `eviction of ${data.sourceId} planned generation ${String(data.projectionGeneration)} and took ${String(taken)}`,
       );
     }
-    // Pinned, and therefore owed and not runnable. The acknowledgment is what a committed
-    // receipt buys them, so an attempt that dies here leaves work nobody can run on a topology
-    // nothing changed.
+    // Pinned, and therefore owed and not runnable. The acknowledgment is what a committed receipt
+    // buys them, so an attempt that dies here leaves work nobody can run on a topology nothing
+    // changed. An obligation an earlier attempt wrote and could not release is re-adopted here
+    // rather than left behind its rejected intent.
     prepareSurvivorWork(context.db, {
       operationId: context.operationId,
       sourceId: data.sourceId,
@@ -308,13 +354,17 @@ export const episodeEvictionPublication = new PublicationOperation({
   discardSqlite(context, data) {
     // Nothing was deleted, so the source goes back to resident under ANOTHER generation: the one
     // this attempt spent stays spent, and a late writer still holding it cannot land in the place
-    // the next attempt will take. The survivor tasks stay pinned and stay owed.
+    // the next attempt will take.
     transitionSourceResidency(context.db, {
       sourceId: data.sourceId,
       state: 'resident',
       operationId: context.operationId,
       transitionedAt: new Date(data.observedAt),
     });
+    // The obligations this attempt prepared are parked, not dropped and not left pinned. Nothing
+    // was removed, so nothing is owed on the topology as it stands; the rows stay as the record
+    // that the work was intended, and the next attempt re-adopts them under its own identity.
+    discardSurvivorWork(context.db, context.operationId);
     return undefined;
   },
 });

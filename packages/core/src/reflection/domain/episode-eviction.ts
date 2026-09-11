@@ -17,6 +17,21 @@ import { createHash } from 'node:crypto';
 const CONTAINMENT = 'PARTICIPATES_IN';
 const ORDER = 'FOLLOWS';
 
+/**
+ * The label every node the registry names carries. An endpoint without it is outside the node
+ * contract entirely — an administrative node, or something a later writer introduced — so nothing
+ * here can say what removing its neighbour would mean. It blocks by name rather than reaching the
+ * deletion and failing there as an undetached relationship.
+ */
+const REGISTERED_NODE_LABEL = 'AionNode';
+
+/**
+ * What a raw container may carry. `Memory` is the vector-index companion and `AionNode` the
+ * registry label; a semantic label on top of those is a node that is a raw capture and something
+ * else at the same time, which C9 §3 blocks rather than classifies.
+ */
+const RAW_NODE_LABELS: readonly string[] = ['Episode', 'Turn', 'Memory', REGISTERED_NODE_LABEL];
+
 /** Roles the durable records carry for a raw endpoint, one per preserved category. */
 export const EVICTION_ROLES = {
   extraction: 'extraction',
@@ -140,6 +155,9 @@ export function classifyIncidentEdge(edge: IncidentEdge): EdgeDisposition {
     return internalDisposition(edge);
   }
   const outside = edge.outsideId;
+  if (!has(edge.outsideLabels, REGISTERED_NODE_LABEL)) {
+    return { category: 'block', reason: 'endpoint_outside_node_registry' };
+  }
   if (SEMANTIC_STATE_TYPES.includes(edge.type) && edge.type !== 'CORRECTS') {
     return { category: 'block', reason: `semantic_state_${edge.type.toLowerCase()}` };
   }
@@ -173,6 +191,13 @@ export function classifyIncidentEdge(edge: IncidentEdge): EdgeDisposition {
   if (edge.type === 'SUMMARIZED_BY') {
     return { category: 'preserved_evidence', role: EVICTION_ROLES.coverage, nodeId: outside };
   }
+  // EVIDENCES and DERIVES_FROM each carry more than one role in the signed taxonomy ("Other
+  // EVIDENCES roles require their own classification"), and the relationship carries no qualifier
+  // to tell them apart. The reading here is that the type names the role the substrate's own
+  // writers use, and the proof requirement is what makes it safe: the edge may only go where a
+  // committed incidence row records THAT role for THAT endpoint, so an edge written in some other
+  // role has no row and pins the source. It is a refusal either way; what it is not is a block
+  // reason naming the category. Registry-noted for F1 rather than widened here.
   if (edge.type === 'EVIDENCES') {
     return { category: 'preserved_evidence', role: EVICTION_ROLES.confirmation, nodeId: outside };
   }
@@ -280,6 +305,17 @@ export function nodeSetDigest(nodes: readonly EvictionNode[]): string {
 
 export function sortedIdentities(ids: readonly string[]): readonly string[] {
   return [...new Set(ids)].sort();
+}
+
+/**
+ * Whether a removal-set node is only what a raw capture is.
+ *
+ * The crossover test alone (an Episode carrying `Turn`) is narrower than the rule: a raw
+ * container that also carries a semantic label is a node two writers disagree about, and this cut
+ * removes only nodes whose whole identity is the capture.
+ */
+export function rawLabelsOnly(labels: readonly string[]): boolean {
+  return labels.every((label) => RAW_NODE_LABELS.includes(label));
 }
 
 /** Whether the removal set fits one guarded attempt, and which bound it broke. */

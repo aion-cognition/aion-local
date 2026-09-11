@@ -23,11 +23,30 @@ const REPO_ROOT = fileURLToPath(new URL('../../../../../', import.meta.url));
 const PACKAGES_DIR = join(REPO_ROOT, 'packages');
 const CAPABILITY_COLUMN = 'activation_capability_revision';
 
-/** A write is an UPDATE or an INSERT naming the column; a read of it is not one. */
-const WRITES = [
-  new RegExp(`UPDATE\\s+publication_control[^;\`']*${CAPABILITY_COLUMN}`, 'is'),
-  new RegExp(`INSERT\\s+INTO\\s+publication_control[^;\`']*${CAPABILITY_COLUMN}`, 'is'),
-];
+/**
+ * A write is an UPDATE or an INSERT reaching this column; a read of it is not one.
+ *
+ * The scan windows on the table name rather than matching up to a delimiter, because the
+ * statements in this repo are template literals spanning several lines and a delimiter-bounded
+ * pattern stops at the first backtick or quote it meets. Everything inside the window counts,
+ * whatever it is made of.
+ */
+const WINDOW = 600;
+const MUTATIONS = [/UPDATE\s+publication_control/gi, /INSERT\s+INTO\s+publication_control/gi];
+
+function writesTheCapability(source: string): boolean {
+  for (const pattern of MUTATIONS) {
+    pattern.lastIndex = 0;
+    let match = pattern.exec(source);
+    while (match !== null) {
+      if (source.slice(match.index, match.index + WINDOW).includes(CAPABILITY_COLUMN)) {
+        return true;
+      }
+      match = pattern.exec(source);
+    }
+  }
+  return false;
+}
 
 function productionFiles(dir: string): string[] {
   const found: string[] = [];
@@ -51,15 +70,24 @@ function productionFiles(dir: string): string[] {
 describe('the compatibility capability is not armed by any production writer', () => {
   const files = productionFiles(PACKAGES_DIR);
 
-  it('scans the production sources of the workspace', () => {
+  it('scans every production TypeScript source under packages', () => {
     expect(files.length).toBeGreaterThan(100);
+    expect(files.every((file) => file.endsWith('.ts'))).toBe(true);
+  });
+
+  it('catches a multi-line template-literal write, which the statements here are', () => {
+    expect(
+      writesTheCapability(
+        ['db.prepare(`UPDATE publication_control', `  SET ${CAPABILITY_COLUMN} = 1`, '`);'].join(
+          '\n',
+        ),
+      ),
+    ).toBe(true);
+    expect(writesTheCapability(`SELECT ${CAPABILITY_COLUMN} FROM publication_control`)).toBe(false);
   });
 
   it('finds no production path that sets the activation capability revision', () => {
-    const offenders = files.filter((file) => {
-      const source = readFileSync(file, 'utf8');
-      return WRITES.some((pattern) => pattern.test(source));
-    });
+    const offenders = files.filter((file) => writesTheCapability(readFileSync(file, 'utf8')));
     expect(offenders.map((file) => relative(REPO_ROOT, file))).toEqual([]);
   });
 

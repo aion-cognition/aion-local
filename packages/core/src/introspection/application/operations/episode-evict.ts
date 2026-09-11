@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { repairSurvivors } from './eviction-repair.js';
+import { repairSurvivors, type SurvivorRepairReport } from './eviction-repair.js';
 import { inWriteTransaction } from '../../../infrastructure/graph/connection.js';
 import type { PublicationCoordinator } from '../../../infrastructure/publication/coordinator.js';
 import { getLedgerEntry, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
@@ -87,6 +87,7 @@ function payloadOf(
     operationalRevision: candidate.operationalRevision,
     readinessPolicyRevision: candidate.readinessPolicyRevision,
     projectionGeneration: candidate.projectionGeneration,
+    acceptedReferenceVersion: candidate.acceptedReferenceVersion,
     qualifiedAt: candidate.qualifiedAt,
     nodeIds: [...plan.nodeIds],
     relationIds: [...plan.relationIds],
@@ -147,7 +148,7 @@ async function attemptEviction(
 
 function detailOf(
   tally: AttemptTally,
-  repaired: { attempted: number; recomputed: number; cleared: number; deferred: number },
+  repaired: SurvivorRepairReport,
   recovered: number,
   examined: number,
 ): string {
@@ -156,7 +157,8 @@ function detailOf(
     `${String(tally.deferred)} deferred, ${String(tally.pinned)} pinned under the guard ` +
     `over ${String(examined)} source(s) examined; ` +
     `${String(repaired.recomputed)} survivor vector(s) recomputed, ` +
-    `${String(repaired.cleared)} cleared, ${String(repaired.deferred)} left owed ` +
+    `${String(repaired.cleared)} cleared, ${String(repaired.classified)} carrying none, ` +
+    `${String(repaired.deferred)} left owed ` +
     `of ${String(repaired.attempted)} attempted; ` +
     `${String(recovered)} pending publication(s) recovered`
   );
@@ -188,10 +190,15 @@ async function runEvict(ctx: OperationContext, scales: EvictScales): Promise<Ope
   }
   if (held !== undefined) {
     return {
-      status: repaired.recomputed + repaired.cleared > 0 ? 'applied' : 'noop',
+      status: repaired.recomputed + repaired.cleared + repaired.classified > 0 ? 'applied' : 'noop',
       itemsProcessed: repaired.attempted,
       itemsAffected: 0,
-      detail: `a prior publication is unsettled (${held}); no eviction was attempted. ${detailOf({ attempted: 0, evicted: 0, deferred: 0, pinned: 0 }, repaired, recovered, 0)}`,
+      detail: `a prior publication is unsettled (${held}); no eviction was attempted. ${detailOf(
+        { attempted: 0, evicted: 0, deferred: 0, pinned: 0 },
+        repaired,
+        recovered,
+        0,
+      )}`,
     };
   }
 
@@ -216,12 +223,12 @@ async function runEvict(ctx: OperationContext, scales: EvictScales): Promise<Ope
     };
   }
   const detail = detailOf(tally, repaired, recovered, scan.examined);
-  const affected = tally.evicted + repaired.recomputed + repaired.cleared;
+  const affected = tally.evicted + repaired.recomputed + repaired.cleared + repaired.classified;
   if (affected === 0 && recovered === 0) {
     return noop(`nothing due; ${detail}`);
   }
   return {
-    status: tally.evicted > 0 || repaired.recomputed + repaired.cleared > 0 ? 'applied' : 'noop',
+    status: tally.evicted > 0 || affected > 0 ? 'applied' : 'noop',
     itemsProcessed: tally.attempted + repaired.attempted,
     itemsAffected: affected,
     detail,

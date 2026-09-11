@@ -32,6 +32,10 @@ function edge(overrides: Partial<IncidentEdge> = {}): IncidentEdge {
   };
 }
 
+/**
+ * Every node the registry names carries `AionNode`, so the fixture carries it too. An endpoint
+ * without it is a different case with its own refusal, asserted below.
+ */
 function outward(type: string, labels: readonly string[]): IncidentEdge {
   return edge({
     type,
@@ -39,7 +43,7 @@ function outward(type: string, labels: readonly string[]): IncidentEdge {
     toId: 'entity-1',
     insideIds: [EPISODE],
     outsideId: 'entity-1',
-    outsideLabels: [...labels],
+    outsideLabels: ['AionNode', ...labels],
   });
 }
 
@@ -119,7 +123,7 @@ describe('classifyIncidentEdge', () => {
           toId: 'turn-other',
           insideIds: [TURN],
           outsideId: 'turn-other',
-          outsideLabels: ['Turn'],
+          outsideLabels: ['AionNode', 'Turn', 'Memory'],
         }),
       ),
     ).toEqual({ category: 'block', reason: 'follows_crosses_source_family' });
@@ -138,6 +142,21 @@ describe('classifyIncidentEdge', () => {
       category: 'block',
       reason: 'structural_at_raw_endpoint_initiated_by',
     });
+  });
+
+  it('blocks an endpoint the node registry does not name, whatever the type is', () => {
+    expect(
+      classifyIncidentEdge(
+        edge({
+          type: 'MENTIONS',
+          fromId: EPISODE,
+          toId: 'admin-probe',
+          insideIds: [EPISODE],
+          outsideId: 'admin-probe',
+          outsideLabels: ['AdminProbe'],
+        }),
+      ),
+    ).toEqual({ category: 'block', reason: 'endpoint_outside_node_registry' });
   });
 
   it('blocks a type outside the catalog rather than inferring anything from its absence', () => {

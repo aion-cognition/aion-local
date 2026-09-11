@@ -145,3 +145,80 @@ export async function moveEdgeStrength(
     () => undefined,
   );
 }
+
+/**
+ * An edge from a raw node to something the node registry does not name. The endpoint carries no
+ * base label, which is what an administrative node looks like from the census's side.
+ */
+export async function seedForeignEndpointEdge(
+  driver: Driver,
+  input: { readonly fromId: string; readonly relationId: string; readonly foreignId: string },
+): Promise<void> {
+  await runWrite(
+    driver,
+    {
+      cypher: [
+        `MATCH (a:${BASE_NODE_LABEL} { id: $fromId })`,
+        'MERGE (b:AdminProbe { probe_id: $foreignId })',
+        'CREATE (a)-[r:MENTIONS { id: $relationId }]->(b)',
+        'RETURN r.id AS id',
+      ].join('\n'),
+      parameters: input,
+    },
+    () => undefined,
+  );
+}
+
+/** Adds or removes one label, for the mixed-semantic-label refusal. A label is not a node. */
+export async function setNodeLabel(
+  driver: Driver,
+  input: { readonly id: string; readonly label: string; readonly present: boolean },
+): Promise<void> {
+  await runWrite(
+    driver,
+    {
+      cypher: [
+        `MATCH (n:${BASE_NODE_LABEL} { id: $id })`,
+        input.present ? `SET n:${input.label}` : `REMOVE n:${input.label}`,
+        'RETURN n.id AS id',
+      ].join('\n'),
+      parameters: { id: input.id },
+    },
+    () => undefined,
+  );
+}
+
+/** The current weight of one edge, so a case can put back exactly what it moved. */
+export async function edgeStrengthOf(
+  driver: Driver,
+  relationId: string,
+): Promise<number | undefined> {
+  return readFirst(
+    driver,
+    'MATCH ()-[r]-() WHERE r.id = $relationId RETURN r.strength AS strength LIMIT 1',
+    { relationId },
+    (row) => row.strength as number,
+  );
+}
+
+/**
+ * A registered node that carries no `Memory` label, and so no context vector of any kind. It is
+ * a legitimate survivor of a disposable association and nothing the vector path can write.
+ */
+export async function seedUnvectoredNeighbour(
+  driver: Driver,
+  input: { readonly id: string; readonly now: Date },
+): Promise<void> {
+  await runWrite(
+    driver,
+    {
+      cypher: [
+        `MERGE (n:${BASE_NODE_LABEL}:Entity { id: $id })`,
+        'ON CREATE SET n.name = $id, n.name_norm = $id, n.tx_from = $now',
+        'RETURN n.id AS id',
+      ].join('\n'),
+      parameters: { id: input.id, now: toGraphDateTime(input.now) },
+    },
+    () => undefined,
+  );
+}

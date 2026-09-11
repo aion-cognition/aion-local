@@ -24,6 +24,9 @@ import type { EvictionNode, IncidentEdge } from '../../reflection/domain/episode
 
 const RAW_LABELS = RAW_CONTAINER_LABELS.map((label) => `'${label}'`).join(', ');
 
+/** Stands in for an endpoint the node registry does not name, so a refusal can point at it. */
+export const UNIDENTIFIED_ENDPOINT = 'unidentified-endpoint';
+
 const READ_REMOVAL_NODES = [
   'UNWIND $ids AS wanted',
   `MATCH (n:${BASE_NODE_LABEL} { id: wanted })`,
@@ -37,7 +40,12 @@ const READ_REMOVAL_NODES = [
  */
 const READ_INCIDENT_EDGES = [
   'UNWIND $ids AS wanted',
-  `MATCH (n:${BASE_NODE_LABEL} { id: wanted })-[r]-(:${BASE_NODE_LABEL})`,
+  // The far endpoint is deliberately unlabelled in the match. Requiring it to carry the base
+  // label would make a relationship to anything outside the node registry — an administrative
+  // node, or whatever a later writer introduces — invisible to the classifier, and an invisible
+  // edge does not stop the deletion: it surfaces as a raw driver error from the node delete that
+  // could not detach it. Read it, and let the classifier refuse it by name.
+  `MATCH (n:${BASE_NODE_LABEL} { id: wanted })-[r]-()`,
   'WITH DISTINCT r',
   'RETURN r.id AS relationId, type(r) AS type,',
   '       startNode(r).id AS fromId, endNode(r).id AS toId,',
@@ -115,8 +123,10 @@ export async function readIncidentEdges(
     READ_INCIDENT_EDGES,
     { ids: [...inside], limit: toGraphInteger(limit + 1) },
     (row: Row) => {
-      const fromId = row.fromId as string;
-      const toId = row.toId as string;
+      // A node outside the registry may carry no `id` at all. It is named so the refusal can be
+      // about a concrete endpoint rather than about `undefined`.
+      const fromId = typeof row.fromId === 'string' ? row.fromId : UNIDENTIFIED_ENDPOINT;
+      const toId = typeof row.toId === 'string' ? row.toId : UNIDENTIFIED_ENDPOINT;
       const insideIds = [fromId, toId].filter((id) => inside.has(id));
       const outsideId = [fromId, toId].find((id) => !inside.has(id));
       const properties = (row.properties as Record<string, unknown> | null) ?? {};
