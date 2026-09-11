@@ -187,10 +187,12 @@ const TOOL_NAMES = new Set(TOOL_DEFINITIONS.map((tool) => tool.name));
  * failure cannot acquire retryability by resembling a transient one.
  *
  * It says nothing about whether the experience was stored. A publication the substrate
- * accepted is durable before the graph half runs and is settled by the next publication
- * either way, so retryability answers "send it again", not "it is gone". `reason` is the
- * substrate's own short name for the failure and `operationId` is the delivery identity the
- * service log records; neither carries the payload.
+ * accepted is durable before the graph half runs, and the next publication attempts its
+ * recovery — that attempt can fail or find the substrate unavailable, so this field promises
+ * that the record is there to be recovered, not that acknowledgment eventually follows.
+ * Retryability answers "send it again", not "it is gone". `reason` is the substrate's own
+ * short name for the failure and `operationId` is the delivery identity the service log
+ * records; neither carries the payload.
  */
 type PublicationErrorData = {
   readonly retryable: boolean;
