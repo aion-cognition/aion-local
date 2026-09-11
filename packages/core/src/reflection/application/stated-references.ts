@@ -205,6 +205,11 @@ const MAX_SETTLE_PASSES = 3;
  *
  * An episode that stated no references costs one archive read. One whose references already
  * landed costs a ledger read on top, and no graph write at all.
+ *
+ * NOTHING CALLS THIS. Its caller moved onto the publication coordinator, and the path this takes
+ * reaches the graph through the driver directly. Wiring it back would put a claim-provenance write
+ * outside the guard every other reference write goes through, so it is a reference for the shape
+ * rather than an entry point.
  */
 export async function settleStatedReferences(
   deps: StatedReferenceDeps,

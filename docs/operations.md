@@ -276,6 +276,39 @@ ticks (`merge_auto`, `entity_dedup`, `supersession`, `keyed_close`, `proposal_re
 `off` from its own live knobs. Two states only, so the line answers "would this touch
 anything right now" without a third reading to interpret.
 
+## Resuming a narrative migration
+
+```
+aion consolidate status --cohort <id>                       # phase, cursor, blocks, retry time
+aion consolidate run --cohort <id> [--steps <n>]            # advance one bounded batch
+aion consolidate run --cohort <id> --refresh | --reverify   # re-prove the frozen sources
+aion consolidate abandon --cohort <id>                      # release the job and its reservation
+```
+
+`consolidate` drives one fixed cohort of historical sessions from raw capture through to a chunk
+family. `status` opens a read-only handle and prints where the job stopped. `run` advances at most
+`--steps` batches (default 16, maximum 256) under the coordinator the service already uses, so a
+run interrupted anywhere resumes from durable state.
+
+`--refresh` re-proves the frozen sources, and `--reverify` re-proves every frozen member even where
+its recorded proof still says verified. Both restart a job the ordinary run would leave alone;
+neither moves an assignment or the first saved capture order, which are immutable once frozen.
+
+`abandon` is the only exit from a `capture_member_bound` block. That block means the cohort's
+capture exceeds a bound fixed at freeze time, and `--refresh` cannot raise it: abandoning releases
+the reservation so a smaller cohort can be frozen in its place. `status` prints the exact command
+when it reports that block.
+
+## Reading a captured source
+
+```
+aion source <id | source:kind:ordinal> [--limit <n>] [--cursor <c>] [--json]
+```
+
+`source` prints the parts behind one source id, one turn id, or one part address, from the archive
+rather than from the graph. It answers after an eviction has taken the projection away, which is
+the case it exists for: the records outlive the nodes.
+
 ## Unmerging entities
 
 ```
@@ -464,6 +497,17 @@ lineage a contradiction close writes, so `aion unsupersede` reverses it like any
 `AION_MAINTENANCE_CLAIM_DEDUP_COSINE_FLOOR` (default `0.73`) is the nearest-neighbor floor a
 pair must clear before the judge is asked at all. A pair is judged once, ever: the verdict is
 ledgered under a permanent key on the unordered pair, so a re-run never pays for it twice.
+
+The narrative chunk lifecycle and the eviction that follows it carry five knobs of their own, all
+unmeasured defaults rather than calibrated ones. `AION_MAINTENANCE_CHUNK_MAX_SPAN_MS` (default
+`86400000`) is how long a session's unsealed tail may stand before the span trigger seals it, and
+`AION_MAINTENANCE_CHUNK_RENDERED_INPUT_ALLOWANCE` (default `16384`) is the rendered-input budget a
+chunk is sealed and published under. `AION_MAINTENANCE_NARRATIVE_SEAL_BATCH` (default `2`) bounds
+publication attempts per invocation, where one attempt is one chunk revision rather than one source
+or one model call. `AION_MAINTENANCE_EPISODE_EVICT_MIN_AGE_MS` (default `86400000`) is how long a
+source's complete coverage must stand before its raw projection may go, measured from recorded
+clocks and never from `occurred_at`, and `AION_MAINTENANCE_EPISODE_EVICT_BATCH` (default `8`) bounds
+eviction attempts per invocation, one source each.
 
 ## Reflection concurrency
 

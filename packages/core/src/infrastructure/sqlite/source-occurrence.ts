@@ -98,11 +98,6 @@ export function resolveSourceOccurrence(
   return { kind: 'held', sourceId, residency: sourceResidencyState(db, sourceId) };
 }
 
-/** Whether a resolution names a source to reuse rather than one to mint. */
-export function heldSourceId(resolution: OccurrenceResolution): string | undefined {
-  return resolution.kind === 'held' ? resolution.sourceId : undefined;
-}
-
 /**
  * One logical occurrence in the live ingest order, with the raw row its bytes live in.
  *

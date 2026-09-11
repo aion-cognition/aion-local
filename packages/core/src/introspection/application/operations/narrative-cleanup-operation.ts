@@ -52,6 +52,8 @@ import type {
 
 export const NARRATIVE_CLEANUP_OPERATION = 'narrative_cleanup';
 
+/** The method name the duplicate close recorded. No writer sets it now; the token is preserved
+ * so a record carrying it from an earlier run still reads. */
 export const NARRATIVE_DUPLICATE_METHOD = 'introspection_narrative_duplicate';
 
 /**

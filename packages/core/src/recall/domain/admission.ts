@@ -174,11 +174,6 @@ function describe(measurement: Measurement): string {
   return `${measurement.method} ${measurement.relevance.toFixed(2)}`;
 }
 
-/** The measurements as a reader of a decision sees them, in the words the pack already uses. */
-export function describeMeasurements(measurements: readonly Measurement[]): readonly string[] {
-  return measurements.map(describe);
-}
-
 export const ADMISSION_DECISIONS = [
   'admitted',
   /** Something measured it and the measurement fell short of the floor it was judged against. */

@@ -7,6 +7,12 @@ export type JsonObject = { readonly [key: string]: JsonValue };
 
 export const PUBLICATION_PROTOCOL_VERSION = 1;
 export const GRAPH_COMPLETION_EFFECT = 'publication:graph_completion';
+/**
+ * The closed set of operation kinds the coordinator admits. Seventeen: the twelve the design
+ * signed off, and five the implementation added, each with its reason stated at the entry. A kind
+ * outside this list is refused at construction, and a kind here with no installed handler is
+ * refused at publish. Count them from this list rather than from any prose about it.
+ */
 export const PUBLICATION_KINDS = [
   'intake',
   'stated_references',
@@ -50,6 +56,17 @@ export type PublicationPlan<D extends JsonValue = JsonValue> = {
   readonly effects: readonly { readonly kind: string; readonly detail: JsonValue }[];
 };
 
+/**
+ * The verdict a handler returns, with its reason as free text.
+ *
+ * The reason is deliberately untyped: handlers synthesise it from what they read, and a closed
+ * union would push every such refusal through a constant it cannot name in advance. The cost is
+ * that nothing stops two handlers naming one condition two ways, and four of them do: a published
+ * head moving between prepare and check is reported as `head_moved`, `published_head_moved`,
+ * `legacy_head_moved` and `legacy_head_changed`, one per module. Nothing consumes any of them, so
+ * grouping refusals by reason under-reports the largest source of contention as four small ones.
+ * Consolidating them is a decision about the whole vocabulary and belongs to whoever owns it.
+ */
 export type PublicationCheck =
   | { readonly status: 'valid' }
   | { readonly status: 'deferred' | 'rejected'; readonly reason: string };

@@ -37,7 +37,17 @@ const Dependency = z.strictObject({
 });
 const Scope = Dependency.omit({ version: true });
 
-/** One identity per affected scope, including its record kind and endpoint. */
+/**
+ * One identity per affected scope, including its record kind and endpoint.
+ *
+ * Shape only: kind, a non-empty id and a non-empty scope name. The name is NOT checked against
+ * the closed scope registry, and four installed handlers declare names the registry rejects
+ * (`sqlite:source_residency`, `sqlite:source_occurrence`, `migration.capture_order`). Nothing
+ * calls `scopeAuthority` on a declared affected scope, so this is a recording gap rather than a
+ * live failure: the stored list cannot be read as a registry-valid scope set, and a reconciliation
+ * has to take the real set from the producers. Tightening the parse would refuse those four
+ * handlers, which is a decision about the registry rather than about this reader.
+ */
 export function parseAffectedScopes(value: unknown): readonly EvidenceScope[] {
   const scopes = z.array(Scope).parse(value);
   const unique = new Map(

@@ -85,6 +85,9 @@ const READ_OPEN_NARRATIVE_VERSIONS = [
  * found the duplicates ran outside any lock, so by the time the closes are written another
  * writer may have closed the version this run picked to keep, and closing the rest against it
  * would leave the session with no current narrative at all.
+ *
+ * No caller left: the duplicate close it re-read for is gone. The statement is kept because the
+ * lock-ordering rule it exists for outlives the caller, and a replacement would rewrite it.
  */
 export async function readOpenNarrativeVersionsInTransaction(
   tx: GraphTransaction,
@@ -225,24 +228,6 @@ export async function standsInFamilyInTransaction(
     String(row.id),
   );
   return rows.length > 0;
-}
-
-const READ_OPEN_CHUNK_REVISIONS = [
-  `MATCH (n:Narrative { ${NARRATIVE_PROPERTIES.chunkId}: $chunkId })`,
-  `WHERE ${currentOnly('n')}`,
-  `RETURN n.id AS id, n.${NARRATIVE_PROPERTIES.revisionNo} AS revision_no`,
-  'ORDER BY n.id',
-].join('\n');
-
-/** The same family re-read under the caller's lock, because the scan ran outside one. */
-export async function readOpenChunkRevisionsInTransaction(
-  tx: GraphTransaction,
-  chunkId: string,
-): Promise<ChunkRevisionVersion[]> {
-  return tx.run(READ_OPEN_CHUNK_REVISIONS, { chunkId }, (row) => ({
-    id: row.id as string,
-    revisionNo: typeof row.revision_no === 'number' ? row.revision_no : 0,
-  }));
 }
 
 export type OrphanedNarrative = {

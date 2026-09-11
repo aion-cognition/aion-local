@@ -3,7 +3,6 @@ import { ReflectionQueueClaimant } from '../../infrastructure/sqlite/claim.js';
 import {
   REFLECTION_QUEUE_EPISODE_FIELD,
   type ReflectionJob,
-  type ReflectionLane,
 } from '../../infrastructure/sqlite/reflection-queue.js';
 import { SOURCE_INDEX_JOB_TYPE } from '../../reflection/application/intake-queue.js';
 
@@ -15,9 +14,6 @@ import { SOURCE_INDEX_JOB_TYPE } from '../../reflection/application/intake-queue
  * loop with a timer: indexing has no freshness pin, the obligation is durable, and a source
  * whose index is incomplete is already held against eviction by the pin the projection carries.
  */
-
-/** The lane intake files this work in, kept out of the depth an interactive caller is told. */
-export const SOURCE_INDEX_LANE: ReflectionLane = 'bulk';
 
 /**
  * Batches one claimed job may run before the row goes back to the queue. A source with more

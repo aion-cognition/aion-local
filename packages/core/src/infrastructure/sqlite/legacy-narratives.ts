@@ -80,22 +80,6 @@ export function readLegacyNarrative(
   return row === undefined ? undefined : readRow(row);
 }
 
-/** One bounded page of the historical versions, including retired representations. */
-export function listLegacyNarratives(
-  db: SqliteHandle,
-  sessionId: string,
-  limit: number,
-  after = '',
-): readonly LegacyNarrativeRecord[] {
-  return (
-    db
-      .prepare(
-        'SELECT * FROM legacy_narratives WHERE session_id = ? AND narrative_id > ? ORDER BY narrative_id LIMIT ?',
-      )
-      .all(sessionId, after, limit) as LegacyRow[]
-  ).map(readRow);
-}
-
 /** Identity cannot migrate between sessions when a newer inventory is recorded. */
 export function recordLegacyNarrative(
   db: SqliteHandle,

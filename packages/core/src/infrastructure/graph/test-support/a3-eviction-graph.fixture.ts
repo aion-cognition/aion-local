@@ -63,16 +63,6 @@ export async function nodeExists(driver: Driver, id: string): Promise<boolean> {
   return found !== undefined;
 }
 
-export async function relationshipExists(driver: Driver, relationId: string): Promise<boolean> {
-  const found = await readFirst(
-    driver,
-    'MATCH ()-[r]-() WHERE r.id = $relationId RETURN r.id AS id LIMIT 1',
-    { relationId },
-    (row) => row.id as string,
-  );
-  return found !== undefined;
-}
-
 export async function storedVectors(
   driver: Driver,
   id: string,
