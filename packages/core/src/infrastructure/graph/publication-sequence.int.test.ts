@@ -121,12 +121,14 @@ it('orders a successor against the unsafe predecessor', async () => {
 });
 
 it('reads the unsafe sequence back through the exported journal readers', () => {
-  // publication-intents.ts is the durable journal: its readers are the committed-view API.
-  expect.soft(String(readPublicationReceipt(store.db, 'unsafe-recovered')?.sequence)).toBe(UNSAFE);
+  // publication-intents.ts is the durable journal: its readers are the committed-view API. The
+  // value is compared as it comes back rather than through String(), because a reader handing
+  // this number out as a number is the failure — and past 2^53 it would not survive the trip.
+  expect.soft(readPublicationReceipt(store.db, 'unsafe-recovered')?.sequence).toBe(UNSAFE);
   const acknowledged = listAcknowledgedOperations(store.db).find(
     (row) => row.operationId === 'unsafe-recovered',
   );
-  expect.soft(String(acknowledged?.sequence)).toBe(UNSAFE);
+  expect.soft(acknowledged?.sequence).toBe(UNSAFE);
 });
 
 it('reads an unsafe acknowledgment cursor back through the pairing reader', async () => {
