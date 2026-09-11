@@ -11,6 +11,7 @@ import {
   hasLegacyNarrativeHistory,
   readLegacyHeads,
   readLegacyNarrativeInventory,
+  readLegacyOriginalClocks,
   readNarrativeFamilyIdentities,
   tagLegacyNarratives,
 } from '../../infrastructure/graph/narrative-families.js';
@@ -22,6 +23,7 @@ import {
   acknowledgeFamilySelection,
   readFamilySelection,
 } from '../../infrastructure/sqlite/family-selection.js';
+import { acknowledgeLegacyOriginalClock } from '../../infrastructure/sqlite/legacy-narrative-history.js';
 import {
   readLegacyNarrative,
   recordLegacyNarrative,
@@ -51,12 +53,16 @@ const Inventory = z.strictObject({
   nodeId: z.string().min(1),
   verified: z.boolean(),
   proof: z.string(),
+  originalKnownFrom: z.string().nullable().default(null),
 });
 const Data = Payload.extend({
   family: z.enum(['legacy_session_overview', 'chunk']),
   heads: z.array(z.string()),
   chunkIds: z.array(z.string()),
   inventory: Inventory.nullable(),
+  originalClocks: z
+    .array(z.strictObject({ nodeId: z.string(), originalKnownFrom: z.string().nullable() }))
+    .default([]),
   refusal: z.string().nullable(),
   observedAt: z.string().min(1),
 });
@@ -129,6 +135,7 @@ export const familyCutoverPublication = new PublicationOperation({
           nodeId: record.nodeId,
           verified,
           proof: JSON.stringify({ ...record, identities, citations }),
+          originalKnownFrom: record.originalKnownFrom,
         };
       }
     }
@@ -153,6 +160,10 @@ export const familyCutoverPublication = new PublicationOperation({
       heads: [...heads],
       chunkIds: [...chunkIds],
       inventory,
+      originalClocks:
+        payload.action === 'cutover'
+          ? [...(await readLegacyOriginalClocks(context.graph, heads))]
+          : [],
       refusal,
       observedAt: context.now.toISOString(),
     };
@@ -241,6 +252,12 @@ export const familyCutoverPublication = new PublicationOperation({
         verificationJson: data.inventory.proof,
         createdAt: new Date(context.knownFrom),
       });
+      acknowledgeLegacyOriginalClock(
+        context.db,
+        data.inventory.nodeId,
+        data.inventory.originalKnownFrom,
+        context.operationId,
+      );
     } else {
       for (const narrativeId of data.heads) {
         if (readLegacyNarrative(context.db, narrativeId) === undefined) {
@@ -252,6 +269,12 @@ export const familyCutoverPublication = new PublicationOperation({
             createdAt: new Date(context.knownFrom),
           });
         }
+        acknowledgeLegacyOriginalClock(
+          context.db,
+          narrativeId,
+          data.originalClocks.find((row) => row.nodeId === narrativeId)?.originalKnownFrom ?? null,
+          context.operationId,
+        );
         if (data.action === 'cutover') {
           retireLegacyNarrative(context.db, {
             narrativeId,

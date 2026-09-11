@@ -188,6 +188,7 @@ export const NARRATIVE_SCHEMA_STATEMENTS: readonly string[] = [
     family TEXT NOT NULL DEFAULT 'legacy_session_overview',
     verification_status TEXT NOT NULL,
     verification_json TEXT,
+    original_publication_json TEXT,
     published_operation_id TEXT,
     published_known_from TEXT CHECK ((published_operation_id IS NULL) = (published_known_from IS NULL)),
     retired_at TEXT,
@@ -209,10 +210,11 @@ export const NARRATIVE_SCHEMA_STATEMENTS: readonly string[] = [
 
 /**
  * The retry columns and the coverage payload reach a substrate that already holds revision
- * rows by ALTER. The literals match the CREATE statements above and their order matches too,
- * which is what makes a fresh file and a retrofitted one the same table.
+ * rows by ALTER. Definitions match the fresh tables; legacy files can retain a different physical
+ * column order, so readers name columns rather than decoding them by position.
  */
 export const NARRATIVE_COLUMN_ADDITIONS: readonly ColumnAddition[] = [
+  { table: 'legacy_narratives', column: 'original_publication_json', definition: 'TEXT' },
   { table: 'legacy_narratives', column: 'published_operation_id', definition: 'TEXT' },
   {
     table: 'legacy_narratives',

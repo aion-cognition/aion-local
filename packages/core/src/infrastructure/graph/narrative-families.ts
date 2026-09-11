@@ -172,6 +172,7 @@ export type LegacyNarrativeInventory = {
   readonly citationCount: number;
   readonly coverageKey: string;
   readonly coverageCount: number;
+  readonly originalKnownFrom: string | null;
 };
 
 /** Reads the complete source set or one sentinel beyond the caller's proof bound. */
@@ -192,7 +193,7 @@ export async function readLegacyNarrativeInventory(
       `       n.${NARRATIVE_PROPERTIES.citations}[..$memberLimit] AS citations,`,
       `       size(n.${NARRATIVE_PROPERTIES.citations}) AS citation_count,`,
       `       n.${NARRATIVE_PROPERTIES.coverageKey} AS coverage_key,`,
-      `       n.${NARRATIVE_PROPERTIES.coverageCount} AS coverage_count`,
+      `       n.${NARRATIVE_PROPERTIES.coverageCount} AS coverage_count, n.tx_from AS original_known_from`,
     ].join('\n'),
     { ...input, memberLimit: toGraphInteger(input.memberLimit) },
     (row) => ({
@@ -203,6 +204,7 @@ export async function readLegacyNarrativeInventory(
       citationCount: typeof row.citation_count === 'number' ? row.citation_count : -1,
       coverageKey: typeof row.coverage_key === 'string' ? row.coverage_key : '',
       coverageCount: typeof row.coverage_count === 'number' ? row.coverage_count : -1,
+      originalKnownFrom: fromGraphDateTime(row.original_known_from)?.toISOString() ?? null,
     }),
   );
   return rows[0];
@@ -233,4 +235,19 @@ export async function tagLegacyNarratives(
   if (JSON.stringify([...rows].sort()) !== JSON.stringify([...ids].sort())) {
     throw new Error('legacy representation changed before its family marker was written');
   }
+}
+
+/** The original clock of each bounded legacy head, copied under the family publication guard. */
+export function readLegacyOriginalClocks(
+  tx: GraphTransaction,
+  nodeIds: readonly string[],
+): Promise<readonly { nodeId: string; originalKnownFrom: string | null }[]> {
+  return tx.run(
+    'MATCH (n:Narrative) WHERE n.id IN $nodeIds RETURN n.id AS id, n.tx_from AS original',
+    { nodeIds: [...nodeIds] },
+    (row) => ({
+      nodeId: String(row.id),
+      originalKnownFrom: fromGraphDateTime(row.original)?.toISOString() ?? null,
+    }),
+  );
 }

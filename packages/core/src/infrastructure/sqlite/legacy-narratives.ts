@@ -7,6 +7,7 @@ export type LegacyNarrativeRecord = {
   readonly verificationJson: string | null;
   readonly retiredAt: string | null;
   readonly retirementFamilyJson: string | null;
+  readonly originalPublicationJson: string | null;
   readonly publication?: { readonly operationId: string; readonly knownFrom: string };
 };
 
@@ -17,6 +18,7 @@ type LegacyRow = {
   verification_json: string | null;
   retired_at: string | null;
   retirement_family_json: string | null;
+  original_publication_json?: string | null;
   published_operation_id: string | null;
   published_known_from: string | null;
 };
@@ -32,6 +34,7 @@ function readRow(row: LegacyRow): LegacyNarrativeRecord {
     verificationJson: row.verification_json,
     retiredAt: row.retired_at,
     retirementFamilyJson: row.retirement_family_json,
+    originalPublicationJson: row.original_publication_json ?? null,
     ...(row.published_operation_id == null || row.published_known_from == null
       ? {}
       : {

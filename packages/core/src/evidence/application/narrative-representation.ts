@@ -1,5 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 
+import { legacyBeforeFirstSelection } from './legacy-family-history.js';
 import {
   findNarrativeFamilyIdentities,
   type NarrativeFamilyIdentity,
@@ -235,6 +236,34 @@ class RepresentationReader {
         continue;
       }
       const reading = readFamilyFence(this.#db, sessionId, this.#context.mode.knownAt);
+      if (
+        reading === undefined &&
+        family === 'legacy_session_overview' &&
+        this.#context.mode.knownAt !== undefined
+      ) {
+        const prior = legacyBeforeFirstSelection(
+          this.#db,
+          readLegacyNarrative(this.#db, nodeId),
+          sessionId,
+          this.#context.mode.knownAt,
+        );
+        if (prior !== undefined) {
+          this.dependencies.push(prior.dependency);
+          if (prior.known === 'unknown') {
+            publication = 'unknown';
+            this.issues.push({
+              address: idAddress(nodeId),
+              field: 'narrative_revision',
+              reason: 'unsupported_history',
+              historyReason: 'not_recorded',
+              required: true,
+            });
+          } else {
+            known &&= prior.known;
+          }
+          continue;
+        }
+      }
       if (reading === undefined) {
         unproved = true;
         this.issues.push(

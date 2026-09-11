@@ -23,10 +23,11 @@ type SelectionRow = {
  * Reads the acknowledged preference at the requested knowledge time. World time selects the
  * contents of a representation; it never chooses which representation was known.
  */
-export function readFamilySelection(
+function selectFamily(
   db: SqliteHandle,
   sessionId: string,
-  knewAt?: Date,
+  knewAt: Date | undefined,
+  order: 'ASC' | 'DESC',
 ): FamilySelection | undefined {
   const row = db
     .prepare(
@@ -35,7 +36,7 @@ export function readFamilySelection(
          JOIN publication_intents i ON i.operation_id = f.operation_id
         WHERE f.session_id = ? AND i.state = 'acknowledged' AND i.known_from IS NOT NULL
           AND (? IS NULL OR i.known_from <= ?)
-        ORDER BY f.version DESC LIMIT 1`,
+        ORDER BY f.version ${order} LIMIT 1`,
     )
     .get(sessionId, knewAt?.toISOString() ?? null, knewAt?.toISOString() ?? null) as
     SelectionRow | undefined;
@@ -52,6 +53,23 @@ export function readFamilySelection(
     operationId: row.operation_id,
     knownFrom: row.known_from,
   };
+}
+
+/** The current acknowledged choice at a pinned knowledge vantage, or the present choice. */
+export function readFamilySelection(
+  db: SqliteHandle,
+  sessionId: string,
+  knewAt?: Date,
+): FamilySelection | undefined {
+  return selectFamily(db, sessionId, knewAt, 'DESC');
+}
+
+/** The first acknowledged choice bounds the period before preference recording existed. */
+export function readFirstFamilySelection(
+  db: SqliteHandle,
+  sessionId: string,
+): FamilySelection | undefined {
+  return selectFamily(db, sessionId, undefined, 'ASC');
 }
 
 /**
