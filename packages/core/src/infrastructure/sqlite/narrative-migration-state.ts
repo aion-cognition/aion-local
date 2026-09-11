@@ -76,17 +76,26 @@ export function refreshNarrativeMigration(
     throw new Error('migration revision reached its exact-integer bound');
   }
   const capture = job.phase === 'archive' || job.phase === 'graph';
-  return (
-    db
-      .prepare(
-        "UPDATE narrative_migration_jobs SET lifecycle_state = 'running', blocked_reason = NULL, phase = ?, cursor = CASE WHEN ? THEN cursor ELSE '' END, revision = revision + 1, updated_at = ? WHERE cohort_id = ? AND revision = ? AND lifecycle_state <> 'abandoned'",
-      )
-      .run(
-        capture ? job.phase : 'verify',
-        capture ? 1 : 0,
-        now.toISOString(),
-        job.cohortId,
-        job.revision,
-      ).changes === 1
-  );
+  return db
+    .transaction(() => {
+      const changed =
+        db
+          .prepare(
+            "UPDATE narrative_migration_jobs SET lifecycle_state = 'running', blocked_reason = NULL, pass_progress_json = NULL, prior_gap_digest = NULL, phase = ?, cursor = CASE WHEN ? THEN cursor ELSE '' END, revision = revision + 1, updated_at = ? WHERE cohort_id = ? AND revision = ? AND lifecycle_state <> 'abandoned'",
+          )
+          .run(
+            capture ? job.phase : 'verify',
+            capture ? 1 : 0,
+            now.toISOString(),
+            job.cohortId,
+            job.revision,
+          ).changes === 1;
+      if (changed) {
+        db.prepare('UPDATE narrative_migration_issues SET active = 0 WHERE cohort_id = ?').run(
+          job.cohortId,
+        );
+      }
+      return changed;
+    })
+    .immediate();
 }

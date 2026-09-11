@@ -252,3 +252,5 @@ export { estimateApiCost } from './providers/api-pricing.js';
 
 export { abandonNarrativeMigration } from './sqlite/narrative-migration-state.js';
 export { MigrationRefused } from './sqlite/migration-refusal.js';
+
+export { readMigrationIssues } from './sqlite/narrative-migration-pass.js';

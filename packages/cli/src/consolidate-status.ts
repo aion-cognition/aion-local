@@ -2,6 +2,7 @@ import {
   describeError,
   openReadOnlySqliteHandle,
   readNarrativeMigration,
+  readMigrationIssues,
   sqliteTableExists,
 } from '@aion/core';
 import { statSync } from 'node:fs';
@@ -12,6 +13,7 @@ export type MigrationStatusReading =
   | {
       readonly status: 'read';
       readonly job: NonNullable<ReturnType<typeof readNarrativeMigration>>;
+      readonly problems?: ReturnType<typeof readMigrationIssues>;
     }
   | {
       readonly status: 'missing';
@@ -39,7 +41,13 @@ export function inspectMigration(path: string, cohortId: string): MigrationStatu
       const job = readNarrativeMigration(db, cohortId);
       return job === undefined
         ? { status: 'missing', reason: 'job_missing', job: null }
-        : { status: 'read', job };
+        : {
+            status: 'read',
+            job,
+            ...(sqliteTableExists(db, 'narrative_migration_issues')
+              ? { problems: readMigrationIssues(db, cohortId) }
+              : {}),
+          };
     } finally {
       db.close();
     }
@@ -59,13 +67,19 @@ export function writeMigrationStatus(
   }
   const { job } = reading;
   if (json) {
-    write(JSON.stringify({ status: job.state, job }));
+    write(JSON.stringify({ status: job.state, job, ...reading.problems }));
     return;
   }
   write(`${job.cohortId}: ${job.state}, ${job.phase}, checkpoint ${String(job.revision)}`);
   write(
     `frozen policy v${String(job.policy.partitionPolicyVersion)}: ${String(job.policy.maxMembers)} members, ${String(job.policy.renderedInputAllowance)} rendered units, span ${String(job.policy.maxSpanMs)} ms`,
   );
+  for (const issue of reading.problems?.issues ?? []) {
+    write(`${issue.id}: ${issue.reason}`);
+  }
+  if (reading.problems?.issuesTruncated) {
+    write('further issues are recorded; this status page is bounded');
+  }
   if (job.blockedReason !== undefined) {
     write(`blocked: ${job.blockedReason}`);
   }

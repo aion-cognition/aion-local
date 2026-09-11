@@ -67,6 +67,13 @@ it('continues past a pre-sealed session whose other member fails verification', 
   ).toBe(1);
   const report = await runNarrativeMigrationBatch(chunks, { ...options, steps: 32 });
   expect(report.issues.length).toBeGreaterThan(0);
+  expect(report.state, JSON.stringify(report)).toBe('blocked');
+  expect(new Set(report.issues.map((issue) => JSON.stringify(issue))).size).toBe(
+    report.issues.length,
+  );
+  const repeated = await runNarrativeMigrationBatch(chunks, { ...options, steps: 32 });
+  expect(repeated.steps).toBe(0);
+  expect(repeated.issues).toEqual(report.issues);
   expect(
     later.every((id) => chunkOfSource(store.db, id) !== undefined),
     JSON.stringify(report),

@@ -8,6 +8,8 @@ export const NARRATIVE_MIGRATION_SCHEMA_STATEMENTS = [
     revision INTEGER NOT NULL DEFAULT 0,
     cursor TEXT NOT NULL DEFAULT '',
     blocked_reason TEXT,
+    pass_progress_json TEXT,
+    prior_gap_digest TEXT,
     lifecycle_state TEXT NOT NULL DEFAULT 'running' CHECK (lifecycle_state IN ('running','blocked','complete','abandoned') AND (lifecycle_state <> 'blocked' OR blocked_reason IS NOT NULL)),
     intake_watermark INTEGER NOT NULL,
     archive_rowid_low INTEGER NOT NULL,
@@ -23,9 +25,19 @@ export const NARRATIVE_MIGRATION_SCHEMA_STATEMENTS = [
     graph_seen INTEGER NOT NULL DEFAULT 0 CHECK (graph_seen IN (0,1)),
     PRIMARY KEY (cohort_id, source_id)
   )`,
+  `CREATE TABLE IF NOT EXISTS narrative_migration_issues (
+    cohort_id TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    subject_id TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    active INTEGER NOT NULL CHECK (active IN (0,1)),
+    PRIMARY KEY (cohort_id, phase, subject_id)
+  )`,
 ] as const;
 
 export const NARRATIVE_MIGRATION_COLUMN_ADDITIONS: readonly ColumnAddition[] = [
+  { table: 'narrative_migration_jobs', column: 'pass_progress_json', definition: 'TEXT' },
+  { table: 'narrative_migration_jobs', column: 'prior_gap_digest', definition: 'TEXT' },
   { table: 'narrative_migration_jobs', column: 'blocked_reason', definition: 'TEXT' },
   {
     table: 'narrative_migration_jobs',

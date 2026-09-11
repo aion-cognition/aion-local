@@ -114,6 +114,9 @@ it('keeps an unproved capture clock as a separate gap and repairs it without rep
   };
   let progress = await runNarrativeMigrationBatch(chunks, options);
   expect(progress.complete).toBe(false);
+  expect(progress.state, JSON.stringify(progress)).toBe('blocked');
+  expect(progress.issues).toContainEqual({ id: sourceId, reason: 'capture_order_unproved' });
+  expect((await runNarrativeMigrationBatch(chunks, options)).steps).toBe(0);
   const gap = store.db
     .prepare(
       'SELECT status, capture_order_value, partition_gap FROM migration_progress WHERE cohort_id = ? AND source_id = ?',

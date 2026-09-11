@@ -13,6 +13,7 @@ import {
   advanceNarrativeMigration,
   type NarrativeMigrationJob,
 } from '../../infrastructure/sqlite/narrative-migration-job.js';
+import { finishMigrationPass } from '../../infrastructure/sqlite/narrative-migration-pass.js';
 import {
   adoptExistingMigrationChunk,
   chosenMigrationMembers,
@@ -23,7 +24,11 @@ import { checkPresentCoverage } from '../../recall/application/coverage-checker.
 import { decideChunkSeal } from '../domain/chunk-boundary.js';
 
 const Position = z.strictObject({ sessionId: z.string(), members: z.number().int().nonnegative() });
-const Cursor = z.strictObject({ after: Position.optional(), allReady: z.boolean().optional() });
+const Cursor = z.strictObject({
+  after: Position.optional(),
+  allReady: z.boolean().optional(),
+  remainingAtStart: z.number().int().nonnegative().optional(),
+});
 export type MigrationSessionEffects = {
   readonly issue: (id: string, reason: string) => void;
   readonly sealed: (created: boolean) => void;
@@ -37,6 +42,8 @@ export async function migrateSessionStep(
   effects: MigrationSessionEffects,
 ): Promise<string | undefined> {
   const cursor = Cursor.parse(job.cursor === '' ? {} : JSON.parse(job.cursor));
+  const remainingAtStart =
+    cursor.remainingAtStart ?? unassignedOrderedMembers(deps.db, job.cohortId);
   const session = nextMigrationSession(deps.db, job.cohortId, cursor.after);
   const advance = (
     phase: NarrativeMigrationJob['phase'],
@@ -49,18 +56,15 @@ export async function migrateSessionStep(
       advanceNarrativeMigration(
         deps.db,
         job,
-        unassignedOrderedMembers(deps.db, job.cohortId) > 0 ? 'partition' : 'publish',
+        unassignedOrderedMembers(deps.db, job.cohortId) > 0 &&
+          unassignedOrderedMembers(deps.db, job.cohortId) < remainingAtStart
+          ? 'partition'
+          : 'publish',
         '',
         now,
       );
     } else {
-      advanceNarrativeMigration(
-        deps.db,
-        job,
-        cursor.allReady === false ? 'publish' : 'complete',
-        '',
-        now,
-      );
+      return finishMigrationPass(deps.db, job, cursor.allReady !== false, now);
     }
     return undefined;
   }
@@ -128,7 +132,7 @@ export async function migrateSessionStep(
         effects.issue(session.sessionId, family.reason);
       }
     }
-    advance('partition', { after: session });
+    advance('partition', { after: session, remainingAtStart });
     return undefined;
   }
   const partition = readCutoverPartition(deps.db, job.cohortId, session.sessionId);

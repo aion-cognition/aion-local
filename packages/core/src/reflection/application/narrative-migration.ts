@@ -26,12 +26,17 @@ import {
   type NarrativeMigrationJob,
 } from '../../infrastructure/sqlite/narrative-migration-job.js';
 import {
+  recordMigrationIssue,
+  readMigrationIssues,
+  beginMigrationPass,
+  holdRepeatedCensusRefusal,
+} from '../../infrastructure/sqlite/narrative-migration-pass.js';
+import {
   migrationRemainders,
   nextMigrationChunk,
   nextMigrationSource,
 } from '../../infrastructure/sqlite/narrative-migration-read.js';
 import { refreshNarrativeMigration } from '../../infrastructure/sqlite/narrative-migration-state.js';
-import { markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 
 /** Each limit belongs to one batch or one existing domain operation, never to an unbounded retry loop. */
 export const NARRATIVE_MIGRATION_LIMITS = {
@@ -78,6 +83,7 @@ export type NarrativeMigrationReport = {
         readonly unpublishedChunks: number;
       };
   readonly issues: readonly { readonly id: string; readonly reason: string }[];
+  readonly issuesTruncated: boolean;
   readonly stopped?: string;
 };
 
@@ -86,14 +92,12 @@ class Counts {
   sealed = 0;
   published = 0;
   cutovers = 0;
-  readonly issues: { id: string; reason: string }[] = [];
   snapshot() {
     return {
       verifiedOutcomes: this.verifiedOutcomes,
       sealed: this.sealed,
       published: this.published,
       cutovers: this.cutovers,
-      issues: this.issues,
     };
   }
   record(kind: 'verifiedOutcomes' | 'sealed' | 'published' | 'cutovers', amount = 1): void {
@@ -119,16 +123,10 @@ function positive(value: number): number {
 function issue(
   deps: ChunkNarrativeDeps,
   job: NarrativeMigrationJob,
-  counts: Counts,
   id: string,
   reason: string,
 ): void {
-  counts.issues.push({ id, reason });
-  markLedgerApplied(deps.db, `narrative-migration:${job.cohortId}:issue:${id}`, {
-    phase: job.phase,
-    id,
-    reason,
-  });
+  recordMigrationIssue(deps.db, job, id, reason);
 }
 
 /** One resumable batch. Nothing here resets raw data, prunes intents, or competes with the steady-state scheduler's budget. */
@@ -171,7 +169,6 @@ export async function runNarrativeMigrationBatch(
   }
   if (job.state === 'blocked') {
     stopped = job.blockedReason ?? 'migration_blocked';
-    issue(deps, job, counts, job.cohortId, stopped);
   } else if (job.state === 'abandoned') {
     stopped = 'migration_abandoned';
   }
@@ -193,6 +190,7 @@ export async function runNarrativeMigrationBatch(
     state: job.state,
     steps,
     ...counts.snapshot(),
+    ...readMigrationIssues(deps.db, job.cohortId),
     cohort,
     ...(stopped === undefined ? {} : { stopped }),
   };
@@ -271,10 +269,10 @@ async function step(
         await options.onVerifiedSource?.(sourceId, job.cohortId);
       } catch (error) {
         // The core producer already queued index work. An auxiliary enqueue cannot re-run raw verification.
-        issue(deps, job, counts, sourceId, `reindex_hook: ${describeError(error)}`);
+        issue(deps, job, sourceId, `reindex_hook: ${describeError(error)}`);
       }
     } else {
-      issue(deps, job, counts, sourceId, outcome.reason);
+      issue(deps, job, sourceId, outcome.reason);
     }
     advance('verify', sourceId);
     return undefined;
@@ -313,6 +311,10 @@ async function step(
       },
     });
     if (outcome.status !== 'acknowledged') {
+      issue(deps, job, job.cohortId, outcome.reason);
+      if (outcome.reason === 'cohort_not_fully_accounted') {
+        holdRepeatedCensusRefusal(deps.db, job, options.now);
+      }
       return outcome.reason;
     }
     const result = z.object({ cursor: z.string() }).parse(outcome.result);
@@ -329,14 +331,14 @@ async function step(
       advance('census');
     } else {
       if (identity.sessionId === undefined) {
-        issue(deps, job, counts, identity.nodeId, 'legacy_session_unresolved');
+        issue(deps, job, identity.nodeId, 'legacy_session_unresolved');
       } else {
         const result = await inventoryLegacyNarrative(deps, {
           sessionId: identity.sessionId,
           narrativeId: identity.nodeId,
         });
         if (result.status !== 'acknowledged') {
-          issue(deps, job, counts, identity.nodeId, result.reason);
+          issue(deps, job, identity.nodeId, result.reason);
         }
       }
       advance('inventory', identity.nodeId);
@@ -357,14 +359,17 @@ async function step(
     if (result.status === 'published') {
       counts.record('published');
     } else if (result.status !== 'skipped') {
-      issue(deps, job, counts, chunkId, result.reason);
+      issue(deps, job, chunkId, result.reason);
     }
     advance('publish', chunkId);
     return undefined;
   }
+  if (job.phase === 'partition' && job.cursor === '') {
+    beginMigrationPass(deps.db, job);
+  }
   return migrateSessionStep(deps, job, options.now, {
     issue: (id, reason) => {
-      issue(deps, job, counts, id, reason);
+      issue(deps, job, id, reason);
     },
     sealed: (created) => {
       counts.record('sealed', created ? 1 : 0);
