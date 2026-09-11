@@ -25,6 +25,7 @@ import {
   dropCensus,
   NOW,
   sealFor,
+  seedSessionScopeNarrative,
   store,
 } from '../../../reflection/application/test-support/t10b-review.fixture.js';
 import type { OperationContext } from '../../domain/operation.js';
@@ -102,21 +103,10 @@ it('reaches a cleared block behind unchanged blocked attempts', async () => {
 
 it('reaches a later legacy window after stepping past one oversized calendar window', async () => {
   for (let index = 0; index < 4; index += 1) {
-    const at = new Date(index < 3 ? '2026-08-01T12:00:00.000Z' : '2026-08-02T12:00:00.000Z');
-    const id = `whole-window-page:${String(index)}`;
-    await writeStampedNode(driver, {
-      label: 'Narrative',
-      id,
-      now: at,
-      occurredAt: at,
-      properties: {
-        text: index < 3 ? 'earlier member' : 'LATER FITTING WINDOW',
-        scope: 'session',
-        version: 1,
-        coverage_count: 1,
-        coverage_key: id,
-        grounding: 'grounded-1',
-      },
+    await seedSessionScopeNarrative({
+      id: `whole-window-page:${String(index)}`,
+      at: new Date(index < 3 ? '2026-08-01T12:00:00.000Z' : '2026-08-02T12:00:00.000Z'),
+      text: index < 3 ? 'earlier member' : 'LATER FITTING WINDOW',
     });
   }
   const prompts: string[] = [];

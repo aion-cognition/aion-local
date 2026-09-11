@@ -81,7 +81,13 @@ function narrativeRollupOperation(
             );
 
       const report = await rollUpNarratives(
-        { driver: ctx.driver, db: ctx.db, provider: ctx.provider, logger: ctx.logger },
+        {
+          driver: ctx.driver,
+          db: ctx.db,
+          provider: ctx.provider,
+          logger: ctx.logger,
+          ...(ctx.narratives === undefined ? {} : { publications: ctx.narratives.publications }),
+        },
         {
           scope,
           model: ctx.config.models.reflect,

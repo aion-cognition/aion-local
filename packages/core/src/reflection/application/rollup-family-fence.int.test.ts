@@ -9,12 +9,14 @@ import {
 } from './legacy-backfill.js';
 import { cutoverSessionFamily, ensureSessionFamily } from './narrative-family.js';
 import { rollUpNarratives } from './narrative-rollup.js';
-import { fenceRollupWindow } from './rollup-family-fence.js';
+import { proveRollupFamily } from './rollup-family-fence.js';
 import {
   acceptSource,
   chunks,
   driver,
+  interruptAt,
   NOW,
+  publications,
   sessionOf,
   store,
 } from './test-support/t10b-review.fixture.js';
@@ -37,6 +39,7 @@ import {
 import { openLogger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import { sealChunk } from '../../infrastructure/sqlite/chunk-manifest.js';
+import { readFamilySelection } from '../../infrastructure/sqlite/family-selection.js';
 import { recordMigrationProgress } from '../../infrastructure/sqlite/migration-cohorts.js';
 import { rememberMigrationPolicy } from '../../infrastructure/sqlite/migration-partition.js';
 import { CHUNK_BOUNDARY_POLICY } from '../domain/chunk-boundary.js';
@@ -86,6 +89,7 @@ function deps() {
     driver,
     db: store.db,
     provider,
+    publications,
     logger: openLogger({ filePath: '/dev/null', level: 'fatal' }),
   };
 }
@@ -173,13 +177,16 @@ it('rolls a live legacy session up exactly as before its family was recorded', a
   expect(readFamilyFence(store.db, sessionId)?.selection.family).toBe('legacy_session_overview');
 
   expect(
-    await fenceRollupWindow(deps(), {
-      scope: 'day',
-      windowKey: '2026-09-02',
-      memberIds: [LIVE.node],
-      now: NOW,
-    }),
-  ).toBeUndefined();
+    (
+      await proveRollupFamily(deps(), {
+        scope: 'day',
+        windowKey: '2026-09-02',
+        memberIds: [LIVE.node],
+        headIds: [],
+        now: NOW,
+      })
+    ).status,
+  ).toBe('proved');
 
   const report = await rollUpNarratives(deps(), {
     scope: 'day',
@@ -239,13 +246,14 @@ it('publishes nothing over a session whose family moved while the synthesis was 
   expect(again.fenced).toBe(1);
   expect(drafts).toHaveLength(before + 1);
   expect(
-    await fenceRollupWindow(deps(), {
+    await proveRollupFamily(deps(), {
       scope: 'day',
       windowKey: '2026-09-04',
       memberIds: [RACED.node],
+      headIds: [],
       now: NOW,
     }),
-  ).toBe('legacy_family_changed');
+  ).toMatchObject({ status: 'refused', reason: 'legacy_family_changed' });
 });
 
 it('refuses the week over a day summary whose own ancestry was retired, and moves neither', async () => {
@@ -274,13 +282,14 @@ it('refuses the week over a day summary whose own ancestry was retired, and move
   // The day summary exists, and only now does its session choose the other representation.
   await cutOver(sessionId, sourceId, 'fence-rolled-cohort');
   expect(
-    await fenceRollupWindow(deps(), {
+    await proveRollupFamily(deps(), {
       scope: 'week',
       windowKey: '2026-W37',
       memberIds: [summaryId],
+      headIds: [],
       now: NOW,
     }),
-  ).toBe('legacy_family_changed');
+  ).toMatchObject({ status: 'refused', reason: 'legacy_family_changed' });
 
   const week = await rollUpNarratives(deps(), {
     scope: 'week',
@@ -331,13 +340,14 @@ it('never carries a node of the signed overview family into a legacy week summar
   });
 
   expect(
-    await fenceRollupWindow(deps(), {
+    await proveRollupFamily(deps(), {
       scope: 'week',
       windowKey: '2026-W38',
       memberIds: ['signed-day-overview'],
+      headIds: [],
       now: NOW,
     }),
-  ).toBe('legacy_family_foreign');
+  ).toMatchObject({ status: 'refused', reason: 'legacy_family_foreign' });
 
   const week = await rollUpNarratives(deps(), {
     scope: 'week',
@@ -352,4 +362,73 @@ it('never carries a node of the signed overview family into a legacy week summar
   expect(
     (await nodeProperties(driver, 'signed-day-overview'))[BITEMPORAL_PROPERTIES.validUntil],
   ).toBeUndefined();
+});
+
+it('rolls up a legacy session whose preference was never recorded, through the producer', async () => {
+  const sourceId = await acceptSource('fence-preinit', 'the pre-initialization session');
+  const sessionId = sessionOf(sourceId);
+  await seedLegacy({
+    nodeId: 'legacy-preinit-window',
+    sessionId,
+    sourceId,
+    occurredAt: new Date('2026-09-10T06:00:00.000Z'),
+    text: 'This session was closed before any preference was recorded for it.',
+  });
+  // Nothing has chosen for this session, which is the state every session closed before the
+  // family machinery existed is in. The adapter cannot prove ownership from that, and the pass
+  // does not infer it either: the producer records the preference and the pass reads it back.
+  expect(readFamilySelection(store.db, sessionId)).toBeUndefined();
+
+  const report = await rollUpNarratives(deps(), {
+    scope: 'day',
+    now: new Date('2026-09-11T06:00:00.000Z'),
+    windowLimit: 3,
+    renderedInputAllowance: 32768,
+  });
+
+  expect(report.created).toBe(1);
+  expect(readFamilySelection(store.db, sessionId)?.family).toBe('legacy_session_overview');
+  const [rollup] = await findWindowRollups(driver, 'day', '2026-09-10');
+  expect(rollup?.open).toBe(true);
+  expect(await supersedingNodeIds(driver, 'legacy-preinit-window')).toEqual([rollup?.id]);
+});
+
+it('finishes an interrupted calendar publication on recovery, once', async () => {
+  const sourceId = await acceptSource('fence-recovery', 'the interrupted session');
+  const sessionId = sessionOf(sourceId);
+  await seedLegacy({
+    nodeId: 'legacy-recovery-window',
+    sessionId,
+    sourceId,
+    occurredAt: new Date('2026-09-12T06:00:00.000Z'),
+    text: 'This window is interrupted between its graph commit and its acknowledgment.',
+  });
+  expect((await ensureSessionFamily(chunks, sessionId)).status).toBe('ready');
+  interruptAt('before_ack');
+
+  const interrupted = await rollUpNarratives(deps(), {
+    scope: 'day',
+    now: new Date('2026-09-13T06:00:00.000Z'),
+    windowLimit: 3,
+    renderedInputAllowance: 32768,
+  });
+
+  // The attempt did not settle, so the pass reports nothing created and leaves the operation to
+  // the coordinator's own recovery rather than trying again over the top of it.
+  expect(interrupted.created).toBe(0);
+  expect((await publications.recover())?.status).toBe('acknowledged');
+
+  const [rollup] = await findWindowRollups(driver, 'day', '2026-09-12');
+  expect(rollup?.open).toBe(true);
+  expect(await supersedingNodeIds(driver, 'legacy-recovery-window')).toEqual([rollup?.id]);
+
+  // The replay wrote one version and one supersession, and the settled window now answers skip.
+  const settled = await rollUpNarratives(deps(), {
+    scope: 'day',
+    now: new Date('2026-09-13T06:00:00.000Z'),
+    windowLimit: 3,
+    renderedInputAllowance: 32768,
+  });
+  expect(settled.created).toBe(0);
+  expect(await findWindowRollups(driver, 'day', '2026-09-12')).toHaveLength(1);
 });

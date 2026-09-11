@@ -1,8 +1,13 @@
 import { expect, it } from 'vitest';
 
 import { rollUpNarratives } from './narrative-rollup.js';
-import { driver, NOW, store } from './test-support/t10b-review.fixture.js';
-import { writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
+import {
+  driver,
+  NOW,
+  publications,
+  seedSessionScopeNarrative,
+  store,
+} from './test-support/t10b-review.fixture.js';
 import { openLogger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 
@@ -13,21 +18,11 @@ it('reaches a fitting later window beyond a full page of blocked earlier members
     ['blocked-page-two', 'long '.repeat(300), 3],
     ['fitting-page-three', 'fits', 2],
   ] as const) {
-    const at = new Date(NOW.getTime() - ago * day);
-    await writeStampedNode(driver, {
-      label: 'Narrative',
+    await seedSessionScopeNarrative({
       id,
-      now: at,
-      occurredAt: at,
-      properties: {
-        text,
-        summary: text,
-        scope: 'session',
-        version: 1,
-        coverage_count: 1,
-        coverage_key: id,
-        grounding: 'grounded-1',
-      },
+      at: new Date(NOW.getTime() - ago * day),
+      text,
+      summary: text,
     });
   }
   let calls = 0;
@@ -47,6 +42,7 @@ it('reaches a fitting later window beyond a full page of blocked earlier members
     driver,
     db: store.db,
     provider,
+    publications,
     logger: openLogger({ filePath: '/dev/null', level: 'fatal' }),
   };
   for (let round = 0; round < 4; round += 1) {

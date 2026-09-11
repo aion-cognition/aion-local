@@ -1,28 +1,23 @@
 import { expect, it } from 'vitest';
 
 import { rollUpNarratives } from './narrative-rollup.js';
-import { driver, NOW, store } from './test-support/t10b-review.fixture.js';
-import { writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
+import {
+  driver,
+  NOW,
+  publications,
+  seedSessionScopeNarrative,
+  store,
+} from './test-support/t10b-review.fixture.js';
 import { openLogger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 
 it('does not turn a truncated windows suffix into a complete window on the next page', async () => {
   const at = new Date('2026-08-01T12:00:00.000Z');
   for (let index = 0; index < 3; index += 1) {
-    const id = `split-window:${String(index)}`;
-    await writeStampedNode(driver, {
-      label: 'Narrative',
-      id,
-      now: at,
-      occurredAt: at,
-      properties: {
-        text: `member ${String(index)}`,
-        scope: 'session',
-        version: 1,
-        coverage_count: 1,
-        coverage_key: id,
-        grounding: 'grounded-1',
-      },
+    await seedSessionScopeNarrative({
+      id: `split-window:${String(index)}`,
+      at,
+      text: `member ${String(index)}`,
     });
   }
   const drafts: string[] = [];
@@ -41,6 +36,7 @@ it('does not turn a truncated windows suffix into a complete window on the next 
     driver,
     db: store.db,
     provider,
+    publications,
     logger: openLogger({ filePath: '/dev/null', level: 'fatal' }),
   };
   let published = 0;

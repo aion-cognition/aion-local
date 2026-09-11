@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { dayNarrativeRollupOperation, weekNarrativeRollupOperation } from './narrative-rollup.js';
+import { EvidenceResolver } from '../../../evidence/application/resolver.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import {
@@ -14,6 +15,7 @@ import { upsertEdge } from '../../../infrastructure/graph/edges.js';
 import { MEMORY_PROPERTIES } from '../../../infrastructure/graph/episodes.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import {
+  DERIVES_FROM_TYPE,
   NARRATIVE_PROPERTIES,
   SUMMARIZED_BY_TYPE,
 } from '../../../infrastructure/graph/narrative-queries.js';
@@ -40,6 +42,8 @@ import { openLogger, type Logger } from '../../../infrastructure/logging/logger.
 import type { Provider } from '../../../infrastructure/providers/types.js';
 import { PublicationCoordinator } from '../../../infrastructure/publication/coordinator.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import { INSTALLED_PUBLICATION_HANDLERS } from '../../../reflection/application/installed-publications.js';
+import { ensureSessionFamily } from '../../../reflection/application/narrative-family.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
 
@@ -59,6 +63,7 @@ const REVIEW_MARKER = 'You review a draft memory';
 
 let harness: Neo4jHarness;
 let db: SqliteHandle;
+let publications: PublicationCoordinator;
 let logger: Logger;
 let dataDir: string;
 
@@ -147,6 +152,10 @@ function context(
     config,
     logger,
     provider: stubProvider(verdict),
+    narratives: {
+      publications,
+      resolver: new EvidenceResolver({ driver: harness.driver, db, logger, publications }),
+    },
     health: healthFixture(),
     now: NOW,
     signal: new AbortController().signal,
@@ -158,8 +167,20 @@ function episodeIdFor(narrativeId: string): string {
   return `${narrativeId}-episode`;
 }
 
+/** A whole-session narrative names the session it compresses, and the session node exists. */
+function sessionIdFor(narrativeId: string): string {
+  return `${narrativeId}-session`;
+}
+
 async function seedSessionNarrative(seed: (typeof SESSIONS)[number]): Promise<void> {
   const occurredAt = new Date(seed.occurredAt);
+  await writeStampedNode(harness.driver, {
+    label: 'Session',
+    id: sessionIdFor(seed.id),
+    now: occurredAt,
+    occurredAt,
+    properties: {},
+  });
   await writeStampedNode(harness.driver, {
     label: 'Narrative',
     id: seed.id,
@@ -168,12 +189,25 @@ async function seedSessionNarrative(seed: (typeof SESSIONS)[number]): Promise<vo
     properties: {
       [MEMORY_PROPERTIES.summary]: seed.text.split('.')[0] ?? seed.text,
       [MEMORY_PROPERTIES.text]: seed.text,
+      [MEMORY_PROPERTIES.sessionId]: sessionIdFor(seed.id),
       [NARRATIVE_PROPERTIES.scope]: 'session',
       [NARRATIVE_PROPERTIES.version]: 1,
       [NARRATIVE_PROPERTIES.coverageKey]: `key-${seed.id}`,
       [NARRATIVE_PROPERTIES.coverageCount]: 2,
       [NARRATIVE_PROPERTIES.grounding]: 'grounded-1',
     },
+  });
+
+  await upsertEdge(harness.driver, {
+    type: DERIVES_FROM_TYPE,
+    sourceId: seed.id,
+    targetId: sessionIdFor(seed.id),
+    strength: 1,
+    confidence: 1,
+    signals: ['compression'],
+    provenance: ['test-seed'],
+    count: 0,
+    now: occurredAt,
   });
 
   // The edge a session close leaves behind. Without one the rollup absorbs a narrative nothing
@@ -217,18 +251,29 @@ beforeAll(async () => {
   db = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
   logger = openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'error' });
   await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
-  // The pass reads the durable records under the coverage contract, the way every other covered
-  // entry point does, so the store it runs against is a paired one rather than a bare schema.
-  await new PublicationCoordinator({
+  // Every calendar summary lands through the coordinator, so the store it runs against is a
+  // paired one with the installed handler set rather than a bare schema.
+  publications = new PublicationCoordinator({
     driver: harness.driver,
     db,
-    handlers: [],
+    handlers: [...INSTALLED_PUBLICATION_HANDLERS],
     logger,
     now: () => NOW,
-  }).initialize();
+  });
+  await publications.initialize();
 
   for (const seed of SESSIONS) {
     await seedSessionNarrative(seed);
+    // The preference these sessions were closed before: recorded by the producer, which is how a
+    // pre-initialization legacy session becomes one the calendar pass can prove it owns.
+    expect(
+      (
+        await ensureSessionFamily(
+          { driver: harness.driver, db, publications },
+          sessionIdFor(seed.id),
+        )
+      ).status,
+    ).toBe('ready');
   }
 }, 300_000);
 

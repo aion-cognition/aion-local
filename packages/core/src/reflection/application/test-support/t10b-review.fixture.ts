@@ -13,7 +13,10 @@ import {
 } from '../../../evidence/test-support/evidence.fixture.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../../infrastructure/graph/backbone.js';
+import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
+import { upsertEdge } from '../../../infrastructure/graph/edges.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
+import { DERIVES_FROM_TYPE } from '../../../infrastructure/graph/narrative-queries.js';
 import {
   startRehearsalSubstrate,
   stopRehearsalSubstrate,
@@ -22,6 +25,7 @@ import {
 import { openLogger } from '../../../infrastructure/logging/logger.js';
 import type { Provider, StructuredRequest } from '../../../infrastructure/providers/types.js';
 import { PublicationCoordinator } from '../../../infrastructure/publication/coordinator.js';
+import type { PublicationBoundary } from '../../../infrastructure/publication/types.js';
 import { readCurrentCoverageContract } from '../../../infrastructure/sqlite/coverage-contract.js';
 import { SqliteStore } from '../../../infrastructure/sqlite/database.js';
 import { readSourceRecord } from '../../../infrastructure/sqlite/source-identity.js';
@@ -32,6 +36,7 @@ import { sealSessionChunk, type ChunkNarrativeDeps } from '../chunk-narrative.js
 import { INSTALLED_PUBLICATION_HANDLERS } from '../installed-publications.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../intake.js';
 import { LaneAssigner } from '../lanes.js';
+import { ensureSessionFamily } from '../narrative-family.js';
 import { publishPipelineReadinessPolicy } from '../readiness.js';
 
 export const NOW = new Date('2026-09-09T06:00:00.000Z');
@@ -47,6 +52,13 @@ let generationHook: ((request: StructuredRequest) => unknown) | undefined;
 
 export function onGenerate(hook: (request: StructuredRequest) => unknown): void {
   generationHook = hook;
+}
+
+let failAt: PublicationBoundary | undefined;
+
+/** Interrupts the next publication at one boundary, so recovery has something to finish. */
+export function interruptAt(boundary: PublicationBoundary | undefined): void {
+  failAt = boundary;
 }
 
 const scripted: Provider = {
@@ -84,6 +96,12 @@ beforeAll(async () => {
     logger,
     handlers: [...INSTALLED_PUBLICATION_HANDLERS],
     now: () => NOW,
+    boundary: ({ boundary }) => {
+      if (boundary === failAt) {
+        failAt = undefined;
+        throw new Error(`interrupted at ${boundary}`);
+      }
+    },
   });
   await publications.initialize();
   publishPipelineReadinessPolicy(
@@ -133,6 +151,60 @@ afterAll(async () => {
   await stopRehearsalSubstrate(substrate);
   rmSync(dir, { recursive: true, force: true });
 });
+
+/**
+ * A whole-session narrative of the kind the legacy writer left behind, with the session it
+ * compresses and the preference the producer records for it.
+ *
+ * A narrative naming no session is not a state the legacy writer could produce, and the calendar
+ * pass has to prove which family a member belongs to before it publishes over one.
+ */
+export async function seedSessionScopeNarrative(input: {
+  readonly id: string;
+  readonly at: Date;
+  readonly text: string;
+  readonly summary?: string;
+}): Promise<string> {
+  const sessionId = `${input.id}-session`;
+  await writeStampedNode(driver, {
+    label: 'Session',
+    id: sessionId,
+    now: input.at,
+    occurredAt: input.at,
+    properties: {},
+  });
+  await writeStampedNode(driver, {
+    label: 'Narrative',
+    id: input.id,
+    now: input.at,
+    occurredAt: input.at,
+    properties: {
+      session_id: sessionId,
+      scope: 'session',
+      version: 1,
+      coverage_count: 1,
+      coverage_key: input.id,
+      grounding: 'grounded-1',
+      text: input.text,
+      ...(input.summary === undefined ? {} : { summary: input.summary }),
+    },
+  });
+  await upsertEdge(driver, {
+    type: DERIVES_FROM_TYPE,
+    sourceId: input.id,
+    targetId: sessionId,
+    strength: 1,
+    confidence: 1,
+    signals: [],
+    provenance: [],
+    count: 0,
+    now: input.at,
+  });
+  expect(
+    (await ensureSessionFamily({ driver, db: store.db, publications }, sessionId)).status,
+  ).toBe('ready');
+  return sessionId;
+}
 
 export function census(sourceId: string): void {
   for (const role of ['stated_correction', 'stated_confirmation'] as const) {

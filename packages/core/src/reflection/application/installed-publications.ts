@@ -1,3 +1,4 @@
+import { calendarRollupPublication } from './calendar-rollup-publication.js';
 import { reflectionCompletionPublication } from './completion-publication.js';
 import { familyCutoverPublication } from './family-cutover.js';
 import { intakePublication } from './intake-publication.js';
@@ -40,5 +41,6 @@ export const INSTALLED_PUBLICATION_HANDLERS: readonly PublicationHandler[] = [
   narrativePublication,
   narrativeFamilyRepairPublication,
   overviewPublication,
+  calendarRollupPublication,
   orphanSuppressionPublication,
 ];

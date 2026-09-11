@@ -11,15 +11,21 @@ const seam = vi.hoisted(() => ({ members: vi.fn(), synthesize: vi.fn(), write: v
 vi.mock('../../infrastructure/graph/narrative-rollup-queries.js', () => ({
   findRollupMembers: seam.members,
   findWindowRollups: async () => [],
+  findOpenNarratives: async () => [],
 }));
 vi.mock('./consolidation-synthesis.js', () => ({ synthesizeGrounded: seam.synthesize }));
-// The window budget is what this file measures, and it drives the pass with a stub driver. An
-// open family answer keeps that measurement about the budget; the fence has its own substrate.
-vi.mock('./rollup-family-fence.js', () => ({ fenceRollupWindow: async () => undefined }));
+// The window budget is what this file measures, and it drives the pass with a stub driver. A
+// proved family and a landed publication keep that measurement about the budget; both of those
+// have their own substrate cases.
+vi.mock('./rollup-family-fence.js', () => ({
+  proveRollupFamily: async () => ({
+    status: 'proved',
+    proof: { ownedIds: [], foreignHeads: [], dependencies: [] },
+  }),
+}));
+vi.mock('./rollup-publish.js', () => ({ publishCalendarRollup: seam.write }));
 vi.mock('./rollup-write.js', async (original) => ({
   ...(await original<typeof RollupWriter>()),
-  writeRollup: seam.write,
-  closeInto: async () => 0,
   attachVector: async () => undefined,
 }));
 let store: SqliteStore;
@@ -35,7 +41,7 @@ beforeEach(() => {
       kept: 1,
     },
   });
-  seam.write.mockResolvedValue(undefined);
+  seam.write.mockResolvedValue({ status: 'acknowledged', absorbed: 0 });
 });
 afterEach(() => {
   store.close();

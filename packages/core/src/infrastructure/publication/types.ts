@@ -34,6 +34,12 @@ export const PUBLICATION_KINDS = [
   'migration_order',
   /** The temporary whole-session writer remains separately fenced until its family cuts over. */
   'legacy_narrative_publish',
+  // The legacy calendar summary: the graph-only day and week writer the cutover exists to
+  // retire. Its own kind rather than a variant of `overview_publish`, because that family owns
+  // a manifest, a revision number and a membership fence, and this one owns none of them. What
+  // it does share is the family fence: a summary that publishes over a session's whole-session
+  // narrative, or absorbs one, has to own it at the moment it writes.
+  'calendar_rollup_publish',
 ] as const;
 export type PublicationKind = (typeof PUBLICATION_KINDS)[number];
 

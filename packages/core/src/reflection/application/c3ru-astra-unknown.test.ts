@@ -1,7 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
-import { fenceRollupWindow, ROLLUP_FAMILY_SCAN_LIMIT } from './rollup-family-fence.js';
+import { proveRollupFamily, ROLLUP_FAMILY_SCAN_LIMIT } from './rollup-family-fence.js';
 import type { NarrativeRepresentation } from '../../evidence/application/narrative-representation.js';
 import { openLogger } from '../../infrastructure/logging/logger.js';
 import { prepareCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
@@ -11,10 +11,11 @@ import { SqliteStore, type SqliteHandle } from '../../infrastructure/sqlite/data
  * What the fence answers, and which answer wins when a window earns more than one.
  *
  * The refusals below are the whole vocabulary: an unreadable coverage record, an ancestry larger
- * than the proof bound, a member whose session chose chunks, and a member belonging to a family
- * that publishes through its own manifest. The adapter is stood in for here so the branches can
- * be named one at a time; what it actually says about a real cutover is proved against a real
- * substrate.
+ * than the proof bound, a member whose session chose chunks, a member belonging to a family that
+ * publishes through its own manifest, and every answer the adapter could not prove. The adapter is
+ * stood in for here so the branches can be named one at a time; what it actually says about a real
+ * cutover, and how a genuinely uninitialized session becomes publishable, are proved against a
+ * real substrate.
  */
 
 const seam = vi.hoisted(() => ({ lineage: vi.fn(), read: vi.fn() }));
@@ -47,14 +48,21 @@ function reads(values: Record<string, NarrativeRepresentation>): void {
   });
 }
 
-function fenceWith(
+async function fenceWith(
   deps: { readonly db?: SqliteHandle },
   memberIds: readonly string[],
 ): Promise<string | undefined> {
-  return fenceRollupWindow(
+  const held = await proveRollupFamily(
     { driver: {} as Driver, ...deps, logger },
-    { scope: 'day', windowKey: '2026-04-02', memberIds, now: new Date('2026-04-06T00:00:00Z') },
+    {
+      scope: 'day',
+      windowKey: '2026-04-02',
+      memberIds,
+      headIds: [],
+      now: new Date('2026-04-06T00:00:00Z'),
+    },
   );
+  return held.status === 'refused' ? held.reason : undefined;
 }
 
 function fence(memberIds: readonly string[]): Promise<string | undefined> {
@@ -83,9 +91,23 @@ it('refuses a window whose substrate cannot say what it covers', async () => {
   expect(seam.read).not.toHaveBeenCalled();
 });
 
-it('admits a window whose members nobody has recorded a preference for', async () => {
+it('refuses a member with no recorded preference and no session to initialize', async () => {
   prepareCoverageContract(store.db, 1);
   reads({ 'member-1': representation({ sessions: [], selection: 'unknown' }) });
+
+  expect(await fence(['member-1'])).toBe('legacy_family_unproved:no_session');
+});
+
+it('refuses a member with no recorded preference when no producer is composed', async () => {
+  prepareCoverageContract(store.db, 1);
+  reads({ 'member-1': representation({ selection: 'unknown' }) });
+
+  expect(await fence(['member-1'])).toBe('legacy_family_producer_unavailable');
+});
+
+it('admits a member whose recorded preference is this family', async () => {
+  prepareCoverageContract(store.db, 1);
+  reads({ 'member-1': representation() });
 
   expect(await fence(['member-1'])).toBeUndefined();
 });
@@ -143,4 +165,33 @@ it('refuses a window whose members and ancestry together pass the proof bound', 
 
   expect(await fence(['member-1'])).toBe('legacy_family_scan_bound');
   expect(seam.read).not.toHaveBeenCalled();
+});
+
+it.each([
+  ['unreadable family record', 'unknown', 'established', 'store_unavailable'],
+  ['unacknowledged publication', 'selected', 'unknown', 'pending_publication'],
+] as const)(
+  'refuses %s instead of treating it as never initialized',
+  async (_label, selection, publication, reason) => {
+    prepareCoverageContract(store.db, 1);
+    seam.read.mockResolvedValue({
+      values: new Map([['member-1', representation({ selection, publication })]]),
+      dependencies: [],
+      issues: [
+        {
+          address: { kind: 'id', id: 'member-1' },
+          field: publication === 'unknown' ? 'narrative_revision' : 'representation_preference',
+          reason,
+          required: true,
+        },
+      ],
+    });
+    expect(await fence(['member-1'])).not.toBeUndefined();
+  },
+);
+
+it('refuses a missing identity answer instead of treating it as an open family', async () => {
+  prepareCoverageContract(store.db, 1);
+  reads({});
+  expect(await fence(['member-1'])).not.toBeUndefined();
 });

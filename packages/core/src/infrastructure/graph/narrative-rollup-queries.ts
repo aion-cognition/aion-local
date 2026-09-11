@@ -1,7 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
-import { runRead } from './connection.js';
+import { runRead, type GraphTransaction } from './connection.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
 import { NARRATIVE_PROPERTIES, SUMMARIZED_BY_TYPE } from './narrative-queries.js';
 import { SUPERSEDES_TYPE } from './relationships.js';
@@ -180,6 +180,17 @@ const FIND_ROLLUP_LINEAGE = [
   'RETURN n.id AS id, ancestors',
 ].join('\n');
 
+function lineageRow(bound: number): (row: Row) => RollupLineage {
+  return (row: Row) => {
+    const ancestors = Array.isArray(row.ancestors) ? (row.ancestors as string[]) : [];
+    return {
+      id: row.id as string,
+      ancestors: ancestors.slice(0, bound),
+      bounded: ancestors.length > bound,
+    };
+  };
+}
+
 /** Reads the complete ancestry of each member, or one sentinel past the caller's bound. */
 export async function findRollupLineage(
   driver: Driver,
@@ -194,15 +205,50 @@ export async function findRollupLineage(
     driver,
     FIND_ROLLUP_LINEAGE,
     { ids: unique, limit: toGraphInteger(bound + 1) },
-    (row: Row) => {
-      const ancestors = Array.isArray(row.ancestors) ? (row.ancestors as string[]) : [];
-      return {
-        id: row.id as string,
-        ancestors: ancestors.slice(0, bound),
-        bounded: ancestors.length > bound,
-      };
-    },
+    lineageRow(bound),
   );
+}
+
+/** The same ancestry, inside a publication's own transaction, where the proof is rechecked. */
+export function readRollupLineage(
+  tx: GraphTransaction,
+  ids: readonly string[],
+  bound: number,
+): Promise<readonly RollupLineage[]> {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0 || bound <= 0) {
+    return Promise.resolve([]);
+  }
+  return tx.run(
+    FIND_ROLLUP_LINEAGE,
+    { ids: unique, limit: toGraphInteger(bound + 1) },
+    lineageRow(bound),
+  );
+}
+
+/**
+ * Which of these versions are still standing.
+ *
+ * The repair branch exists for the stragglers a crash between a summary's write and its
+ * supersession leaves open. Asking first is what keeps a settled window from opening a
+ * publication every pass to close nothing.
+ */
+const FIND_OPEN_NARRATIVES = [
+  'MATCH (n:Narrative) WHERE n.id IN $ids',
+  `  AND n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
+  `  AND n.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  'RETURN n.id AS id ORDER BY id',
+].join('\n');
+
+export async function findOpenNarratives(
+  driver: Driver,
+  ids: readonly string[],
+): Promise<readonly string[]> {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) {
+    return [];
+  }
+  return runRead(driver, FIND_OPEN_NARRATIVES, { ids: unique }, (row: Row) => row.id as string);
 }
 
 export type NarrativeBody = {

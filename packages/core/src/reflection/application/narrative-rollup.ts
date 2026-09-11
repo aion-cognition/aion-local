@@ -1,15 +1,18 @@
 import { synthesizeGrounded } from './consolidation-synthesis.js';
 import { readMemberCursor, nextMemberCursor, writeMemberCursor } from './rollup-cursor.js';
-import { fenceRollupWindow } from './rollup-family-fence.js';
-import { attachVector, closeInto, writeRollup, type RollupWriteDeps } from './rollup-write.js';
+import { proveRollupFamily } from './rollup-family-fence.js';
+import { publishCalendarRollup } from './rollup-publish.js';
+import { attachVector, type RollupWriteDeps } from './rollup-write.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import {
+  findOpenNarratives,
   findRollupMembers,
   findWindowRollups,
   type WindowNarrative,
 } from '../../infrastructure/graph/narrative-rollup-queries.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
+import type { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
 import {
   buildRollupMessages,
   renderConsolidationSource,
@@ -51,7 +54,10 @@ export const DEFAULT_ROLLUP_MEMBER_LIMIT = 200;
  */
 export const DEFAULT_ROLLUP_WINDOW_LIMIT = 2;
 
-export type RollupDeps = RollupWriteDeps;
+export type RollupDeps = RollupWriteDeps & {
+  /** The coordinator every calendar summary and every repair close now lands through. */
+  readonly publications?: PublicationCoordinator;
+};
 
 export type RollupOptions = {
   readonly scope: RollupScope;
@@ -160,18 +166,23 @@ async function rollUpWindow(
   existing: readonly WindowNarrative[],
 ): Promise<WindowResult> {
   const memberScope = rollupMemberScope(settings.scope);
-  const fenceInput = {
+  // Before the decision, and over the COMPLETE population a publication here would touch: the
+  // members it covers and every version the window already carries, which is what the writer
+  // closes. A window this pass cannot prove it owns costs no provider call, and the repair branch
+  // below absorbs without asking a model, so the proof has to come before both.
+  const proof = await proveRollupFamily(deps, {
     scope: settings.scope,
     windowKey: window.key,
     memberIds: window.members.map((member) => member.id),
+    headIds: existing.map((rollup) => rollup.id),
     now: settings.now,
-  };
-  // Before the decision, so a window this pass no longer represents costs no provider call and
-  // no repair close either: the skip branch below absorbs members without asking a model.
-  const nominated = await fenceRollupWindow(deps, fenceInput);
-  if (nominated !== undefined) {
-    return { outcome: 'fenced', absorbed: 0, blockedReason: nominated };
+  });
+  if (proof.status === 'refused') {
+    return { outcome: 'fenced', absorbed: 0, blockedReason: proof.reason };
   }
+  // Another family's node standing in the same window is not a version of this one. Leaving it in
+  // would let it decide the next version number and then be closed as if it were a predecessor.
+  const versions = existing.filter((rollup) => !proof.proof.foreignHeads.includes(rollup.id));
   const decision = decideSessionNarrative(
     window.members.map((member) => ({
       id: member.id,
@@ -179,7 +190,7 @@ async function rollUpWindow(
       ...(member.summary === undefined ? {} : { summary: member.summary }),
       ...(member.occurredAt === undefined ? {} : { occurredAt: member.occurredAt }),
     })),
-    existing,
+    versions,
   );
   const rollupId = rollupNodeId(settings.scope, window.key, decision.coverageKey);
   const span = narrativeSpan(window.members);
@@ -187,12 +198,40 @@ async function rollUpWindow(
 
   if (decision.action === 'skip') {
     // The repair a crash between the node write and its supersession leaves behind: the open
-    // stragglers beside the standing version, and the members that version never closed. Both
-    // are `coalesce`d closes, so a window with nothing left to repair writes nothing.
-    const standing = existing.find((rollup) => rollup.id === rollupId);
+    // stragglers beside the standing version, and the members that version never closed. It
+    // generates nothing and it still closes nodes, so it lands through the same publication.
+    const standing = versions.find((rollup) => rollup.id === rollupId);
     const members = standing?.open === true ? decision.episodeIds : [];
-    await closeInto(deps, rollupId, [...decision.supersedes, ...members], settings.now, occurredAt);
-    return { outcome: 'skipped', absorbed: 0 };
+    // Only what is actually still open. A settled window has nothing left to close, and opening a
+    // publication every pass to close nothing is a receipt per window per tick.
+    const closes = await findOpenNarratives(
+      deps.driver,
+      [...decision.supersedes, ...members].filter((id) => id !== rollupId),
+    );
+    if (closes.length === 0) {
+      return { outcome: 'skipped', absorbed: 0 };
+    }
+    const repaired = await publishCalendarRollup(deps, {
+      mode: 'repair',
+      scope: settings.scope,
+      windowKey: window.key,
+      nodeId: rollupId,
+      version: decision.version,
+      coverageKey: decision.coverageKey,
+      memberIds: [],
+      closes,
+      summary: '',
+      narrative: '',
+      citations: [],
+      sentenceCount: 0,
+      spanStart: null,
+      spanEnd: null,
+      occurredAt,
+      proof: proof.proof,
+    });
+    return repaired.status === 'acknowledged'
+      ? { outcome: 'skipped', absorbed: 0 }
+      : { outcome: 'fenced', absorbed: 0, blockedReason: repaired.reason };
   }
 
   const source = renderConsolidationSource(
@@ -248,37 +287,31 @@ async function rollUpWindow(
     return { outcome: 'failed', absorbed: 0 };
   }
 
-  // Again, and now it is the one that matters: the reading above was taken before the synthesis,
-  // and a cutover that landed while the model worked would otherwise be published straight over.
-  const settledFamily = await fenceRollupWindow(deps, fenceInput);
-  if (settledFamily !== undefined) {
-    return { outcome: 'fenced', absorbed: 0, blockedReason: settledFamily, spent: true };
-  }
-
-  await writeRollup(deps, {
-    rollupId,
+  // The guard opens here and not before: the summary is written, its members absorbed and their
+  // edges closed inside one publication whose precondition is the family proof above. A cutover
+  // acknowledged while the model was working moves that proof's scope, and this lands nothing.
+  const landed = await publishCalendarRollup(deps, {
+    mode: 'publish',
     scope: settings.scope,
     windowKey: window.key,
+    nodeId: rollupId,
     version: decision.version,
     coverageKey: decision.coverageKey,
     memberIds: decision.episodeIds,
+    closes: [...decision.supersedes, ...decision.episodeIds],
     summary: synthesis.grounded.summary,
     narrative: synthesis.grounded.narrative,
     citations: synthesis.grounded.citations,
     sentenceCount: synthesis.grounded.kept,
-    ...(span.start === undefined ? {} : { spanStart: span.start }),
-    ...(span.end === undefined ? {} : { spanEnd: span.end }),
+    spanStart: span.start ?? null,
+    spanEnd: span.end ?? null,
     occurredAt,
-    now: settings.now,
+    proof: proof.proof,
   });
-
-  const absorbed = await closeInto(
-    deps,
-    rollupId,
-    [...decision.supersedes, ...decision.episodeIds],
-    settings.now,
-    occurredAt,
-  );
+  if (landed.status !== 'acknowledged') {
+    return { outcome: 'fenced', absorbed: 0, blockedReason: landed.reason, spent: true };
+  }
+  const { absorbed } = landed;
   await attachVector(deps, rollupId, synthesis.grounded.narrative);
 
   deps.logger.info(

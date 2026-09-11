@@ -1,132 +1,230 @@
 import type { Driver } from 'neo4j-driver';
 
-import { readNarrativeRepresentations } from '../../evidence/application/narrative-representation.js';
-import { RequestBudget } from '../../evidence/domain/budget.js';
-import { findRollupLineage } from '../../infrastructure/graph/narrative-rollup-queries.js';
+import { ensureSessionFamily } from './narrative-family.js';
+import { isUnrecorded, readingSessions, rollupOwnership } from './rollup-ownership.js';
+import {
+  readNarrativeRepresentations,
+  type RepresentationReading,
+} from '../../evidence/application/narrative-representation.js';
+import { EVIDENCE_LIMITS, RequestBudget } from '../../evidence/domain/budget.js';
+import {
+  findRollupLineage,
+  type RollupLineage,
+} from '../../infrastructure/graph/narrative-rollup-queries.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
+import type { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
+import type { EvidenceDependency } from '../../infrastructure/publication/preconditions.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { checkPresentCoverage } from '../../recall/application/coverage-checker.js';
 import type { RollupScope } from '../domain/rollup.js';
 
 /**
- * Whether the legacy calendar pass may still stand over a window.
+ * Whether the legacy calendar pass owns what a window would write over, absorb and close.
  *
  * The member read nominates on scope and currency, and a session that moved to chunks leaves its
  * old whole-session narrative exactly where it was: same clocks, same intervals, no supersession.
- * So nomination alone cannot tell a live legacy narrative from a retired one, and the pass that
- * publishes over those members and then absorbs them is the one that has to ask.
+ * Nomination therefore proves nothing about ownership, and this is what the pass asks instead.
  *
  * It asks the representation adapter, which is the only reader that interprets the retirement
- * marker and the committed family preference. Nothing here reads either one: this file names
- * identities and reads the one answer back.
+ * marker and the committed family preference. Nothing here reads either one.
  *
- * A window is covered whole or refused, the same rule the rendered-input allowance follows. A
- * member whose family moved takes its window with it rather than being dropped from the member
- * list, because a summary that quietly left out part of its day would still store a coverage of 1
- * over the whole of it.
+ * The answer this produces is a PROOF the publication carries: the identities it proved and the
+ * family-selection scopes the proof rests on. The handler rechecks the same predicate against a
+ * fresh reading under the guard, so a choice that moves between the two is caught by the
+ * publication rather than by the ordering of two reads.
  */
 
-/** Representation identities one window may prove the family of. */
-export const ROLLUP_FAMILY_SCAN_LIMIT = 1024;
+/**
+ * Representation identities one window may prove the family of.
+ *
+ * The number is the adapter's own per-request identity allowance, because the publication's
+ * recheck runs through the bounded policy reread and has to be able to name everything this
+ * reading named. A window whose proof would not fit both sides is refused rather than published
+ * on the half that fits.
+ */
+export const ROLLUP_FAMILY_SCAN_LIMIT = EVIDENCE_LIMITS.requestedIds;
 
-/** The families with a manifest of their own. A legacy calendar pass never absorbs one. */
-const SIGNED_FAMILIES = ['chunk', 'overview'];
+/** Sessions one window may initialize through the producer before it gives up on the window. */
+export const ROLLUP_FAMILY_INITIALIZE_LIMIT = 64;
 
 export type RollupFenceDeps = {
   readonly driver: Driver;
   readonly db?: SqliteHandle;
+  readonly publications?: PublicationCoordinator;
   readonly logger: Pick<Logger, 'warn'>;
 };
 
 export type RollupFenceInput = {
   readonly scope: RollupScope;
   readonly windowKey: string;
+  /** What the window covers, which this pass would publish over and absorb. */
   readonly memberIds: readonly string[];
+  /** Every version the window already carries, which this pass would close or leave alone. */
+  readonly headIds: readonly string[];
   readonly now: Date;
 };
+
+/** What the publication carries, and what its guard rechecks the same predicate against. */
+export type RollupFamilyProof = {
+  readonly ownedIds: readonly string[];
+  /** Versions of another family: not this writer's versions, and not its closure targets. */
+  readonly foreignHeads: readonly string[];
+  readonly dependencies: readonly EvidenceDependency[];
+};
+
+export type RollupFamilyReading =
+  | { readonly status: 'proved'; readonly proof: RollupFamilyProof }
+  | { readonly status: 'refused'; readonly reason: string };
 
 function refuse(
   deps: RollupFenceDeps,
   input: RollupFenceInput,
   reason: string,
-  members: readonly string[],
-): string {
+  subjects: readonly string[],
+): RollupFamilyReading {
   deps.logger.warn(
-    { scope: input.scope, window: input.windowKey, reason, members },
-    'narrative rollup refused: the window holds a representation this pass does not own',
+    { scope: input.scope, window: input.windowKey, reason, subjects },
+    'narrative rollup refused: the window holds a representation this pass cannot prove it owns',
   );
-  return reason;
+  return { status: 'refused', reason };
 }
 
-/**
- * The reason this window may not publish or absorb, or nothing when every member is still the
- * legacy pass's to carry.
- *
- * Called twice for a window that reaches a model: once before the synthesis, so a settled
- * refusal costs no provider call, and again immediately before the write, so a cutover that
- * lands while the model is working does not come back to a decision taken before it. The two
- * evaluations share one predicate; neither of them writes anything.
- */
-export async function fenceRollupWindow(
-  deps: RollupFenceDeps,
-  input: RollupFenceInput,
-): Promise<string | undefined> {
-  const { db } = deps;
-  if (db === undefined) {
-    return refuse(deps, input, 'family_fence_unavailable', []);
-  }
-  if (input.memberIds.length === 0) {
-    return undefined;
-  }
-  const coverage = checkPresentCoverage(db, input.now);
-  if (coverage.status !== 'checked') {
-    // A control record nobody can read leaves every family answer unqualified, which is a reason
-    // for a sweep to stop rather than to publish over the question.
-    return refuse(deps, input, 'coverage_unavailable', input.memberIds);
-  }
+type Candidates = {
+  readonly lineage: Map<string, RollupLineage>;
+  readonly identities: readonly string[];
+};
 
-  const lineage = await findRollupLineage(deps.driver, input.memberIds, ROLLUP_FAMILY_SCAN_LIMIT);
-  const held = new Map(lineage.map((row) => [row.id, row] as const));
-  const identities = new Set(input.memberIds);
-  for (const member of input.memberIds) {
-    const row = held.get(member);
+/** Every identity the window's answer depends on: its candidates and what they rest on. */
+async function expand(
+  deps: RollupFenceDeps,
+  candidates: readonly string[],
+): Promise<Candidates | string> {
+  const rows = await findRollupLineage(deps.driver, candidates, ROLLUP_FAMILY_SCAN_LIMIT);
+  const lineage = new Map(rows.map((row) => [row.id, row] as const));
+  const identities = new Set(candidates);
+  for (const id of candidates) {
+    const row = lineage.get(id);
     if (row === undefined || row.bounded) {
-      return refuse(deps, input, 'legacy_family_scan_bound', [member]);
+      return 'legacy_family_scan_bound';
     }
     for (const ancestor of row.ancestors) {
       identities.add(ancestor);
     }
   }
   if (identities.size > ROLLUP_FAMILY_SCAN_LIMIT) {
-    return refuse(deps, input, 'legacy_family_scan_bound', input.memberIds);
+    return 'legacy_family_scan_bound';
+  }
+  return { lineage, identities: [...identities] };
+}
+
+/**
+ * Proof that this window is the legacy calendar family's to write.
+ *
+ * A member it cannot prove refuses the whole window rather than being dropped from the member
+ * list: a summary that quietly left out part of its day would still store a coverage of 1 over
+ * the whole of it. An existing HEAD of another family is different. It was never a version of
+ * this family, so it is excluded from the version set instead of refusing the window, and the
+ * pass neither counts it nor closes it.
+ */
+export async function proveRollupFamily(
+  deps: RollupFenceDeps,
+  input: RollupFenceInput,
+): Promise<RollupFamilyReading> {
+  const { db } = deps;
+  if (db === undefined) {
+    return refuse(deps, input, 'family_fence_unavailable', []);
+  }
+  const candidates = [...new Set([...input.memberIds, ...input.headIds])];
+  if (candidates.length === 0) {
+    return { status: 'proved', proof: { ownedIds: [], foreignHeads: [], dependencies: [] } };
+  }
+  const coverage = checkPresentCoverage(db, input.now);
+  if (coverage.status !== 'checked') {
+    // A control record nobody can read leaves every family answer unqualified, which is a reason
+    // for a sweep to stop rather than to publish over the question.
+    return refuse(deps, input, 'coverage_unavailable', candidates);
+  }
+  const expanded = await expand(deps, candidates);
+  if (typeof expanded === 'string') {
+    return refuse(deps, input, expanded, candidates);
   }
 
-  const reading = await readNarrativeRepresentations(
-    { db, driver: deps.driver },
-    [...identities],
-    coverage.context,
-    new RequestBudget(),
+  const read = async (): Promise<RepresentationReading> =>
+    readNarrativeRepresentations(
+      { db, driver: deps.driver },
+      expanded.identities,
+      coverage.context,
+      new RequestBudget(),
+    );
+  const first = await read();
+  // Exactly one unproved answer is the producer's to repair: a session with no recorded
+  // preference at all. An unreadable record, a pending acknowledgment and a session that has
+  // chosen the other family are all answers, and none of them is an uninitialized session.
+  const unrecorded = expanded.identities.filter((id) =>
+    isUnrecorded(rollupOwnership(id, first, expanded.lineage)),
   );
-  const retired: string[] = [];
-  const foreign: string[] = [];
-  for (const member of input.memberIds) {
-    if (SIGNED_FAMILIES.includes(reading.values.get(member)?.family ?? '')) {
-      foreign.push(member);
+  if (unrecorded.length > 0) {
+    const initialized = await initialize(deps, readingSessions(unrecorded, first));
+    if (initialized !== undefined) {
+      return refuse(deps, input, initialized, unrecorded);
+    }
+  }
+  const reading = unrecorded.length === 0 ? first : await read();
+
+  const foreignHeads: string[] = [];
+  for (const id of candidates) {
+    const held = rollupOwnership(id, reading, expanded.lineage);
+    if (held.status !== 'foreign') {
       continue;
     }
-    // An unproved preference is the ordinary state of a session nobody has migrated, so it is not
-    // a refusal. What refuses is a session the adapter says has chosen the other family, whether
-    // it is this member's own session or one underneath a calendar summary it already absorbed.
-    const line = [member, ...(held.get(member)?.ancestors ?? [])];
-    if (line.some((id) => reading.values.get(id)?.selection === 'not_selected')) {
-      retired.push(member);
+    if (input.memberIds.includes(id)) {
+      return refuse(deps, input, 'legacy_family_foreign', [id]);
     }
+    foreignHeads.push(id);
   }
-  if (retired.length > 0) {
-    return refuse(deps, input, 'legacy_family_changed', retired);
+  const owned = candidates.filter((id) => !foreignHeads.includes(id));
+  const blocked = owned.find(
+    (id) => rollupOwnership(id, reading, expanded.lineage).status !== 'owned',
+  );
+  if (blocked !== undefined) {
+    const held = rollupOwnership(blocked, reading, expanded.lineage);
+    return refuse(
+      deps,
+      input,
+      held.status === 'unproved' ? held.reason : 'legacy_family_unproved',
+      [blocked],
+    );
   }
-  if (foreign.length > 0) {
-    return refuse(deps, input, 'legacy_family_foreign', foreign);
+  return {
+    status: 'proved',
+    proof: {
+      ownedIds: owned.sort(),
+      foreignHeads: foreignHeads.sort(),
+      dependencies: reading.dependencies,
+    },
+  };
+}
+
+/** One bounded producer pass. A session the writer cannot initialize refuses its window. */
+async function initialize(
+  deps: RollupFenceDeps,
+  sessionIds: readonly string[],
+): Promise<string | undefined> {
+  const { db, publications } = deps;
+  if (sessionIds.length === 0) {
+    return 'legacy_family_unproved:no_session';
+  }
+  if (db === undefined || publications === undefined) {
+    return 'legacy_family_producer_unavailable';
+  }
+  if (sessionIds.length > ROLLUP_FAMILY_INITIALIZE_LIMIT) {
+    return 'legacy_family_initialize_bound';
+  }
+  for (const sessionId of sessionIds) {
+    const ready = await ensureSessionFamily({ driver: deps.driver, db, publications }, sessionId);
+    if (ready.status !== 'ready') {
+      return `legacy_family_uninitialized:${ready.reason}`;
+    }
   }
   return undefined;
 }
