@@ -1,28 +1,29 @@
 import { packBuckets } from '@aion/protocol';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { CueCache } from './cues.js';
 import { handleRecall, type RecallDeps } from './recall.js';
-import { waitFor } from './test-support/wait-for.fixture.js';
-import { DEFAULTS } from '../../infrastructure/config/defaults.js';
-import type { Config } from '../../infrastructure/config/schema.js';
-import { bootstrapBackbone, SUBSTRATE_NAME } from '../../infrastructure/graph/backbone.js';
-import { writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
-import { writeCognitiveNode } from '../../infrastructure/graph/cognitive-queries.js';
-import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
+import {
+  axis,
+  BEFORE_ANYTHING,
+  CUE,
+  db,
+  deps,
+  harness,
+  provider,
+  push,
+  QUERY,
+  READ_SESSION,
+  RECALLED_AT,
+  REQUIRED_STAGES,
+  substrateId,
+  unrelatedEpisodeId,
+  webhooksEpisodeId,
+  WEBHOOKS_OBSERVATION,
+} from './test-support/recall-int.fixture.js';
+import { SUBSTRATE_NAME } from '../../infrastructure/graph/backbone.js';
 import { withCurrency } from '../../infrastructure/graph/read-modes.js';
 import { fulltextSeeds, vectorSeeds } from '../../infrastructure/graph/seed-queries.js';
-import {
-  startNeo4jHarness,
-  stopNeo4jHarness,
-  type Neo4jHarness,
-} from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
-import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
-import type { Provider, Vector } from '../../infrastructure/providers/types.js';
-import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { getLastPack } from '../../infrastructure/sqlite/last-pack.js';
 import {
   PACK_METHODS,
@@ -35,185 +36,8 @@ import {
   readActiveGeneration,
   stageWorkId,
 } from '../../infrastructure/sqlite/processing-generations.js';
-import { publishReadinessPolicy } from '../../infrastructure/sqlite/readiness-policies.js';
-import { handleReflection } from '../../reflection/application/intake.js';
-import { LaneAssigner } from '../../reflection/application/lanes.js';
 import { orchestratorLedgerKey } from '../../reflection/application/orchestrator.js';
-import { foldName } from '../../reflection/domain/name-fold.js';
 import { PIPELINE_VERSION } from '../../reflection/domain/version.js';
-import { directIntakePublisher } from '../../reflection/test-support/direct-intake.fixture.js';
-import { SessionManager } from '../../session/session-manager.js';
-
-// The seeded graph has no entity named after the substrate, so the skip branch never fires here.
-function requireSubstrate(backbone: Awaited<ReturnType<typeof bootstrapBackbone>>) {
-  if (backbone.substrate === undefined) {
-    throw new Error('backbone skipped the substrate node on a clean graph');
-  }
-  return backbone.substrate;
-}
-
-const EMBED_DIMENSION = 8;
-/** The stage list this file's sources are accepted under. No pass runs them here. */
-const REQUIRED_STAGES = ['entities', 'associations'];
-const WRITE_SESSION = 'recall-int-write-session';
-const READ_SESSION = 'recall-int-read-session';
-
-const UNRELATED_AT = new Date('2026-06-01T10:00:00.000Z');
-const WEBHOOKS_AT = new Date('2026-06-01T11:00:00.000Z');
-const RECALLED_AT = new Date('2026-06-02T09:00:00.000Z');
-/** Before either episode was recorded, so a knowledge-time read sees the substrate empty. */
-const BEFORE_ANYTHING = '2026-05-01T00:00:00.000Z';
-
-const WEBHOOKS_OBSERVATION =
-  'we picked webhooks for the ingestion service because polling was too slow';
-const UNRELATED_OBSERVATION = 'the standup moved to nine thirty on tuesdays';
-
-const QUERY = 'why did we pick webhooks for ingestion';
-const CUE = 'webhooks';
-
-function axis(index: number): Vector {
-  const vector = new Array<number>(EMBED_DIMENSION).fill(0);
-  vector[index] = 1;
-  return vector;
-}
-
-/**
- * Deterministic stand-in for the embedding model: the topic decides the axis, so "reachable
- * only by traversal" is a property of the fixture graph rather than of whatever a live
- * model happened to score. Cue extraction is stubbed for the same reason: unit and
- * integration tests here prove the pipeline, never the model's judgment.
- */
-function vectorFor(text: string): Vector {
-  const lowered = text.toLowerCase();
-  if (lowered.includes('webhook')) {
-    return axis(0);
-  }
-  if (lowered.includes('standup')) {
-    return axis(1);
-  }
-  return axis(2);
-}
-
-const provider: Provider = {
-  embed: (texts) => Promise.resolve(texts.map(vectorFor)),
-  generate: () => Promise.resolve({ query_cues: [CUE], summary_cues: [], recent_turn_cues: [] }),
-};
-
-/**
- * One seed and one vector hit per cue. The narrow budget is the point: a wide one would let
- * every fixture node in as a direct hit and there would be nothing left for traversal to be
- * the only path to.
- *
- * Both session subtractions are off throughout. Every test here asks the same question of the
- * same reading session, and what each one measures is what the substrate answers rather than
- * what that session has already been handed or wrote itself.
- */
-function config(): Config {
-  return {
-    ...DEFAULTS,
-    models: { ...DEFAULTS.models, embedDimension: EMBED_DIMENSION },
-    recall: { ...DEFAULTS.recall, vectorLimit: 1, sessionDedup: false, ownSessionFilter: false },
-    contextResonance: { ...DEFAULTS.contextResonance, seedLimit: 1 },
-  };
-}
-
-let harness: Neo4jHarness;
-let db: SqliteHandle;
-let dataDir: string;
-let logger: Logger;
-let sessions: SessionManager;
-let deps: RecallDeps;
-let webhooksEpisodeId: string;
-let unrelatedEpisodeId: string;
-let substrateId: string;
-
-async function push(
-  observation: string,
-  now: Date,
-  identity: string = WRITE_SESSION,
-): Promise<string> {
-  const result = await handleReflection(
-    {
-      driver: harness.driver,
-      db,
-      sessions,
-      provider,
-      logger,
-      entropyThreshold: DEFAULTS.redaction.entropyThreshold,
-      lanes: new LaneAssigner(DEFAULTS.lanes),
-      workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
-      publications: directIntakePublisher(harness.driver, db),
-      acceptHookCapture: true,
-    },
-    { observations: [observation] },
-    { identity, now },
-  );
-  return result.episode_id;
-}
-
-beforeAll(async () => {
-  harness = await startNeo4jHarness();
-  dataDir = mkdtempSync(join(tmpdir(), 'aion-recall-int-'));
-  db = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
-  logger = openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'debug' });
-  await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
-
-  // Startup publishes the readiness contract before anything can be accepted, and intake writes
-  // each source's inventory from it. A source accepted with none records an inventory obligation
-  // instead, and a session holding one cannot be counted at all — so the pack below would report
-  // no pending count rather than the wrong one.
-  publishReadinessPolicy(
-    db,
-    { pipelineVersion: PIPELINE_VERSION, stageNames: REQUIRED_STAGES, transferCapabilities: [] },
-    new Date('2026-01-01T00:00:00.000Z'),
-  );
-
-  const backbone = await bootstrapBackbone(harness.driver, { memberName: 'Ryan Huber' });
-  substrateId = requireSubstrate(backbone).id;
-  sessions = new SessionManager(harness.driver, {
-    memberId: backbone.member.id,
-    workspaceId: backbone.workspace.id,
-  });
-
-  deps = {
-    driver: harness.driver,
-    db,
-    sessions,
-    provider,
-    config: config(),
-    cueCache: new CueCache(),
-    logger,
-  };
-
-  // The unrelated episode is stored first so the recency strategy ranks the webhooks one
-  // ahead of it, which keeps the unrelated episode out of every seed list.
-  unrelatedEpisodeId = await push(UNRELATED_OBSERVATION, UNRELATED_AT);
-  webhooksEpisodeId = await push(WEBHOOKS_OBSERVATION, WEBHOOKS_AT);
-
-  await waitFor('the vector index to cover both episodes', async () => {
-    const rows = await vectorSeeds(harness.driver, {
-      vector: axis(0),
-      limit: 10,
-      mode: withCurrency(),
-    });
-    return rows.length >= 2;
-  });
-
-  await waitFor('the fulltext index to cover the webhooks episode', async () => {
-    const rows = await fulltextSeeds(harness.driver, {
-      query: CUE,
-      limit: 10,
-      mode: withCurrency(),
-    });
-    return rows.some((row) => row.id === webhooksEpisodeId);
-  });
-}, 300_000);
-
-afterAll(async () => {
-  await stopNeo4jHarness(harness);
-  db.close();
-  rmSync(dataDir, { recursive: true, force: true });
-});
 
 describe('recall over a substrate written by the real intake path', () => {
   it('returns the episode the query is about, explained by the strategy that found it', async () => {
@@ -407,111 +231,6 @@ describe('pending_enrichment metadata', () => {
     );
 
     expect(pack.metadata.pending_enrichment).toBeUndefined();
-  });
-});
-
-/**
- * The third way into a pack: a standing intention nobody asked about, brought back because the
- * thing it is about is in play. The goal below is written with no content vector and no words
- * the query shares, so no retrieval leg can reach it; the only path into the pack is its own
- * trigger.
- */
-describe('intentions the recall brings back on their own trigger', () => {
-  const TRIGGER_SESSION = 'recall-int-trigger-session';
-  const ENTITY_NAME = 'Ledger Rewrite';
-  const ENTITY_ID = 'entity-ledger-rewrite';
-  const GOAL_EPISODE_ID = 'episode-ledger-goal';
-  const GOAL_TEXT = 'circle back on the freeze once the quarter closes';
-  const TRIGGER_QUERY = `where are we with ${ENTITY_NAME}`;
-  /** Stamped before every other fixture node, so the recency strategy never seeds the goal. */
-  const SEEDED_AT = new Date('2026-05-02T00:00:00.000Z');
-
-  let goalId: string;
-  let triggerDeps: RecallDeps;
-
-  beforeAll(async () => {
-    await writeStampedNode(harness.driver, {
-      label: 'Entity',
-      id: ENTITY_ID,
-      now: SEEDED_AT,
-      occurredAt: SEEDED_AT,
-      properties: { name: ENTITY_NAME, name_norm: foldName(ENTITY_NAME), type: 'project' },
-    });
-    await writeStampedNode(harness.driver, {
-      label: 'Episode',
-      id: GOAL_EPISODE_ID,
-      now: SEEDED_AT,
-      occurredAt: SEEDED_AT,
-      properties: { text: 'a session about the freeze', session_id: 'session-ledger' },
-    });
-    const written = await writeCognitiveNode(harness.driver, {
-      episodeId: GOAL_EPISODE_ID,
-      label: 'Goal',
-      text: GOAL_TEXT,
-      subjectEntityId: ENTITY_ID,
-      occurredAt: SEEDED_AT,
-      now: SEEDED_AT,
-      // A horizon well past the reading clock: an expired intention never triggers.
-      intentionHorizonDays: 365,
-    });
-    goalId = written.node.id;
-
-    triggerDeps = {
-      ...deps,
-      config: {
-        ...config(),
-        // The one place this file wants the repeat subtraction on: a trigger that fires every
-        // call would nag, and dedup is what stops it.
-        recall: { ...config().recall, sessionDedup: true, tokenBudget: 4000 },
-        contextResonance: { ...DEFAULTS.contextResonance, seedLimit: 5 },
-      },
-      provider: {
-        embed: (texts) => provider.embed(texts),
-        generate: () =>
-          Promise.resolve({ query_cues: [ENTITY_NAME], summary_cues: [], recent_turn_cues: [] }),
-      },
-      cueCache: new CueCache(),
-    };
-  }, 60_000);
-
-  it('serves a standing intention when the entity it is about is in play', async () => {
-    const pack = await handleRecall(
-      triggerDeps,
-      { query: TRIGGER_QUERY },
-      { identity: TRIGGER_SESSION, now: RECALLED_AT },
-    );
-
-    const served = pack.intentions?.find((item) => item.id === goalId);
-    expect(served?.content).toBe(GOAL_TEXT);
-    expect(served?.rationale.method).toBe('intention_trigger');
-    expect(pack.rendered_text).toContain('## Intentions');
-    // The trigger is the only way in: no other bucket holds it.
-    expect(pack.facts?.map((item) => item.id)).not.toContain(goalId);
-  });
-
-  it('says it once: the same session asking again is not reminded twice', async () => {
-    const repeat = await handleRecall(
-      triggerDeps,
-      { query: TRIGGER_QUERY },
-      { identity: TRIGGER_SESSION, now: RECALLED_AT },
-    );
-
-    expect(repeat.intentions).toBeUndefined();
-    expect(repeat.metadata.suppressed_repeats).toBeGreaterThan(0);
-  });
-
-  /**
-   * Asking what the substrate held at another moment is a question about the past. A trigger is
-   * the substrate acting now, so a time-traveled read evaluates none of them.
-   */
-  it('evaluates no trigger on a time-traveled read', async () => {
-    const pack = await handleRecall(
-      triggerDeps,
-      { query: TRIGGER_QUERY, as_of: RECALLED_AT.toISOString() },
-      { identity: 'recall-int-trigger-history', now: RECALLED_AT },
-    );
-
-    expect(pack.intentions).toBeUndefined();
   });
 });
 
