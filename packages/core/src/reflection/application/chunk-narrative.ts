@@ -383,8 +383,10 @@ export async function publishChunkNarrative(
     // The output is refused and its number is spent: this attempt bound an intent, so the number
     // can never be taken up again. What must not go with it is the work — a refusal that left no
     // durable row would take the chunk out of the scheduler's sight until something else moved.
-    // So a fresh allocation carries the reason and the attempt count forward, due now, for the
-    // scheduler that owns how long to wait.
+    // So a fresh allocation carries the reason forward, due now, for the scheduler that owns how
+    // long to wait. The count starts again on the new row: it is the number of attempts against
+    // this allocation, so a chunk deferred repeatedly waits the base delay each time rather than
+    // a doubling one.
     abandonNarrativeRevision(
       deps.db,
       CHUNK_REVISION_FAMILY,

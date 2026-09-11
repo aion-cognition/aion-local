@@ -272,16 +272,19 @@ async function attemptPublication(
   // of one, and the lifecycle's own reason set is what says which.
   const synthesized =
     report.status === 'deferred' || SYNTHESIS_ATTEMPTED_REASONS.includes(report.reason);
-  if (report.status === 'failed') {
-    const row = readNarrativeRevision(ctx.db, CHUNK_REVISION_FAMILY, chunkId, report.revisionNo);
-    deferRevisionAttempt(
-      ctx.db,
-      CHUNK_REVISION_FAMILY,
-      chunkId,
-      report.revisionNo,
-      new Date(ctx.now.getTime() + sealRetryDelayMs(row?.attempts ?? 1)),
-    );
-  }
+  // Only a deferral and a failure reach here, and both are dated. The publication leaves its fresh
+  // row due now and hands the wait to whichever scheduler owns the chunk, and this is that
+  // scheduler in steady state. An undated deferral re-nominated the chunk on the next tick, and
+  // synthesis runs before the publish, so a reason that will not clear on its own bought a model
+  // call every cycle. The migration scheduler dates both the same way.
+  const row = readNarrativeRevision(ctx.db, CHUNK_REVISION_FAMILY, chunkId, report.revisionNo);
+  deferRevisionAttempt(
+    ctx.db,
+    CHUNK_REVISION_FAMILY,
+    chunkId,
+    report.revisionNo,
+    new Date(ctx.now.getTime() + sealRetryDelayMs(row?.attempts ?? 1)),
+  );
   ctx.logger.warn(
     { chunkId, status: report.status, reason: report.reason },
     'narrative seal could not publish a chunk revision',

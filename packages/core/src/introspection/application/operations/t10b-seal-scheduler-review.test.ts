@@ -13,11 +13,17 @@ import {
   sealChunk,
 } from '../../../infrastructure/sqlite/chunk-manifest.js';
 import { SqliteStore } from '../../../infrastructure/sqlite/database.js';
+import {
+  allocateNarrativeRevision,
+  CHUNK_REVISION_FAMILY,
+  readNarrativeRevision,
+} from '../../../infrastructure/sqlite/narrative-revisions.js';
 import { recordSourceRecord } from '../../../infrastructure/sqlite/source-identity.js';
 import {
   captureOrderValue,
   touchSessionRemainder,
 } from '../../../infrastructure/sqlite/source-lifecycle.js';
+import { SEAL_RETRY_BASE_MS } from '../../../reflection/domain/narrative-retry.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
 
@@ -152,6 +158,38 @@ it('does not count a pre-synthesis coverage refusal as a provider call', async (
   });
   const outcome = await narrativeSealOperation(SCALES).run(context());
   expect(outcome.detail).toContain('0 reached synthesis');
+});
+
+it('dates a deferred chunk so a reason that will not clear costs one call, not one per tick', async () => {
+  const chunkId = chunk('deferred-chunk');
+  seam.publish.mockImplementation(() => {
+    const allocated = allocateNarrativeRevision(store.db, CHUNK_REVISION_FAMILY, chunkId, NOW);
+    return {
+      status: 'deferred',
+      chunkId,
+      revisionNo: allocated.revisionNo,
+      reason: 'member_projection_missing',
+    };
+  });
+
+  await narrativeSealOperation(SCALES).run(context());
+
+  const row = readNarrativeRevision(store.db, CHUNK_REVISION_FAMILY, chunkId, 1);
+  expect(row?.nextAttemptAt).toBe(new Date(NOW.getTime() + SEAL_RETRY_BASE_MS).toISOString());
+});
+
+it('control: a published chunk is left due to nothing', async () => {
+  const chunkId = chunk('published-chunk');
+  seam.publish.mockImplementation(() => {
+    allocateNarrativeRevision(store.db, CHUNK_REVISION_FAMILY, chunkId, NOW);
+    return { status: 'published', chunkId, revisionNo: 1, nodeId: 'n', gaps: 0 };
+  });
+
+  await narrativeSealOperation(SCALES).run(context());
+
+  expect(readNarrativeRevision(store.db, CHUNK_REVISION_FAMILY, chunkId, 1)?.nextAttemptAt).toBe(
+    null,
+  );
 });
 
 it('control: without a fresh tail the oldest due chunk is selected', async () => {
