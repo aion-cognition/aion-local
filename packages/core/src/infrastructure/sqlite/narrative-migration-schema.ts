@@ -33,11 +33,17 @@ export const NARRATIVE_MIGRATION_SCHEMA_STATEMENTS = [
     subject_id TEXT NOT NULL,
     reason TEXT NOT NULL,
     active INTEGER NOT NULL CHECK (active IN (0,1)),
+    retry_failures INTEGER NOT NULL DEFAULT 0 CHECK (retry_failures BETWEEN 0 AND 9007199254740991),
     PRIMARY KEY (cohort_id, phase, subject_id)
   )`,
 ] as const;
 
 export const NARRATIVE_MIGRATION_COLUMN_ADDITIONS: readonly ColumnAddition[] = [
+  {
+    table: 'narrative_migration_issues',
+    column: 'retry_failures',
+    definition: 'INTEGER NOT NULL DEFAULT 0 CHECK (retry_failures BETWEEN 0 AND 9007199254740991)',
+  },
   { table: 'narrative_migration_jobs', column: 'retry_at', definition: 'TEXT' },
   {
     table: 'narrative_migration_jobs',

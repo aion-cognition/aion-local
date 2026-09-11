@@ -60,7 +60,7 @@ export function holdNarrativeMigration(
   return (
     db
       .prepare(
-        "UPDATE narrative_migration_jobs SET lifecycle_state = 'blocked', blocked_reason = ?, revision = revision + 1, updated_at = ? WHERE cohort_id = ? AND phase = ? AND revision = ? AND lifecycle_state = 'running'",
+        "UPDATE narrative_migration_jobs SET lifecycle_state = 'blocked', blocked_reason = ?, retry_at = NULL, revision = revision + 1, updated_at = ? WHERE cohort_id = ? AND phase = ? AND revision = ? AND lifecycle_state = 'running'",
       )
       .run(reason, now.toISOString(), job.cohortId, job.phase, job.revision).changes === 1
   );
@@ -71,6 +71,7 @@ export function refreshNarrativeMigration(
   db: SqliteHandle,
   job: { readonly cohortId: string; readonly phase: string; readonly revision: number },
   now: Date,
+  mode: 'unresolved' | 'all' = 'unresolved',
 ): boolean {
   if (!Number.isSafeInteger(job.revision) || job.revision >= Number.MAX_SAFE_INTEGER) {
     throw new Error('migration revision reached its exact-integer bound');
@@ -97,7 +98,7 @@ export function refreshNarrativeMigration(
             "UPDATE narrative_migration_jobs SET lifecycle_state = 'running', blocked_reason = NULL, retry_at = NULL, repair_resume_phase = ?, pass_progress_json = NULL, prior_gap_digest = NULL, phase = ?, cursor = CASE WHEN ? THEN cursor ELSE '' END, revision = revision + 1, updated_at = ? WHERE cohort_id = ? AND revision = ? AND lifecycle_state <> 'abandoned'",
           )
           .run(
-            capture ? null : repairResume,
+            capture || mode === 'all' ? null : repairResume,
             capture ? job.phase : 'verify',
             capture ? 1 : 0,
             now.toISOString(),

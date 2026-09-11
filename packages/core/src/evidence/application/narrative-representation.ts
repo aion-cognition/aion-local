@@ -340,7 +340,10 @@ function readPolicies(
     // Discard partial policy results: mixing that prefix with a later snapshot could mix families.
     reader.values.clear();
     reader.dependencies.length = 0;
+    reader.issues.length = 0;
+    // Every identity in this failed snapshot receives a replacement failure result.
     for (const identity of identities) {
+      reader.rereadIds.add(identity.nodeId);
       reader.issue(identity.nodeId, 'store_unavailable', 'representation_preference');
       reader.values.set(identity.nodeId, {
         family: identity.family,

@@ -153,12 +153,16 @@ function publicationWait(
 /** Every held revision contributes its own repair prerequisite, even when nomination excludes it. */
 function recordMigrationChunkIssues(db: SqliteHandle, job: NarrativeMigrationJob): void {
   db.prepare(
+    "UPDATE narrative_migration_issues SET active = 0 WHERE cohort_id = ? AND phase IN ('publication_retry','publish') AND EXISTS (SELECT 1 FROM chunks c WHERE c.chunk_id = subject_id AND c.published_revision_no IS NOT NULL)",
+  ).run(job.cohortId);
+  db.prepare(
     "UPDATE narrative_migration_issues SET active = 0 WHERE cohort_id = ? AND phase LIKE 'blocked_revision:%'",
   ).run(job.cohortId);
   db.prepare(
     `INSERT INTO narrative_migration_issues (cohort_id,phase,subject_id,reason,active)
     SELECT DISTINCT ?, 'blocked_revision:' || CAST(b.revision_no AS TEXT), b.chunk_id, b.blocked_reason, 1 FROM chunk_revisions b
     WHERE b.state = 'allocated' AND b.blocked_reason IS NOT NULL
+      AND EXISTS (SELECT 1 FROM chunks c WHERE c.chunk_id = b.chunk_id AND c.published_revision_no IS NULL)
       AND EXISTS (SELECT 1 FROM migration_progress m WHERE m.cohort_id = ? AND m.partition_assignment = b.chunk_id)
       AND EXISTS (SELECT 1 FROM narrative_migration_jobs WHERE cohort_id = ? AND revision = ? AND lifecycle_state = 'running')
     ON CONFLICT(cohort_id,phase,subject_id) DO UPDATE SET reason=excluded.reason,active=1
@@ -187,7 +191,7 @@ export function finishMigrationPass(
         .get(job.cohortId);
       if (allReady && unassigned === undefined) {
         db.prepare(
-          "UPDATE narrative_migration_issues SET active = 0 WHERE cohort_id = ? AND (phase IN ('partition','publish','cutover') OR phase LIKE 'blocked_revision:%')",
+          "UPDATE narrative_migration_issues SET active = 0 WHERE cohort_id = ? AND (phase IN ('partition','publish','cutover','publication_retry') OR phase LIKE 'blocked_revision:%')",
         ).run(job.cohortId);
         advanceNarrativeMigration(db, job, 'complete', '', now);
         return undefined;
@@ -246,4 +250,37 @@ export function holdRepeatedCensusRefusal(
       ).run(digest, job.cohortId);
     }
   }).immediate();
+}
+
+/** Counts actual failed attempts across revision numbers. Polling and cursor movement do not spend this budget. */
+export function recordMigrationRetryFailure(
+  db: SqliteHandle,
+  job: NarrativeMigrationJob,
+  chunkId: string,
+  reason: string,
+): number | undefined {
+  return db
+    .transaction(() => {
+      const changed = db
+        .prepare(
+          `INSERT INTO narrative_migration_issues (cohort_id,phase,subject_id,reason,active,retry_failures)
+      SELECT ?, 'publication_retry', ?, ?, 1, 1 WHERE EXISTS (SELECT 1 FROM narrative_migration_jobs
+        WHERE cohort_id = ? AND revision = ? AND lifecycle_state = 'running')
+      ON CONFLICT(cohort_id,phase,subject_id) DO UPDATE SET
+        retry_failures = CASE WHEN active = 1 THEN retry_failures + 1 ELSE 1 END,
+        reason = excluded.reason, active = 1
+    `,
+        )
+        .run(job.cohortId, chunkId, reason, job.cohortId, job.revision).changes;
+      if (changed === 0) {
+        return undefined;
+      }
+      const row = db
+        .prepare(
+          "SELECT retry_failures FROM narrative_migration_issues WHERE cohort_id = ? AND phase = 'publication_retry' AND subject_id = ?",
+        )
+        .get(job.cohortId, chunkId) as { retry_failures: number };
+      return row.retry_failures;
+    })
+    .immediate();
 }

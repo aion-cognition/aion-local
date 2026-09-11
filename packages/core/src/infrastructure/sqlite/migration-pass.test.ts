@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it } from 'vitest';
 import { sealChunk } from './chunk-manifest.js';
 import { SqliteStore } from './database.js';
 import { freezeMigrationCohort, recordMigrationProgress } from './migration-cohorts.js';
+import { rememberMigrationOrder } from './migration-partition.js';
 import {
   advanceNarrativeMigration,
   beginNarrativeMigration,
@@ -16,13 +17,16 @@ import {
   finishMigrationPass,
   readMigrationIssues,
   holdRepeatedCensusRefusal,
+  recordMigrationRetryFailure,
 } from './narrative-migration-pass.js';
+import { adoptExistingMigrationChunk } from './narrative-migration-read.js';
 import { refreshNarrativeMigration } from './narrative-migration-state.js';
 import {
   allocateNarrativeRevision,
   CHUNK_REVISION_FAMILY,
   deferRevisionAttempt,
   blockRevisionAttempt,
+  publishNarrativeRevision,
 } from './narrative-revisions.js';
 import { seedSource } from '../../evidence/test-support/evidence.fixture.js';
 
@@ -168,4 +172,62 @@ it('retains separate reasons from multiple blocked revisions of the same chunk',
       { id: chunkId, reason: 'member_evidence_missing' },
     ]),
   );
+});
+
+it('ignores a published chunk regrounding block when comparing migration holds', () => {
+  recordMigrationProgress(store.db, {
+    cohortId: 'cohort',
+    sourceId: 'source',
+    status: 'verified',
+  });
+  store.db
+    .transaction(() => {
+      rememberMigrationOrder(store.db, {
+        cohortId: 'cohort',
+        sourceId: 'source',
+        value: NOW.toISOString(),
+        basis: 'graph_tx_from',
+      });
+    })
+    .immediate();
+  expect(adoptExistingMigrationChunk(store.db, 'cohort', 'source').status).toBe('adopted');
+  const head = allocateNarrativeRevision(store.db, CHUNK_REVISION_FAMILY, chunkId, NOW);
+  publishNarrativeRevision(store.db, CHUNK_REVISION_FAMILY, {
+    familyKey: chunkId,
+    revisionNo: head.revisionNo,
+    operationId: 'published-head',
+    evidenceRevisionJson: '{}',
+    knownFrom: NOW.toISOString(),
+    observedAckAt: NOW.toISOString(),
+    publishedAt: NOW,
+  });
+  recordMigrationProgress(store.db, {
+    cohortId: 'cohort',
+    sourceId: 'source',
+    status: 'pinned',
+    reason: 'raw proof missing',
+    partitionAssignment: chunkId,
+  });
+  const revision = allocateNarrativeRevision(store.db, CHUNK_REVISION_FAMILY, chunkId, NOW);
+  for (const reason of ['member_scope_census_missing', 'member_evidence_missing']) {
+    blockRevisionAttempt(store.db, CHUNK_REVISION_FAMILY, chunkId, revision.revisionNo, reason);
+    const job = readNarrativeMigration(store.db, 'cohort')!;
+    beginMigrationPass(store.db, job);
+    finishMigrationPass(store.db, job, false, NOW);
+  }
+  expect(readNarrativeMigration(store.db, 'cohort')?.state).toBe('blocked');
+  expect(readMigrationIssues(store.db, 'cohort').issues).toEqual([
+    { id: 'source', reason: 'raw proof missing' },
+  ]);
+});
+
+it('retrofits retry accounting without inventing prior attempt counts', () => {
+  store.db.exec(
+    'ALTER TABLE narrative_migration_issues RENAME COLUMN retry_failures TO old_retry_failures',
+  );
+  store.close();
+  store = new SqliteStore({ filePath: path });
+  const job = readNarrativeMigration(store.db, 'cohort')!;
+  expect(recordMigrationRetryFailure(store.db, job, chunkId, 'first_failure')).toBe(1);
+  expect(recordMigrationRetryFailure(store.db, job, chunkId, 'different_failure')).toBe(2);
 });

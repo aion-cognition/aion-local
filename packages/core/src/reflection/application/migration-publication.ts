@@ -6,14 +6,21 @@ import {
   advanceNarrativeMigration,
   type NarrativeMigrationJob,
 } from '../../infrastructure/sqlite/narrative-migration-job.js';
-import { recordMigrationIssue } from '../../infrastructure/sqlite/narrative-migration-pass.js';
+import {
+  recordMigrationIssue,
+  recordMigrationRetryFailure,
+} from '../../infrastructure/sqlite/narrative-migration-pass.js';
+import { holdNarrativeMigration } from '../../infrastructure/sqlite/narrative-migration-state.js';
 import {
   CHUNK_REVISION_FAMILY,
   clearRevisionBlock,
   deferRevisionAttempt,
   readNarrativeRevision,
 } from '../../infrastructure/sqlite/narrative-revisions.js';
-import { sealRetryDelayMs } from '../domain/narrative-retry.js';
+import {
+  sealRetryDelayMs,
+  MIGRATION_PUBLICATION_FAILURE_LIMIT,
+} from '../domain/narrative-retry.js';
 
 /** The cadence dates failures; a prerequisite block still requires evidence of change. */
 export function scheduleMigrationPublicationRetry(
@@ -21,9 +28,17 @@ export function scheduleMigrationPublicationRetry(
   job: NarrativeMigrationJob,
   result: ChunkPublishReport,
   now: Date,
-): boolean {
+): 'publication_retry_wait' | 'publication_retry_exhausted' | undefined {
   if (result.status !== 'failed' && result.status !== 'deferred') {
-    return false;
+    return undefined;
+  }
+  const failures = recordMigrationRetryFailure(db, job, result.chunkId, result.reason);
+  if (failures === undefined) {
+    return undefined;
+  }
+  if (failures >= MIGRATION_PUBLICATION_FAILURE_LIMIT) {
+    holdNarrativeMigration(db, job, 'publication_retry_exhausted', now);
+    return 'publication_retry_exhausted';
   }
   if (result.revisionNo === 0) {
     advanceNarrativeMigration(
@@ -34,7 +49,7 @@ export function scheduleMigrationPublicationRetry(
       now,
       new Date(now.getTime() + sealRetryDelayMs(1)),
     );
-    return true;
+    return 'publication_retry_wait';
   }
   const row = readNarrativeRevision(db, CHUNK_REVISION_FAMILY, result.chunkId, result.revisionNo);
   if (row?.state === 'allocated' && row.blockedReason === null) {
@@ -46,7 +61,7 @@ export function scheduleMigrationPublicationRetry(
       new Date(now.getTime() + sealRetryDelayMs(row.attempts)),
     );
   }
-  return false;
+  return undefined;
 }
 
 /** Blocked revision attempts inspected for one session, independently of the session's chunk count. */

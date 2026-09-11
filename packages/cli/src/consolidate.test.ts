@@ -237,3 +237,17 @@ it('shows every persisted chunk prerequisite in status', async () => {
   ).toBe(1);
   expect(lines).toContain('chunk-id: member_scope_census_missing');
 });
+
+it('offers full re-verification separately from selective refresh', () => {
+  expect(parseConsolidateFlags(['run', '--cohort', 'fixed', '--reverify'])).toMatchObject({
+    action: 'run',
+    reverify: true,
+    refresh: false,
+  });
+  expect(() => parseConsolidateFlags(['status', '--cohort', 'fixed', '--reverify'])).toThrow(
+    'apply to consolidate run',
+  );
+  expect(() =>
+    parseConsolidateFlags(['run', '--cohort', 'fixed', '--refresh', '--reverify']),
+  ).toThrow('choose --refresh or --reverify');
+});

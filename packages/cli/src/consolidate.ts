@@ -20,12 +20,13 @@ import { withSubstrate } from './substrate.js';
 const SPEC: ArgSpec<'status' | 'run' | 'abandon'> = {
   command: 'consolidate',
   usage:
-    'aion consolidate [status | run | abandon] --cohort <id> [--steps <n>] [--refresh] [--json]',
+    'aion consolidate [status | run | abandon] --cohort <id> [--steps <n>] [--refresh | --reverify] [--json]',
   subcommands: ['status', 'run', 'abandon'],
   options: [
     { flag: '--cohort', takesValue: true },
     { flag: '--steps', takesValue: true },
     { flag: '--refresh' },
+    { flag: '--reverify' },
     { flag: '--json' },
   ],
 };
@@ -41,14 +42,21 @@ export function parseConsolidateFlags(argv: readonly string[]) {
   if (!Number.isSafeInteger(steps) || steps < 1 || steps > 256) {
     throw new CliUsageError('--steps must be a whole number between 1 and 256');
   }
-  if (args.subcommand !== 'run' && (args.flags.has('--refresh') || args.values.has('--steps'))) {
-    throw new CliUsageError('--steps and --refresh apply to consolidate run');
+  if (
+    args.subcommand !== 'run' &&
+    (args.flags.has('--refresh') || args.flags.has('--reverify') || args.values.has('--steps'))
+  ) {
+    throw new CliUsageError('--steps, --refresh and --reverify apply to consolidate run');
+  }
+  if (args.flags.has('--refresh') && args.flags.has('--reverify')) {
+    throw new CliUsageError('choose --refresh or --reverify, not both');
   }
   return {
     action: args.subcommand,
     cohortId,
     steps,
     refresh: args.flags.has('--refresh'),
+    reverify: args.flags.has('--reverify'),
     json: args.flags.has('--json'),
   };
 }
@@ -90,7 +98,7 @@ export function runConsolidate(
         status.status === 'read' &&
         (status.job.state === 'abandoned' ||
           status.job.blockedReason === 'capture_member_bound' ||
-          (!flags.refresh && status.job.state !== 'running'))
+          (!flags.refresh && !flags.reverify && status.job.state !== 'running'))
       ) {
         writeMigrationStatus(status, flags.json, write);
         return status.job.state === 'complete' ? 0 : 1;
@@ -114,6 +122,7 @@ export function runConsolidate(
             cohortId: flags.cohortId,
             steps: flags.steps,
             refresh: flags.refresh,
+            reverify: flags.reverify,
             now: new Date(),
             signal: abortOnInterrupt().signal,
             policy: readNarrativeMigration(db, flags.cohortId)?.policy ?? {

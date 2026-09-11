@@ -58,6 +58,8 @@ export type NarrativeMigrationOptions = {
   readonly signal?: AbortSignal;
   /** Explicitly re-prove the frozen sources; assignments and the first saved order remain immutable. */
   readonly refresh?: boolean;
+  /** Explicitly re-prove every frozen member, even when its recorded proof still says verified. */
+  readonly reverify?: boolean;
   /** The indexer owns reindex policy; this bounded hook is called only after a verified source check. */
   readonly onVerifiedSource?: (sourceId: string, cohortId: string) => Promise<void>;
 };
@@ -136,6 +138,10 @@ export async function runNarrativeMigrationBatch(
   deps: ChunkNarrativeDeps,
   options: NarrativeMigrationOptions,
 ): Promise<NarrativeMigrationReport> {
+  if (options.refresh && options.reverify) {
+    throw new Error('choose selective refresh or full re-verification');
+  }
+  const refreshing = options.refresh === true || options.reverify === true;
   const limit = positive(options.steps ?? NARRATIVE_MIGRATION_LIMITS.steps);
   const page = positive(options.pageSize ?? NARRATIVE_MIGRATION_LIMITS.page);
   const relations = positive(options.relationLimit ?? NARRATIVE_MIGRATION_LIMITS.relations);
@@ -145,12 +151,12 @@ export async function runNarrativeMigrationBatch(
     job === undefined ||
     (job.state === 'running' &&
       (job.retryAt === undefined || job.retryAt <= options.now.toISOString())) ||
-    (options.refresh && job.state !== 'abandoned' && job.blockedReason !== 'capture_member_bound')
+    (refreshing && job.state !== 'abandoned' && job.blockedReason !== 'capture_member_bound')
   ) {
     await deps.publications.recover();
     job = beginNarrativeMigration(deps.db, options);
-    if (options.refresh) {
-      refreshNarrativeMigration(deps.db, job, options.now);
+    if (refreshing) {
+      refreshNarrativeMigration(deps.db, job, options.now, options.reverify ? 'all' : 'unresolved');
       job = resumedJob(deps.db, options.cohortId);
     }
   }
@@ -375,8 +381,9 @@ async function step(
     } else if (result.status !== 'skipped') {
       issue(deps, job, chunkId, result.reason);
     }
-    if (scheduleMigrationPublicationRetry(deps.db, job, result, options.now)) {
-      return 'publication_retry_wait';
+    const retry = scheduleMigrationPublicationRetry(deps.db, job, result, options.now);
+    if (retry !== undefined) {
+      return retry;
     }
     advance('publish', chunkId);
     return undefined;
