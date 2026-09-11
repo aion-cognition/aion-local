@@ -2,13 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 
 import { publishChunkNarrative } from './chunk-narrative.js';
-import { measureChunkCandidates, type ChunkNarrativeDeps } from './chunk-seal.js';
+import type { ChunkNarrativeDeps } from './chunk-seal.js';
 import { runLegacyBackfillBatch } from './legacy-backfill.js';
-import {
-  cutoverSessionFamily,
-  ensureSessionFamily,
-  inventoryLegacyNarrative,
-} from './narrative-family.js';
+import { inventoryLegacyNarrative } from './narrative-family.js';
+import { migrateSessionStep } from './narrative-migration-session.js';
 import { describeError } from '../../infrastructure/errors.js';
 import { pageLegacyEpisodeCensus } from '../../infrastructure/graph/legacy-evidence-queries.js';
 import { pageLegacyNarrativeIdentities } from '../../infrastructure/graph/narrative-families.js';
@@ -18,12 +15,7 @@ import {
   countMigrationProgress,
   readMigrationCohort,
 } from '../../infrastructure/sqlite/migration-cohorts.js';
-import {
-  listMigrationRemainder,
-  sealMigrationMembership,
-  type MigrationPartitionPolicy,
-} from '../../infrastructure/sqlite/migration-partition.js';
-import { readCutoverPartition } from '../../infrastructure/sqlite/migration-session.js';
+import type { MigrationPartitionPolicy } from '../../infrastructure/sqlite/migration-partition.js';
 import {
   advanceNarrativeMigration,
   beginNarrativeMigration,
@@ -33,17 +25,11 @@ import {
   type NarrativeMigrationJob,
 } from '../../infrastructure/sqlite/narrative-migration-job.js';
 import {
-  adoptExistingMigrationChunk,
-  chosenMigrationMembers,
-  nextMigrationChunk,
-  nextMigrationSession,
-  nextMigrationSource,
-  unassignedOrderedMembers,
   migrationRemainders,
+  nextMigrationChunk,
+  nextMigrationSource,
 } from '../../infrastructure/sqlite/narrative-migration-read.js';
 import { markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
-import { checkPresentCoverage } from '../../recall/application/coverage-checker.js';
-import { decideChunkSeal } from '../domain/chunk-boundary.js';
 
 /** Each limit belongs to one batch or one existing domain operation, never to an unbounded retry loop. */
 export const NARRATIVE_MIGRATION_LIMITS = {
@@ -52,8 +38,6 @@ export const NARRATIVE_MIGRATION_LIMITS = {
   relations: 500,
   betweenStepsMs: 5000,
 } as const;
-const Position = z.strictObject({ sessionId: z.string(), members: z.number().int().nonnegative() });
-const Cursor = z.strictObject({ after: Position.optional(), allReady: z.boolean().optional() });
 
 export type NarrativeMigrationOptions = {
   readonly cohortId: string;
@@ -365,115 +349,15 @@ async function step(
     advance('publish', chunkId);
     return undefined;
   }
-  return sessionStep(deps, job, options, counts);
-}
-
-async function sessionStep(
-  deps: ChunkNarrativeDeps,
-  job: NarrativeMigrationJob,
-  options: NarrativeMigrationOptions,
-  counts: Counts,
-): Promise<string | undefined> {
-  const cursor = Cursor.parse(job.cursor === '' ? {} : JSON.parse(job.cursor));
-  const session = nextMigrationSession(deps.db, job.cohortId, cursor.after);
-  const advance = (
-    phase: NarrativeMigrationJob['phase'],
-    next: z.infer<typeof Cursor> = {},
-  ): void => {
-    advanceNarrativeMigration(deps.db, job, phase, JSON.stringify(next), options.now);
-  };
-  if (session === undefined) {
-    if (job.phase === 'partition') {
-      advanceNarrativeMigration(
-        deps.db,
-        job,
-        unassignedOrderedMembers(deps.db, job.cohortId) > 0 ? 'partition' : 'publish',
-        '',
-        options.now,
-      );
-    } else {
-      advanceNarrativeMigration(
-        deps.db,
-        job,
-        cursor.allReady === false ? 'publish' : 'complete',
-        '',
-        options.now,
-      );
-    }
-    return undefined;
-  }
-  if (job.phase === 'partition') {
-    const rows = listMigrationRemainder(
-      deps.db,
-      job.cohortId,
-      session.sessionId,
-      job.policy.maxMembers + 1,
-    );
-    const first = rows[0];
-    if (first !== undefined) {
-      const family = await ensureSessionFamily(deps, session.sessionId);
-      if (family.status === 'ready') {
-        const adoption = adoptExistingMigrationChunk(deps.db, job.cohortId, first.sourceId);
-        if (adoption.status === 'refused') {
-          for (const problem of adoption.issues) {
-            issue(deps, job, counts, problem.id, problem.reason);
-          }
-        } else if (adoption.status === 'not_sealed') {
-          const coverage = checkPresentCoverage(deps.db, options.now);
-          if (coverage.status !== 'checked') {
-            return coverage.refusal.reason;
-          }
-          const measured = await measureChunkCandidates(
-            deps,
-            rows.map((row) => ({ ...row, createdAt: row.captureOrderValue })),
-            coverage.context,
-            job.policy,
-          );
-          if (measured.status === 'refused') {
-            issue(deps, job, counts, session.sessionId, measured.reason);
-          } else {
-            const decision = decideChunkSeal({
-              remainder: measured.candidates,
-              now: options.now,
-              policy: job.policy,
-              sessionClosing: true,
-            });
-            if (decision.action === 'seal') {
-              const sealed = sealMigrationMembership(deps.db, {
-                cohortId: job.cohortId,
-                sessionId: session.sessionId,
-                at: options.now,
-                members: chosenMigrationMembers(
-                  rows,
-                  decision.members.map((member) => member.sourceId),
-                ),
-              });
-              counts.record('sealed', sealed.created ? 1 : 0);
-            }
-          }
-        }
-      } else {
-        issue(deps, job, counts, session.sessionId, family.reason);
-      }
-    }
-    advance('partition', { after: session });
-    return undefined;
-  }
-  const partition = readCutoverPartition(deps.db, job.cohortId, session.sessionId);
-  let ready = partition.reason === undefined;
-  if (ready) {
-    const result = await cutoverSessionFamily(deps, {
-      sessionId: session.sessionId,
-      cohortId: job.cohortId,
-    });
-    ready = result.status === 'acknowledged' || result.status === 'already_selected';
-    counts.record('cutovers', result.status === 'acknowledged' ? 1 : 0);
-    if (!ready && result.status !== 'acknowledged') {
-      issue(deps, job, counts, session.sessionId, result.reason);
-    }
-  } else {
-    issue(deps, job, counts, session.sessionId, partition.reason ?? 'partition_unverified');
-  }
-  advance('cutover', { after: session, allReady: (cursor.allReady ?? true) && ready });
-  return undefined;
+  return migrateSessionStep(deps, job, options.now, {
+    issue: (id, reason) => {
+      issue(deps, job, counts, id, reason);
+    },
+    sealed: (created) => {
+      counts.record('sealed', created ? 1 : 0);
+    },
+    cutover: (changed) => {
+      counts.record('cutovers', changed ? 1 : 0);
+    },
+  });
 }

@@ -1,9 +1,11 @@
+import { IsoTimestampSchema } from '@aion/protocol';
 import { z } from 'zod';
 
 import { sealChunk, type ChunkSealOutcome } from './chunk-manifest.js';
 import type { SqliteHandle } from './database.js';
 import { readMigrationCohort, recordMigrationProgress } from './migration-cohorts.js';
 import { migrationMemberProblem, RESERVED_MIGRATION_SOURCE } from './migration-membership.js';
+import { MigrationRefused } from './migration-refusal.js';
 
 export type MigrationPartitionPolicy = {
   readonly maxMembers: number;
@@ -47,13 +49,13 @@ export function rememberMigrationPolicy(
   );
   db.transaction(() => {
     if (readMigrationCohort(db, cohortId) === undefined) {
-      throw new Error('narrative migration requires a frozen cohort');
+      throw new MigrationRefused(cohortId, 'migration_cohort_missing');
     }
     const row = db
       .prepare('SELECT partition_policy_json AS policy FROM migration_cohorts WHERE cohort_id = ?')
       .get(cohortId) as { policy: string | null };
     if (row.policy !== null && row.policy !== json) {
-      throw new Error('the frozen narrative partition policy cannot change');
+      throw new MigrationRefused(cohortId, 'the frozen narrative partition policy cannot change');
     }
     db.prepare('UPDATE migration_cohorts SET partition_policy_json = ? WHERE cohort_id = ?').run(
       json,
@@ -104,13 +106,13 @@ export function rememberMigrationOrder(
       }
     | undefined;
   if (row?.status !== 'verified' || row.verification_status !== 'verified') {
-    throw new Error('migration order requires a verified frozen member');
+    throw new MigrationRefused(input.sourceId, 'migration order requires a verified frozen member');
   }
   if (row.capture_order_value !== null) {
     return;
   }
   if (row.partition_assignment !== null) {
-    throw new Error('an assigned legacy member has no saved order');
+    throw new MigrationRefused(input.sourceId, 'an assigned legacy member has no saved order');
   }
   if (input.value === undefined || input.basis === undefined) {
     if (input.gap === undefined) {
@@ -121,10 +123,11 @@ export function rememberMigrationOrder(
     ).run(input.gap, input.cohortId, input.sourceId);
     return;
   }
-  const instant = new Date(input.value);
-  if (!Number.isFinite(instant.getTime())) {
-    throw new Error('migration order is not a recorded instant');
+  const parsed = IsoTimestampSchema.safeParse(input.value);
+  if (!parsed.success) {
+    throw new MigrationRefused(input.sourceId, 'migration order is not a recorded instant');
   }
+  const instant = new Date(parsed.data);
   db.prepare(
     `UPDATE migration_progress SET capture_order_value = ?, capture_order_basis = ?, partition_gap = NULL
       WHERE cohort_id = ? AND source_id = ?`,
@@ -185,10 +188,13 @@ export function sealMigrationMembership(
 ): ChunkSealOutcome {
   const policy = readMigrationPolicy(db, input.cohortId);
   if (policy === undefined) {
-    throw new Error('migration membership requires its frozen policy');
+    throw new MigrationRefused(input.cohortId, 'migration membership requires its frozen policy');
   }
   if (input.members.length > policy.maxMembers) {
-    throw new Error('migration membership exceeds its fixed member bound');
+    throw new MigrationRefused(
+      input.sessionId,
+      'migration membership exceeds its fixed member bound',
+    );
   }
   return db
     .transaction(() => {
@@ -201,7 +207,7 @@ export function sealMigrationMembership(
           policyVersion: policy.partitionPolicyVersion,
         });
         if (problem !== undefined) {
-          throw new Error(`migration member ${member.sourceId} ${problem}`);
+          throw new MigrationRefused(member.sourceId, problem);
         }
       }
       const result = sealChunk(db, {

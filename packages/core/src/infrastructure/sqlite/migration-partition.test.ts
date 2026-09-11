@@ -131,6 +131,15 @@ describe('fixed historical partition records', () => {
     expect(listMigrationRemainder(store.db, 'cohort', 'session', 10)).toHaveLength(1);
   });
 
+  it('rejects permissive date-parser spellings without saving an invented capture time', () => {
+    for (const value of ['0', '1', 'September 1, 2026', '2026/09/01']) {
+      expect(() => {
+        order('a', value);
+      }).toThrow('recorded instant');
+    }
+    expect(listMigrationRemainder(store.db, 'cohort', 'session', 10)).toEqual([]);
+  });
+
   it('requires the publication transaction and rejects a source whose verification was withdrawn', () => {
     expect(() => {
       rememberMigrationOrder(store.db, {
