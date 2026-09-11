@@ -1,3 +1,4 @@
+import { DUE_INITIAL_CHUNK } from './chunk-publication-read.js';
 import type { SqliteHandle } from './database.js';
 import { MIGRATION_OWNED_CHUNK, RESERVED_MIGRATION_SOURCE } from './migration-membership.js';
 
@@ -82,18 +83,8 @@ export function dueChunkGroups(
                  JOIN source_records r ON r.source_id = m.source_id
                 WHERE m.chunk_id = c.chunk_id) AS capture_key
          FROM chunks c
-        WHERE c.published_revision_no IS NULL
+        WHERE ${DUE_INITIAL_CHUNK}
           AND NOT ${MIGRATION_OWNED_CHUNK}
-          AND NOT EXISTS (SELECT 1 FROM chunk_revisions b
-                           WHERE b.chunk_id = c.chunk_id
-                             AND b.state = 'allocated' AND b.blocked_reason IS NOT NULL)
-          AND (NOT EXISTS (SELECT 1 FROM chunk_revisions a
-                            WHERE a.chunk_id = c.chunk_id
-                              AND a.state = 'allocated' AND a.blocked_reason IS NULL)
-               OR EXISTS (SELECT 1 FROM chunk_revisions a
-                           WHERE a.chunk_id = c.chunk_id
-                             AND a.state = 'allocated' AND a.blocked_reason IS NULL
-                             AND COALESCE(a.next_attempt_at, a.allocated_at) <= ?))
         ORDER BY capture_key, c.chunk_id
         LIMIT ?`,
     )

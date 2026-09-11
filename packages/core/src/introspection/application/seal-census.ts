@@ -11,6 +11,7 @@ import {
   type HeadCursor,
 } from '../../infrastructure/sqlite/chunk-nomination.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { migrationHeldSources } from '../../infrastructure/sqlite/migration-held.js';
 import { getLedgerEntry, markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import { coordinatorControl } from '../../infrastructure/sqlite/publication-coordinator-store.js';
 import { NEUTRAL_SEAL_DEMAND, type SealDemand } from '../domain/health.js';
@@ -170,7 +171,7 @@ export function readSealDemand(db: SqliteHandle, input: SealCensusInput): SealDe
     });
     const remainderKeys = new Set(remainders.map((group) => group.sessionId));
     const extraInput = inputFull.filter((group) => !remainderKeys.has(group.sessionId));
-    const blocked = blockedChunkSources(db);
+    const blocked = [...blockedChunkSources(db), ...migrationHeldSources(db)];
     const held = heldRemainderMembership(db);
     const blockedSourcesByReason: Record<string, number> = {};
     for (const tally of blocked) {

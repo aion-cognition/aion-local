@@ -244,7 +244,11 @@ export function freezeNarrativeMigrationCapture(
       if (rows.length > MIGRATION_COHORT_LIMIT) {
         throw new Error('the migration cohort exceeds its metadata freeze bound');
       }
-      const members = rows.map((row) => row.source_id);
+      const eligible = rows.filter((row) => {
+        const arrived = readIngestPosition(db, row.source_id);
+        return arrived === undefined || arrived <= job.intakeWatermark;
+      });
+      const members = eligible.map((row) => row.source_id);
       freezeMigrationCohort(db, {
         cohortId: job.cohortId,
         cohortDigest: hashContent({
@@ -257,7 +261,7 @@ export function freezeNarrativeMigrationCapture(
         archiveRowidLow: job.archiveRowidLow,
         archiveRowidHigh: job.archiveRowidHigh,
         graphCensusDigest: hashContent(
-          rows.filter((row) => row.graph_seen === 1).map((row) => row.source_id),
+          eligible.filter((row) => row.graph_seen === 1).map((row) => row.source_id),
         ),
         orderingPolicyVersion: job.policy.partitionPolicyVersion,
         createdAt: now,

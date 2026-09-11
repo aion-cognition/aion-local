@@ -1,4 +1,5 @@
 import { chunkOfSource, readChunk } from './chunk-manifest.js';
+import { DUE_INITIAL_CHUNK } from './chunk-publication-read.js';
 import type { SqliteHandle } from './database.js';
 import { recordMigrationProgress } from './migration-cohorts.js';
 import { migrationMemberProblem } from './migration-membership.js';
@@ -46,14 +47,18 @@ export function nextMigrationChunk(
   db: SqliteHandle,
   cohortId: string,
   after: string,
+  now: Date,
 ): string | undefined {
   const row = db
     .prepare(
-      `SELECT DISTINCT partition_assignment AS chunk_id FROM migration_progress
-    WHERE cohort_id = ? AND partition_assignment IS NOT NULL AND partition_assignment > ?
-    ORDER BY chunk_id LIMIT 1`,
+      `SELECT c.chunk_id FROM chunks c
+    WHERE EXISTS (SELECT 1 FROM migration_progress m WHERE m.cohort_id = ? AND m.partition_assignment = c.chunk_id)
+      AND c.chunk_id > ? AND ${DUE_INITIAL_CHUNK}
+      AND NOT EXISTS (SELECT 1 FROM chunk_revisions a WHERE a.chunk_id = c.chunk_id
+        AND (a.state = 'prepared' OR (a.state = 'allocated' AND a.claim_expires_at > ?)))
+    ORDER BY c.chunk_id LIMIT 1`,
     )
-    .get(cohortId, after) as { chunk_id: string } | undefined;
+    .get(cohortId, after, now.toISOString(), now.toISOString()) as { chunk_id: string } | undefined;
   return row?.chunk_id;
 }
 

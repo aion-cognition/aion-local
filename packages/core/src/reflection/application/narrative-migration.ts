@@ -344,7 +344,7 @@ async function step(
     return undefined;
   }
   if (job.phase === 'publish') {
-    const chunkId = nextMigrationChunk(deps.db, job.cohortId, job.cursor);
+    const chunkId = nextMigrationChunk(deps.db, job.cohortId, job.cursor, options.now);
     if (chunkId === undefined) {
       advance('cutover');
       return undefined;

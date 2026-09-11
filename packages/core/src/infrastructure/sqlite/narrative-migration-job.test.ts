@@ -215,3 +215,39 @@ it('refuses a partition policy that conflicts with an older frozen cohort', () =
       .get('older'),
   ).toEqual({ partition_policy_json: null });
 });
+
+it('rechecks ingest positions at freeze while preserving genuine legacy members', () => {
+  const initial = beginNarrativeMigration(store.db, { cohortId: 'freeze', policy, now: NOW });
+  captureNarrativeMigrationPage(
+    store.db,
+    initial,
+    ['old', 'legacy', 'late-position'],
+    'captured',
+    NOW,
+  );
+  advanceNarrativeMigration(
+    store.db,
+    readNarrativeMigration(store.db, 'freeze')!,
+    'graph',
+    '',
+    NOW,
+  );
+  recordIngest(store.db, 'late-position', NOW);
+  expect(
+    freezeNarrativeMigrationCapture(store.db, readNarrativeMigration(store.db, 'freeze')!, NOW),
+  ).toBe(true);
+  expect(
+    store.db
+      .prepare('SELECT source_id FROM migration_progress WHERE cohort_id = ? ORDER BY source_id')
+      .all('freeze'),
+  ).toEqual([{ source_id: 'legacy' }, { source_id: 'old' }]);
+  expect(sourceReservedForMigration(store.db, 'late-position')).toBe(false);
+  expect(sourceReservedForMigration(store.db, 'legacy')).toBe(true);
+  expect(
+    store.db
+      .prepare(
+        'SELECT source_id FROM narrative_migration_capture WHERE cohort_id = ? AND source_id = ?',
+      )
+      .get('freeze', 'late-position'),
+  ).toBeDefined();
+});
