@@ -54,11 +54,31 @@ export function onGenerate(hook: (request: StructuredRequest) => unknown): void 
   generationHook = hook;
 }
 
-let failAt: PublicationBoundary | undefined;
+type BoundaryHook = {
+  readonly boundary: PublicationBoundary;
+  readonly match: string;
+  readonly run: () => Promise<void>;
+};
+let failAt: { boundary: PublicationBoundary; match: string } | undefined;
+let hookAt: BoundaryHook | undefined;
 
-/** Interrupts the next publication at one boundary, so recovery has something to finish. */
-export function interruptAt(boundary: PublicationBoundary | undefined): void {
-  failAt = boundary;
+/**
+ * Interrupts one publication at one boundary, so recovery has something to finish.
+ *
+ * `match` is a substring of the operation identity, because a pass publishes more than one
+ * window and an interruption that lands on whichever happens to go first is not a case.
+ */
+export function interruptAt(boundary: PublicationBoundary, match = ''): void {
+  failAt = { boundary, match };
+}
+
+/** Runs once at one boundary of one publication, so a guard can be moved underneath it. */
+export function atBoundary(
+  boundary: PublicationBoundary,
+  run: () => Promise<void>,
+  match = '',
+): void {
+  hookAt = { boundary, match, run };
 }
 
 const scripted: Provider = {
@@ -96,10 +116,15 @@ beforeAll(async () => {
     logger,
     handlers: [...INSTALLED_PUBLICATION_HANDLERS],
     now: () => NOW,
-    boundary: ({ boundary }) => {
-      if (boundary === failAt) {
+    boundary: async ({ boundary, operationId }) => {
+      if (failAt?.boundary === boundary && operationId.includes(failAt.match)) {
         failAt = undefined;
         throw new Error(`interrupted at ${boundary}`);
+      }
+      if (hookAt?.boundary === boundary && operationId.includes(hookAt.match)) {
+        const { run } = hookAt;
+        hookAt = undefined;
+        await run();
       }
     },
   });
@@ -143,6 +168,8 @@ beforeAll(async () => {
 
 beforeEach(() => {
   generationHook = undefined;
+  failAt = undefined;
+  hookAt = undefined;
   prompts = [];
 });
 

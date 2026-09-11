@@ -2,9 +2,11 @@ import type { Driver } from 'neo4j-driver';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import { rollUpNarratives } from './narrative-rollup.js';
+import type * as RollupFence from './rollup-family-fence.js';
 import type * as RollupWriter from './rollup-write.js';
 import { openLogger } from '../../infrastructure/logging/logger.js';
 import { refusingProvider } from '../../infrastructure/providers/test-support/refusing-provider.fixture.js';
+import { prepareCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 
 const seam = vi.hoisted(() => ({ members: vi.fn(), synthesize: vi.fn(), write: vi.fn() }));
@@ -17,7 +19,8 @@ vi.mock('./consolidation-synthesis.js', () => ({ synthesizeGrounded: seam.synthe
 // The window budget is what this file measures, and it drives the pass with a stub driver. A
 // proved family and a landed publication keep that measurement about the budget; both of those
 // have their own substrate cases.
-vi.mock('./rollup-family-fence.js', () => ({
+vi.mock('./rollup-family-fence.js', async (original) => ({
+  ...(await original<typeof RollupFence>()),
   proveRollupFamily: async () => ({
     status: 'proved',
     proof: { ownedIds: [], foreignHeads: [], dependencies: [] },
@@ -31,6 +34,9 @@ vi.mock('./rollup-write.js', async (original) => ({
 let store: SqliteStore;
 beforeEach(() => {
   store = new SqliteStore({ filePath: ':memory:' });
+  // The pass binds the coverage contract before its first input read, so the store it runs
+  // against carries one.
+  prepareCoverageContract(store.db, 1);
   vi.resetAllMocks();
   seam.synthesize.mockResolvedValue({
     status: 'grounded',

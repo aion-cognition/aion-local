@@ -129,18 +129,77 @@ const FIND_WINDOW_ROLLUPS = [
   `ORDER BY n.${NARRATIVE_PROPERTIES.version} DESC, n.id`,
 ].join('\n');
 
-export async function findWindowRollups(
-  driver: Driver,
-  scope: string,
-  windowKey: string,
-): Promise<WindowNarrative[]> {
-  return runRead(driver, FIND_WINDOW_ROLLUPS, { scope, windowKey }, (row: Row) => ({
+function windowRollup(row: Row): WindowNarrative {
+  return {
     id: row.id as string,
     version: typeof row.version === 'number' ? row.version : 0,
     coverageKey: typeof row.coverage_key === 'string' ? row.coverage_key : '',
     coverageCount: typeof row.coverage_count === 'number' ? row.coverage_count : 0,
     open: row.open === true,
-  }));
+  };
+}
+
+export async function findWindowRollups(
+  driver: Driver,
+  scope: string,
+  windowKey: string,
+): Promise<WindowNarrative[]> {
+  return runRead(driver, FIND_WINDOW_ROLLUPS, { scope, windowKey }, windowRollup);
+}
+
+/** The same versions, inside the publication's own transaction. */
+export function readWindowRollups(
+  tx: GraphTransaction,
+  scope: string,
+  windowKey: string,
+): Promise<WindowNarrative[]> {
+  return tx.run(FIND_WINDOW_ROLLUPS, { scope, windowKey }, windowRollup);
+}
+
+/**
+ * The members one window holds now, by the same rule the paged member read uses.
+ *
+ * The paged read walks a whole scope and groups what it finds; this asks the same question of one
+ * window, which is what a publication compares its decision against. A window that has grown a
+ * member since the decision is a different window, and the summary about to be written would
+ * claim to cover it whole.
+ */
+const READ_WINDOW_MEMBERS = [
+  'MATCH (n:Narrative)',
+  `WHERE n.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  `  AND n.${NARRATIVE_PROPERTIES.scope} = $scope`,
+  `  AND n.${BITEMPORAL_PROPERTIES.occurredAt} >= $start`,
+  `  AND n.${BITEMPORAL_PROPERTIES.occurredAt} < $end`,
+  `  AND (n.${BITEMPORAL_PROPERTIES.validUntil} IS NULL`,
+  `       OR EXISTS { (r:Narrative)-[:${SUPERSEDES_TYPE}]->(n)`,
+  `                   WHERE r.${NARRATIVE_PROPERTIES.scope} = $rollupScope })`,
+  `RETURN n.id AS id ORDER BY n.${BITEMPORAL_PROPERTIES.occurredAt}, n.id`,
+  'LIMIT $limit',
+].join('\n');
+
+export type WindowMemberInput = {
+  readonly scope: string;
+  readonly rollupScope: string;
+  readonly start: Date;
+  readonly end: Date;
+  readonly limit: number;
+};
+
+export function readWindowMembers(
+  tx: GraphTransaction,
+  input: WindowMemberInput,
+): Promise<readonly string[]> {
+  return tx.run(
+    READ_WINDOW_MEMBERS,
+    {
+      scope: input.scope,
+      rollupScope: input.rollupScope,
+      start: toGraphDateTime(input.start),
+      end: toGraphDateTime(input.end),
+      limit: toGraphInteger(input.limit),
+    },
+    (row: Row) => row.id as string,
+  );
 }
 
 /**
@@ -249,6 +308,18 @@ export async function findOpenNarratives(
     return [];
   }
   return runRead(driver, FIND_OPEN_NARRATIVES, { ids: unique }, (row: Row) => row.id as string);
+}
+
+/** The same standing set, inside the publication's own transaction. */
+export function readOpenNarratives(
+  tx: GraphTransaction,
+  ids: readonly string[],
+): Promise<readonly string[]> {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) {
+    return Promise.resolve([]);
+  }
+  return tx.run(FIND_OPEN_NARRATIVES, { ids: unique }, (row: Row) => row.id as string);
 }
 
 export type NarrativeBody = {

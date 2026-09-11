@@ -1,6 +1,10 @@
 import { synthesizeGrounded } from './consolidation-synthesis.js';
 import { readMemberCursor, nextMemberCursor, writeMemberCursor } from './rollup-cursor.js';
-import { proveRollupFamily } from './rollup-family-fence.js';
+import {
+  bindRollupCoverage,
+  proveRollupFamily,
+  type RollupCoverageBinding,
+} from './rollup-family-fence.js';
 import { publishCalendarRollup } from './rollup-publish.js';
 import { attachVector, type RollupWriteDeps } from './rollup-write.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
@@ -164,6 +168,7 @@ async function rollUpWindow(
   settings: RollupSettings,
   window: RollupWindow,
   existing: readonly WindowNarrative[],
+  coverage: RollupCoverageBinding,
 ): Promise<WindowResult> {
   const memberScope = rollupMemberScope(settings.scope);
   // Before the decision, and over the COMPLETE population a publication here would touch: the
@@ -175,6 +180,7 @@ async function rollUpWindow(
     windowKey: window.key,
     memberIds: window.members.map((member) => member.id),
     headIds: existing.map((rollup) => rollup.id),
+    coverage,
     now: settings.now,
   });
   if (proof.status === 'refused') {
@@ -195,6 +201,19 @@ async function rollUpWindow(
   const rollupId = rollupNodeId(settings.scope, window.key, decision.coverageKey);
   const span = narrativeSpan(window.members);
   const occurredAt = span.end ?? window.start;
+  // What the decision was taken over, carried into the intent so the guard can ask whether it is
+  // still the window. Owned versions only: another family's node is not a version here.
+  const bound = {
+    scope: settings.scope,
+    windowKey: window.key,
+    memberIds: window.members.map((member) => member.id),
+    windowStart: window.start,
+    windowEnd: window.end,
+    memberScope,
+    expectedHeads: versions.map((rollup) => rollup.id),
+    coverage,
+    proof: proof.proof,
+  } as const;
 
   if (decision.action === 'skip') {
     // The repair a crash between the node write and its supersession leaves behind: the open
@@ -212,14 +231,13 @@ async function rollUpWindow(
       return { outcome: 'skipped', absorbed: 0 };
     }
     const repaired = await publishCalendarRollup(deps, {
+      ...bound,
       mode: 'repair',
-      scope: settings.scope,
-      windowKey: window.key,
       nodeId: rollupId,
       version: decision.version,
       coverageKey: decision.coverageKey,
-      memberIds: [],
       closes,
+      openCloses: closes,
       summary: '',
       narrative: '',
       citations: [],
@@ -227,7 +245,6 @@ async function rollUpWindow(
       spanStart: null,
       spanEnd: null,
       occurredAt,
-      proof: proof.proof,
     });
     return repaired.status === 'acknowledged'
       ? { outcome: 'skipped', absorbed: 0 }
@@ -290,15 +307,17 @@ async function rollUpWindow(
   // The guard opens here and not before: the summary is written, its members absorbed and their
   // edges closed inside one publication whose precondition is the family proof above. A cutover
   // acknowledged while the model was working moves that proof's scope, and this lands nothing.
+  const closes = [...new Set([...decision.supersedes, ...decision.episodeIds])].filter(
+    (id) => id !== rollupId,
+  );
   const landed = await publishCalendarRollup(deps, {
+    ...bound,
     mode: 'publish',
-    scope: settings.scope,
-    windowKey: window.key,
     nodeId: rollupId,
     version: decision.version,
     coverageKey: decision.coverageKey,
-    memberIds: decision.episodeIds,
-    closes: [...decision.supersedes, ...decision.episodeIds],
+    closes,
+    openCloses: await findOpenNarratives(deps.driver, closes),
     summary: synthesis.grounded.summary,
     narrative: synthesis.grounded.narrative,
     citations: synthesis.grounded.citations,
@@ -306,7 +325,6 @@ async function rollUpWindow(
     spanStart: span.start ?? null,
     spanEnd: span.end ?? null,
     occurredAt,
-    proof: proof.proof,
   });
   if (landed.status !== 'acknowledged') {
     return { outcome: 'fenced', absorbed: 0, blockedReason: landed.reason, spent: true };
@@ -329,6 +347,20 @@ async function rollUpWindow(
   return { outcome: 'created', absorbed };
 }
 
+function empty(scope: RollupScope): RollupReport {
+  return {
+    scope,
+    windows: 0,
+    created: 0,
+    skipped: 0,
+    vetoed: 0,
+    failed: 0,
+    blocked: 0,
+    fenced: 0,
+    absorbed: 0,
+  };
+}
+
 /**
  * One scope's rollup pass. Finding nothing is the ordinary answer on a young substrate: a day
  * rollup needs a day that has ended with session narratives inside it, and a week rollup needs
@@ -341,6 +373,13 @@ export async function rollUpNarratives(
 ): Promise<RollupReport> {
   const settings = settingsOf(options, deps.provider);
   const memberScope = rollupMemberScope(settings.scope);
+  // Bound before the first input read and carried through the proof, the request and the intent.
+  // A contract read later is a different question from the one these members answered, and a
+  // control record nobody can read is a reason for a sweep to stop rather than to guess.
+  const coverage = deps.db === undefined ? undefined : bindRollupCoverage(deps.db, settings.now);
+  if (coverage === undefined) {
+    return empty(settings.scope);
+  }
   const cursor = readMemberCursor(deps.db, settings.scope);
   let members = await findRollupMembers(deps.driver, {
     scope: memberScope,
@@ -408,7 +447,7 @@ export async function rollUpNarratives(
       continue;
     }
     const existing = await findWindowRollups(deps.driver, settings.scope, window.key);
-    const result = await rollUpWindow(deps, settings, window, existing);
+    const result = await rollUpWindow(deps, settings, window, existing, coverage);
     absorbed += result.absorbed;
     // A fence that turned the window away AFTER the synthesis still spent the call it is there
     // to save, so that one is charged and the free refusals are not.

@@ -15,7 +15,10 @@ import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
 import type { EvidenceDependency } from '../../infrastructure/publication/preconditions.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { checkPresentCoverage } from '../../recall/application/coverage-checker.js';
+import {
+  checkPresentCoverage,
+  type CheckedReadContext,
+} from '../../recall/application/coverage-checker.js';
 import type { RollupScope } from '../domain/rollup.js';
 
 /**
@@ -47,6 +50,26 @@ export const ROLLUP_FAMILY_SCAN_LIMIT = EVIDENCE_LIMITS.requestedIds;
 /** Sessions one window may initialize through the producer before it gives up on the window. */
 export const ROLLUP_FAMILY_INITIALIZE_LIMIT = 64;
 
+/**
+ * The contract one pass reads everything under.
+ *
+ * Bound once, before the first input read, and carried through the proof, the request and the
+ * intent. A contract read after the synthesis is a different question from the one the input
+ * answered, and putting that later epoch in the intent asks the coordinator to validate a
+ * binding no read was taken under.
+ */
+export type RollupCoverageBinding = {
+  readonly epoch: string;
+  readonly context: CheckedReadContext;
+};
+
+export function bindRollupCoverage(db: SqliteHandle, now: Date): RollupCoverageBinding | undefined {
+  const coverage = checkPresentCoverage(db, now);
+  return coverage.status === 'checked'
+    ? { epoch: coverage.context.coverageEpoch, context: coverage.context }
+    : undefined;
+}
+
 export type RollupFenceDeps = {
   readonly driver: Driver;
   readonly db?: SqliteHandle;
@@ -57,6 +80,8 @@ export type RollupFenceDeps = {
 export type RollupFenceInput = {
   readonly scope: RollupScope;
   readonly windowKey: string;
+  /** The binding taken before the member read, not one this proof takes for itself. */
+  readonly coverage: RollupCoverageBinding;
   /** What the window covers, which this pass would publish over and absorb. */
   readonly memberIds: readonly string[];
   /** Every version the window already carries, which this pass would close or leave alone. */
@@ -138,12 +163,6 @@ export async function proveRollupFamily(
   if (candidates.length === 0) {
     return { status: 'proved', proof: { ownedIds: [], foreignHeads: [], dependencies: [] } };
   }
-  const coverage = checkPresentCoverage(db, input.now);
-  if (coverage.status !== 'checked') {
-    // A control record nobody can read leaves every family answer unqualified, which is a reason
-    // for a sweep to stop rather than to publish over the question.
-    return refuse(deps, input, 'coverage_unavailable', candidates);
-  }
   const expanded = await expand(deps, candidates);
   if (typeof expanded === 'string') {
     return refuse(deps, input, expanded, candidates);
@@ -153,7 +172,7 @@ export async function proveRollupFamily(
     readNarrativeRepresentations(
       { db, driver: deps.driver },
       expanded.identities,
-      coverage.context,
+      input.coverage.context,
       new RequestBudget(),
     );
   const first = await read();

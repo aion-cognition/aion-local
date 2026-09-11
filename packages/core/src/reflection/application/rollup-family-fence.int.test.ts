@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 
 import { publishChunkNarrative } from './chunk-narrative.js';
-import { readFamilyFence } from './family-fence.js';
+import { acknowledgeFamilyAdvance, prepareFamilyAdvance, readFamilyFence } from './family-fence.js';
 import {
   freezeLegacyCohort,
   runLegacyBackfillBatch,
@@ -9,7 +9,12 @@ import {
 } from './legacy-backfill.js';
 import { cutoverSessionFamily, ensureSessionFamily } from './narrative-family.js';
 import { rollUpNarratives } from './narrative-rollup.js';
-import { proveRollupFamily } from './rollup-family-fence.js';
+import { closeSessionNarrative } from './narratives.js';
+import {
+  bindRollupCoverage,
+  proveRollupFamily,
+  type RollupCoverageBinding,
+} from './rollup-family-fence.js';
 import {
   acceptSource,
   chunks,
@@ -20,6 +25,11 @@ import {
   sessionOf,
   store,
 } from './test-support/t10b-review.fixture.js';
+import {
+  readRelationScope,
+  verifyEvidenceRevision,
+} from '../../evidence/application/dependencies.js';
+import { nodeRoleScope } from '../../evidence/domain/scopes.js';
 import { BITEMPORAL_PROPERTIES, writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
 import { upsertEdge } from '../../infrastructure/graph/edges.js';
 import {
@@ -38,6 +48,7 @@ import {
 } from '../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import { openLogger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
+import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
 import { sealChunk } from '../../infrastructure/sqlite/chunk-manifest.js';
 import { readFamilySelection } from '../../infrastructure/sqlite/family-selection.js';
 import { recordMigrationProgress } from '../../infrastructure/sqlite/migration-cohorts.js';
@@ -83,6 +94,15 @@ const provider: Provider = {
     return during === undefined ? Promise.resolve(answer) : during().then(() => answer);
   },
 };
+
+/** The binding the pass takes before its member read, which a direct proof call has to supply. */
+function bound(): RollupCoverageBinding {
+  const held = bindRollupCoverage(store.db, NOW);
+  if (held === undefined) {
+    throw new Error('the fixture substrate has no readable coverage contract');
+  }
+  return held;
+}
 
 function deps() {
   return {
@@ -183,6 +203,7 @@ it('rolls a live legacy session up exactly as before its family was recorded', a
         windowKey: '2026-09-02',
         memberIds: [LIVE.node],
         headIds: [],
+        coverage: bound(),
         now: NOW,
       })
     ).status,
@@ -251,6 +272,7 @@ it('publishes nothing over a session whose family moved while the synthesis was 
       windowKey: '2026-09-04',
       memberIds: [RACED.node],
       headIds: [],
+      coverage: bound(),
       now: NOW,
     }),
   ).toMatchObject({ status: 'refused', reason: 'legacy_family_changed' });
@@ -287,6 +309,7 @@ it('refuses the week over a day summary whose own ancestry was retired, and move
       windowKey: '2026-W37',
       memberIds: [summaryId],
       headIds: [],
+      coverage: bound(),
       now: NOW,
     }),
   ).toMatchObject({ status: 'refused', reason: 'legacy_family_changed' });
@@ -345,6 +368,7 @@ it('never carries a node of the signed overview family into a legacy week summar
       windowKey: '2026-W38',
       memberIds: ['signed-day-overview'],
       headIds: [],
+      coverage: bound(),
       now: NOW,
     }),
   ).toMatchObject({ status: 'refused', reason: 'legacy_family_foreign' });
@@ -404,7 +428,7 @@ it('finishes an interrupted calendar publication on recovery, once', async () =>
     text: 'This window is interrupted between its graph commit and its acknowledgment.',
   });
   expect((await ensureSessionFamily(chunks, sessionId)).status).toBe('ready');
-  interruptAt('before_ack');
+  interruptAt('before_ack', 'calendar-rollup:day:2026-09-12');
 
   const interrupted = await rollUpNarratives(deps(), {
     scope: 'day',
@@ -431,4 +455,135 @@ it('finishes an interrupted calendar publication on recovery, once', async () =>
   });
   expect(settled.created).toBe(0);
   expect(await findWindowRollups(driver, 'day', '2026-09-12')).toHaveLength(1);
+});
+
+/** What the durable record says about one raw source's coverage of one narrative. */
+function incidence(sourceId: string, nodeId: string): unknown {
+  return store.db
+    .prepare(
+      "SELECT currency FROM source_incidence WHERE source_id = ? AND node_id = ? AND role = 'source_coverage'",
+    )
+    .get(sourceId, nodeId);
+}
+
+it('releases the durable coverage it prepared when recovery turns the attempt away', async () => {
+  const at = new Date('2026-11-02T06:00:00.000Z');
+  const sourceId = await acceptSource('fence-discard', 'the discarded attempt', true, at);
+  const sessionId = sessionOf(sourceId);
+  await seedLegacy({
+    nodeId: 'legacy-discard-original',
+    sessionId,
+    sourceId,
+    occurredAt: at,
+    text: 'The original legacy version precedes its controlled rewrite.',
+  });
+  const legacy = await closeSessionNarrative({ ...deps(), resolver: chunks.resolver }, sessionId, {
+    now: at,
+    regenerate: true,
+  });
+  expect(legacy.status).toBe('created');
+  const nodeId = legacy.narrativeId ?? '';
+  const scope = readRelationScope(store.db, {
+    kind: 'relation_scope',
+    endpointId: nodeId,
+    scope: nodeRoleScope('source_coverage'),
+    empty: false,
+  });
+  if (scope.status !== 'verified') {
+    throw new Error('the real legacy producer must establish coverage first');
+  }
+  const before = buildEvidenceRevision([scope.dependency]);
+  expect(verifyEvidenceRevision(store.db, before).status).toBe('current');
+  expect(incidence(sourceId, nodeId)).toEqual({ currency: 'open' });
+
+  // Interrupted after its durable changes were prepared and before anything was applied.
+  interruptAt('prepared', 'calendar-rollup:day:2026-11-02');
+  await rollUpNarratives(deps(), {
+    scope: 'day',
+    now: new Date('2026-11-03T06:00:00.000Z'),
+    windowLimit: 3,
+    renderedInputAllowance: 32768,
+  });
+  expect(await findWindowRollups(driver, 'day', '2026-11-02')).toEqual([]);
+  expect(incidence(sourceId, nodeId)).toEqual({ currency: 'open' });
+
+  // Another writer advances the family selection that attempt's proof rested on, so the recovery
+  // re-check turns it away rather than finishing it.
+  prepareFamilyAdvance(store.db, sessionId, 'review-peer-family-advance', at);
+  acknowledgeFamilyAdvance(store.db, sessionId, 'review-peer-family-advance', at.toISOString());
+  expect((await publications.recover())?.status).toBe('deferred');
+
+  // Nothing published, and the durable record the discarded attempt had prepared is exactly
+  // where it was: still open, with the proof issued against it still current.
+  expect(await findWindowRollups(driver, 'day', '2026-11-02')).toEqual([]);
+  expect(incidence(sourceId, nodeId)).toEqual({ currency: 'open' });
+  expect(verifyEvidenceRevision(store.db, before).status).toBe('current');
+  expect(await edgeValidUntil(driver, SUMMARIZED_BY_TYPE, sourceId, nodeId)).toBeUndefined();
+
+  // And it left nothing parked on those scopes: the next attempt prepares the same coverage
+  // advances and lands, which a discarded attempt's residue would refuse.
+  await rollUpNarratives(deps(), {
+    scope: 'day',
+    now: new Date('2026-11-03T06:00:00.000Z'),
+    windowLimit: 3,
+    renderedInputAllowance: 32768,
+  });
+  expect(await findWindowRollups(driver, 'day', '2026-11-02')).toHaveLength(1);
+  expect(incidence(sourceId, nodeId)).toEqual({ currency: 'closed' });
+  expect(verifyEvidenceRevision(store.db, before).status).toBe('stale');
+});
+
+it('retires the durable coverage of what it absorbs only when the publication is acknowledged', async () => {
+  const at = new Date('2026-11-10T06:00:00.000Z');
+  const sourceId = await acceptSource(
+    'fence-durable-recovery',
+    'the interrupted coverage',
+    true,
+    at,
+  );
+  const sessionId = sessionOf(sourceId);
+  await seedLegacy({
+    nodeId: 'legacy-durable-recovery-original',
+    sessionId,
+    sourceId,
+    occurredAt: at,
+    text: 'The original legacy version precedes its controlled rewrite.',
+  });
+  const legacy = await closeSessionNarrative({ ...deps(), resolver: chunks.resolver }, sessionId, {
+    now: at,
+    regenerate: true,
+  });
+  expect(legacy.status).toBe('created');
+  const nodeId = legacy.narrativeId ?? '';
+  const scope = readRelationScope(store.db, {
+    kind: 'relation_scope',
+    endpointId: nodeId,
+    scope: nodeRoleScope('source_coverage'),
+    empty: false,
+  });
+  if (scope.status !== 'verified') {
+    throw new Error('the real legacy producer must establish coverage first');
+  }
+  const before = buildEvidenceRevision([scope.dependency]);
+  interruptAt('before_ack', 'calendar-rollup:day:2026-11-10');
+
+  await rollUpNarratives(deps(), {
+    scope: 'day',
+    now: new Date('2026-11-11T06:00:00.000Z'),
+    windowLimit: 3,
+    renderedInputAllowance: 32768,
+  });
+
+  // The graph mutation committed, the acknowledgment did not, and a prepared durable change is
+  // not a committed one: the record still reads open and the issued proof still verifies.
+  expect(await edgeValidUntil(driver, SUMMARIZED_BY_TYPE, sourceId, nodeId)).toBeInstanceOf(Date);
+  expect(incidence(sourceId, nodeId)).toEqual({ currency: 'open' });
+  expect(verifyEvidenceRevision(store.db, before).status).toBe('current');
+
+  expect((await publications.recover())?.status).toBe('acknowledged');
+
+  expect(incidence(sourceId, nodeId)).toEqual({ currency: 'closed' });
+  expect(verifyEvidenceRevision(store.db, before).status).toBe('stale');
+  expect(await edgeValidUntil(driver, SUMMARIZED_BY_TYPE, sourceId, nodeId)).toBeInstanceOf(Date);
+  expect(await findWindowRollups(driver, 'day', '2026-11-10')).toHaveLength(1);
 });

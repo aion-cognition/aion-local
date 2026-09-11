@@ -1,7 +1,11 @@
 import type { Driver } from 'neo4j-driver';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
-import { proveRollupFamily, ROLLUP_FAMILY_SCAN_LIMIT } from './rollup-family-fence.js';
+import {
+  bindRollupCoverage,
+  proveRollupFamily,
+  ROLLUP_FAMILY_SCAN_LIMIT,
+} from './rollup-family-fence.js';
 import type { NarrativeRepresentation } from '../../evidence/application/narrative-representation.js';
 import { openLogger } from '../../infrastructure/logging/logger.js';
 import { prepareCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
@@ -59,6 +63,17 @@ async function fenceWith(
       windowKey: '2026-04-02',
       memberIds,
       headIds: [],
+      coverage: {
+        epoch: 'epoch-under-test',
+        context: {
+          mode: {},
+          now: new Date('2026-04-06T00:00:00Z'),
+          coverageEpoch: 'epoch-under-test',
+          contractVersion: 1,
+          fieldPolicyVersion: 1,
+          coverageState: 'preparing',
+        },
+      },
       now: new Date('2026-04-06T00:00:00Z'),
     },
   );
@@ -86,8 +101,10 @@ it('refuses a window it has no store to prove the family against', async () => {
   expect(await fenceWith({}, ['member-1'])).toBe('family_fence_unavailable');
 });
 
-it('refuses a window whose substrate cannot say what it covers', async () => {
-  expect(await fence(['member-1'])).toBe('coverage_unavailable');
+it('takes no binding from a substrate that cannot say what it covers', async () => {
+  // The binding moved ahead of the member read, so this is where the same refusal lives now: a
+  // pass with no readable contract never reaches a proof, and never reaches the adapter.
+  expect(bindRollupCoverage(store.db, new Date('2026-04-06T00:00:00Z'))).toBeUndefined();
   expect(seam.read).not.toHaveBeenCalled();
 });
 

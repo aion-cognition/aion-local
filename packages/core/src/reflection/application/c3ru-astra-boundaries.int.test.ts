@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { cutOver, deps, seedLegacy } from './c3ru-astra.fixture.js';
 import { ensureSessionFamily } from './narrative-family.js';
 import { rollUpNarratives } from './narrative-rollup.js';
-import { proveRollupFamily } from './rollup-family-fence.js';
+import { bindRollupCoverage, proveRollupFamily } from './rollup-family-fence.js';
 import * as publishing from './rollup-publish.js';
 import {
   acceptSource,
@@ -21,6 +21,15 @@ import {
 } from '../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import { rollupNodeId } from '../domain/consolidation.js';
 import { coverageKey } from '../domain/narrative.js';
+
+/** The binding the pass takes before its member read, which a direct proof call has to supply. */
+function binding() {
+  const held = bindRollupCoverage(store.db, NOW);
+  if (held === undefined) {
+    throw new Error('the fixture substrate has no readable coverage contract');
+  }
+  return held;
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -72,6 +81,7 @@ it('refuses an unreadable family registry instead of treating a cutover source a
           windowKey: '2026-09-04',
           memberIds: ['last-fence-member'],
           headIds: [],
+          coverage: binding(),
           now: NOW,
         })
       ).status,

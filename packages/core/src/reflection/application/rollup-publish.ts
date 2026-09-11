@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
-import type { RollupFamilyProof } from './rollup-family-fence.js';
+import type { RollupCoverageBinding, RollupFamilyProof } from './rollup-family-fence.js';
 import type { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
-import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import type { RollupScope } from '../domain/rollup.js';
 
@@ -33,6 +32,15 @@ export type CalendarRollupRequest = {
   readonly spanStart: Date | null;
   readonly spanEnd: Date | null;
   readonly occurredAt: Date;
+  /** The window this summary covers, so the guard can ask what it holds now. */
+  readonly windowStart: Date;
+  readonly windowEnd: Date;
+  readonly memberScope: string;
+  /** Every owned version the window carried when the decision was taken. */
+  readonly expectedHeads: readonly string[];
+  /** Which of the closure targets were standing then. */
+  readonly openCloses: readonly string[];
+  readonly coverage: RollupCoverageBinding;
   readonly proof: RollupFamilyProof;
 };
 
@@ -60,19 +68,17 @@ export async function publishCalendarRollup(
   deps: CalendarRollupDeps,
   request: CalendarRollupRequest,
 ): Promise<CalendarRollupOutcome> {
-  const { db, publications } = deps;
-  if (db === undefined || publications === undefined) {
+  const { publications } = deps;
+  if (deps.db === undefined || publications === undefined) {
     return { status: 'refused', reason: 'calendar_publisher_unavailable' };
-  }
-  const coverage = readCurrentCoverageContract(db);
-  if (coverage === undefined) {
-    return { status: 'refused', reason: 'coverage_unavailable' };
   }
   // A fresh identity per attempt. A refused attempt is immutable, and a window whose prerequisite
   // was repaired comes back as a new operation rather than reusing a settled one.
   const outcome = await settle(publications, {
     kind: 'calendar_rollup_publish',
-    operationId: `calendar-rollup:${randomUUID()}`,
+    // The window travels in the identity: an attempt is one window's, and a receipt that names
+    // which one is what makes a pending operation legible without opening its payload.
+    operationId: `calendar-rollup:${request.scope}:${request.windowKey}:${randomUUID()}`,
     payload: {
       mode: request.mode,
       scope: request.scope,
@@ -89,7 +95,14 @@ export async function publishCalendarRollup(
       spanStart: request.spanStart?.toISOString() ?? null,
       spanEnd: request.spanEnd?.toISOString() ?? null,
       occurredAt: request.occurredAt.toISOString(),
-      coverageEpoch: coverage.epoch,
+      windowStart: request.windowStart.toISOString(),
+      windowEnd: request.windowEnd.toISOString(),
+      memberScope: request.memberScope,
+      expectedHeads: [...request.expectedHeads].sort(),
+      openCloses: [...request.openCloses].sort(),
+      // The epoch the inputs were read under, carried rather than re-read: the coordinator
+      // validates the binding this attempt actually used.
+      coverageEpoch: request.coverage.epoch,
       ownedIds: [...request.proof.ownedIds],
       dependencies: request.proof.dependencies.map((dependency) => ({ ...dependency })),
     },
