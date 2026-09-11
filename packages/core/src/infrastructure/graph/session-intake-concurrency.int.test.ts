@@ -88,8 +88,8 @@ it('two whole client flows at once, as the service runs them', async () => {
 /**
  * The chain the member's sessions form, over every session this file created: the sequential
  * arm, both sides of every concurrent pair, and one last burst created in one go. A fork shows
- * up as a session two others follow, a cycle as a session reachable from itself, and a lost
- * update as a second session nothing follows.
+ * up as a session two others follow, a lost update as a second session nothing follows, and a
+ * cycle as a session the walk from the head never reaches.
  */
 it('leaves one unforked, acyclic chain under concurrent session creation', async () => {
   const now = new Date();
@@ -116,13 +116,6 @@ it('leaves one unforked, acyclic chain under concurrent session creation', async
     }),
   );
 
-  const cycles = await runRead(
-    probe.substrate.harness.driver,
-    'MATCH path = (s:Session)-[:FOLLOWS*1..40]->(s) RETURN count(path) AS c',
-    {},
-    (row) => row.c as number,
-  );
-
   expect(links.length).toBeGreaterThanOrEqual(
     SEQUENTIAL_ATTEMPTS + CONCURRENT_ATTEMPTS * 2 + CONCURRENT_CREATIONS,
   );
@@ -130,5 +123,24 @@ it('leaves one unforked, acyclic chain under concurrent session creation', async
   expect(links.filter((link) => link.incoming > 1)).toEqual([]);
   expect(links.filter((link) => link.outgoing === 0)).toHaveLength(1);
   expect(links.filter((link) => link.incoming === 0)).toHaveLength(1);
-  expect(cycles).toEqual([0]);
+
+  // Reachability over the whole fixture rather than a cycle search to some chosen depth. The
+  // degree checks above leave only paths and cycles, so walking from the one session nothing
+  // follows to the one that follows nothing and counting what the walk passes is the bound: a
+  // session on a disjoint cycle is not on that walk however long the cycle is, and the count
+  // comes up short. A fixed depth would only have ruled out cycles shorter than itself.
+  const head = links.find((link) => link.incoming === 0);
+  const reached = await runRead(
+    probe.substrate.harness.driver,
+    [
+      'MATCH (head:Session { id: $headId })',
+      'MATCH path = (head)-[:FOLLOWS*0..]->(tail:Session)',
+      'WHERE NOT (tail)-[:FOLLOWS]->()',
+      'RETURN length(path) + 1 AS reached',
+    ].join('\n'),
+    { headId: head?.id ?? '' },
+    (row) => row.reached as number,
+  );
+
+  expect(reached).toEqual([links.length]);
 }, 300_000);
