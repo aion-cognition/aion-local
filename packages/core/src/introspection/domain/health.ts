@@ -175,6 +175,35 @@ export type SealDemand = {
   readonly diagnostic?: string;
 };
 
+/**
+ * What the substrate could evict now, and what it already owes an eviction that committed.
+ *
+ * The two halves are read independently and neither stands in for the other. A census nobody
+ * could take is `unavailable`, which is not zero eligible sources: scoring an unreadable reading
+ * as no demand would quietly stop the operation, and scoring it as demand would run it on a
+ * population nobody counted. Work a committed receipt already created is known from durable
+ * records alone, so it survives a census failure and still calls for the run that discharges it.
+ */
+export type EvictionDemand = {
+  /** Sources that pass every durable eligibility condition now. `undefined` when the census failed. */
+  readonly eligibleSources: number | undefined;
+  readonly eligibleTurns: number | undefined;
+  /**
+   * Archived payload bytes behind the eligible sources. An estimate of what the raw text weighs,
+   * never a claim about released disk space or a page cache: C0 measures those separately.
+   */
+  readonly estimatedBytes: number | undefined;
+  readonly oldestQualifiedAgeMs: number | undefined;
+  /** Sources the scan examined and refused, by the condition that refused them. */
+  readonly pinsByReason: Readonly<Record<string, number>>;
+  /** Survivor tasks an acknowledged eviction made runnable and nothing has discharged. */
+  readonly pendingSurvivorWork: number | undefined;
+  /** A durable publication the coordinator prepared and has not settled. */
+  readonly pendingRecovery: boolean | undefined;
+  readonly availability: 'measured' | 'unavailable';
+  readonly diagnostic?: string;
+};
+
 export type PlasticityHealth = {
   readonly reinforcementQueueDepth: number;
   readonly reinforcementLastRunAt: string | undefined;
@@ -213,6 +242,7 @@ export type HealthSnapshot = {
   readonly proposals: ProposalHealth;
   readonly entities: EntityHealth;
   readonly narrativeSeal: SealDemand;
+  readonly eviction: EvictionDemand;
   readonly plasticity: PlasticityHealth;
   readonly generation: GenerationHealth;
   readonly effectiveness: readonly OperationEffectiveness[];
@@ -232,6 +262,7 @@ export const HEALTH_COLLECTORS = {
   proposals: 'proposals',
   entities: 'entities',
   narrativeSeal: 'narrative_seal',
+  eviction: 'eviction',
   plasticity: 'plasticity',
   generation: 'generation',
   effectiveness: 'effectiveness',
@@ -305,6 +336,18 @@ export const NEUTRAL_SEAL_DEMAND: SealDemand = {
   diagnostic: 'the narrative manifest was not read on this tick',
 };
 
+export const NEUTRAL_EVICTION_DEMAND: EvictionDemand = {
+  eligibleSources: undefined,
+  eligibleTurns: undefined,
+  estimatedBytes: undefined,
+  oldestQualifiedAgeMs: undefined,
+  pinsByReason: {},
+  pendingSurvivorWork: undefined,
+  pendingRecovery: undefined,
+  availability: 'unavailable',
+  diagnostic: 'the eviction census was not read on this tick',
+};
+
 export const NEUTRAL_GENERATION_HEALTH: GenerationHealth = {
   calls: 0,
   failed: 0,
@@ -333,6 +376,7 @@ export function neutralSnapshot(cycle: number, observedAt: string): HealthSnapsh
     proposals: NEUTRAL_PROPOSAL_HEALTH,
     entities: NEUTRAL_ENTITY_HEALTH,
     narrativeSeal: NEUTRAL_SEAL_DEMAND,
+    eviction: NEUTRAL_EVICTION_DEMAND,
     plasticity: NEUTRAL_PLASTICITY_HEALTH,
     generation: NEUTRAL_GENERATION_HEALTH,
     effectiveness: [],

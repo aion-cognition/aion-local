@@ -232,6 +232,19 @@ export const MAINTENANCE_KNOBS = {
   // drains a historical partition carries a budget of its own and does not spend this one.
   // MEASUREMENT STATUS: unmeasured, on C0's list beside the allowance above.
   narrativeSealBatch: ['AION_MAINTENANCE_NARRATIVE_SEAL_BATCH', positiveInt, 2],
+  // How long a source's complete coverage has to stand before its raw projection may go, measured
+  // from the LATEST of proved acceptance, the acknowledgment of its complete chunk revision, and
+  // the settlement of its newest accepted reference. Anchoring on the newest of the three is what
+  // makes the wait elapsed validation time on the coverage in force: a correction, a late
+  // reference or a live observation gets a day to contradict an interpretation while the evidence
+  // behind it is still resident. Recorded clocks only, never `occurred_at`.
+  // MEASUREMENT STATUS: proposed, unmeasured. C0 reports its throughput effect.
+  episodeEvictMinAgeMs: ['AION_MAINTENANCE_EPISODE_EVICT_MIN_AGE_MS', positiveInt, 86_400_000],
+  // `episode_evict`'s bound: attempts one invocation makes, one source each. Eight independent
+  // guarded attempts, never one transaction over eight sources, and the migration job that drains
+  // a historical cohort carries a budget of its own rather than spending this one.
+  // MEASUREMENT STATUS: proposed, unmeasured, on C0's list with the internal attempt bounds.
+  episodeEvictBatch: ['AION_MAINTENANCE_EPISODE_EVICT_BATCH', positiveInt, 8],
   // The kill switch both narrative rollup scopes read. On by default, which is what acting from
   // day one means for an operation whose whole risk is reversible: every rollup is a
   // supersession, and `aion unsupersede` reopens any member it closed. Off leaves a day and a

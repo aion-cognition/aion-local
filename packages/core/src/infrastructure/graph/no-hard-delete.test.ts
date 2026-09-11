@@ -14,15 +14,23 @@ const THIS_FILE = fileURLToPath(import.meta.url);
 const HARNESS_FIXTURE = fileURLToPath(
   new URL('./test-support/neo4j-harness.fixture.ts', import.meta.url),
 );
+const EVICTION_MODULE = fileURLToPath(new URL('./episode-eviction.ts', import.meta.url));
 
 /**
- * The scan skips two files and no others. This one has to name the patterns it forbids. The
+ * The scan skips three files and no others. This one has to name the patterns it forbids. The
  * harness fixture clears the test database that integration files share, which is the one
  * deletion in the workspace that is not a write to memory: no product code can reach it, and
- * correcting a real fact still supersedes it. The test below pins the list, so a third entry
- * cannot land quietly.
+ * correcting a real fact still supersedes it.
+ *
+ * The third is C9's reviewed exception and the only production module allowed to remove a node.
+ * Ryan authorized deletion of archived Episode and Turn projections and nothing else, so the
+ * module is the whole allowance: it deletes enumerated relationships and then enumerated nodes
+ * with an ordinary delete, refuses a retained label or an unrelated occupant standing on one of
+ * the ids, and never detaches. Every other deletion path in the workspace stays forbidden.
+ *
+ * The test below pins the list, so a fourth entry cannot land quietly.
  */
-const EXEMPT = [THIS_FILE, HARNESS_FIXTURE];
+const EXEMPT = [THIS_FILE, HARNESS_FIXTURE, EVICTION_MODULE];
 
 /**
  * Cypher keywords are case-insensitive, so the scan has to be too. Two exclusions keep
@@ -68,7 +76,7 @@ describe('no code path hard-deletes a node', () => {
     );
   });
 
-  it('skips exactly two files: itself and the harness that clears the shared test database', () => {
+  it('skips exactly three files: itself, the shared-database harness, and C9 eviction', () => {
     expect(EXEMPT.map((file) => relative(REPO_ROOT, file))).toEqual([
       join('packages', 'core', 'src', 'infrastructure', 'graph', 'no-hard-delete.test.ts'),
       join(
@@ -80,6 +88,7 @@ describe('no code path hard-deletes a node', () => {
         'test-support',
         'neo4j-harness.fixture.ts',
       ),
+      join('packages', 'core', 'src', 'infrastructure', 'graph', 'episode-eviction.ts'),
     ]);
     for (const file of EXEMPT) {
       expect(existsSync(file)).toBe(true);

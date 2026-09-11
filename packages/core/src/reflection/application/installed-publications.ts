@@ -1,5 +1,6 @@
 import { calendarRollupPublication } from './calendar-rollup-publication.js';
 import { reflectionCompletionPublication } from './completion-publication.js';
+import { episodeEvictionPublication } from './episode-eviction.js';
 import { familyCutoverPublication } from './family-cutover.js';
 import { intakePublication } from './intake-publication.js';
 import { legacyMaterializationPublication } from './legacy-materialization.js';
@@ -43,4 +44,5 @@ export const INSTALLED_PUBLICATION_HANDLERS: readonly PublicationHandler[] = [
   overviewPublication,
   calendarRollupPublication,
   orphanSuppressionPublication,
+  episodeEvictionPublication,
 ];

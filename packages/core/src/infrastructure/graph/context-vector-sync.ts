@@ -100,6 +100,39 @@ export async function writeContextVectorSync(
   );
 }
 
+const CLEAR_CONTEXT_VECTOR = [
+  'UNWIND $ids AS nodeId',
+  `MATCH (n:${BASE_NODE_LABEL}:${MEMORY_LABEL} { id: nodeId })`,
+  `SET n.${CONTEXT_VECTOR_PROPERTY} = null, n.${CONTEXT_VECTOR_SYNCED_AT_PROPERTY} = $now`,
+  'RETURN n.id AS id',
+].join('\n');
+
+/**
+ * Removes a retained node's context vector and stamps the sync that removed it.
+ *
+ * The one caller is the deletion repair: a node whose last vectored neighbor was removed has a
+ * stored context computed from a neighborhood that no longer exists, and the timestamp scan above
+ * structurally cannot see that — it looks for an edge that moved, and the edge is gone. Only a
+ * CERTIFIED COMPLETE reading of the current neighborhood may call this. `content_vec` is never
+ * touched: what the node itself says is unchanged by what stopped standing next to it.
+ */
+export async function clearContextVectorSync(
+  driver: Driver,
+  ids: readonly string[],
+  now: Date,
+): Promise<string[]> {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) {
+    return [];
+  }
+  return runWrite(
+    driver,
+    CLEAR_CONTEXT_VECTOR,
+    { ids: unique, now: toGraphDateTime(now) },
+    (row: Row) => row.id as string,
+  );
+}
+
 const MARK_CONTEXT_VECTOR_SYNCED = [
   'UNWIND $ids AS nodeId',
   `MATCH (n:${BASE_NODE_LABEL}:${MEMORY_LABEL} { id: nodeId })`,

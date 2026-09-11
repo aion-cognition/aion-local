@@ -9,6 +9,7 @@ import { curiosityOperation } from './operations/curiosity.js';
 import { deadLetterOperation } from './operations/dead-letter.js';
 import { descriptionFreshnessOperation } from './operations/description-freshness-operation.js';
 import { edgePruneOperation } from './operations/edge-prune.js';
+import { episodeEvictOperation } from './operations/episode-evict.js';
 import { identifierDecayOperation } from './operations/identifier-decay.js';
 import { intentionUpkeepOperation } from './operations/intention-upkeep.js';
 import { mergeAutoOperation } from './operations/merge-auto-operation.js';
@@ -47,8 +48,8 @@ import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-
  * chose it. What one run does and what the loop thinks the backlog is worth are then two
  * readings of one number instead of a shipped default and a live one.
  *
- * Eleven of the twenty-nine declare a `measure`, a number in the health snapshot their run is
- * scored on moving. The other eighteen are recorded as unmeasured rather than scored. Fifteen
+ * Ten of the thirty-one declare a `measure`, a number in the health snapshot their run is
+ * scored on moving. The other twenty-one are recorded as unmeasured rather than scored. Fifteen
  * of those are waiting on a gauge the snapshot does not carry yet:
  *
  * - `claim_dedup`: a near-duplicate claim-pair count.
@@ -72,14 +73,16 @@ import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-
  * Each is a graph read nothing computes on the tick today. Until one exists, its operation is
  * scored on relevance, waiting time, and cost alone, which is everything known about it.
  *
- * The last three declare none on purpose rather than for want of a gauge. `proposal_resolution`
+ * The last four declare none on purpose rather than for want of a gauge. `proposal_resolution`
  * moves the open-proposal count, and scoring it on lowering that would reward an applied
  * correction and a dismissed one alike, which rewards emptying the queue rather than deciding
  * it. `recall_probe` produces the numbers instead of moving them: it measures retrieval and
  * changes nothing, so a run that scored a miss did its job exactly as well as one that scored
  * a hit. `narrative_seal` has a demand reading and deliberately no metric: the snapshot counts
  * what the lifecycle owes, and an operation scored on lowering its own backlog is credited the
- * same for a chunk it blocked as for one it published.
+ * same for a chunk it blocked as for one it published. `episode_evict` is the same refusal one
+ * step further: what it would be scored on lowering is the resident population, and an operation
+ * rewarded for removing more of that is the last incentive a destructive pass should carry.
  */
 export function introspectionOperations(config: Config): readonly IntrospectionOperation[] {
   return [
@@ -106,6 +109,14 @@ export function introspectionOperations(config: Config): readonly IntrospectionO
       batch: config.maintenance.narrativeSealBatch,
       maxSpanMs: config.maintenance.chunkMaxSpanMs,
       renderedInputAllowance: config.maintenance.chunkRenderedInputAllowance,
+    }),
+
+    // The raw projection's own end. It runs behind the lifecycle above rather than beside it:
+    // a source is only eligible once its chunk revision is published and acknowledged, so the
+    // seal operator is what creates this one's population.
+    episodeEvictOperation({
+      batch: config.maintenance.episodeEvictBatch,
+      minAgeMs: config.maintenance.episodeEvictMinAgeMs,
     }),
 
     // Content maintenance: duplicate narratives, narratives whose claims a correction has since

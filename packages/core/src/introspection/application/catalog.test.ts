@@ -23,6 +23,9 @@ const UNMEASURED_OPERATIONS = [
   'confirmation_signal_completion',
   'curiosity',
   'description_freshness',
+  // Deliberate, like `narrative_seal` below. What an eviction lowers is the resident population,
+  // and an operation scored on lowering that is one rewarded for removing more of it.
+  'episode_evict',
   'intention_upkeep',
   'memory_decay',
   'merge_decision_reconcile',

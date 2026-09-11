@@ -1,5 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 
+import { readEvictionDemand } from './eviction-census.js';
 import { readOrphanCensus } from './orphan-census.js';
 import { readSealDemand } from './seal-census.js';
 import type { Config } from '../../infrastructure/config/schema.js';
@@ -35,6 +36,7 @@ import {
   HEALTH_COLLECTORS,
   NEUTRAL_ENRICHMENT_HEALTH,
   NEUTRAL_ENTITY_HEALTH,
+  NEUTRAL_EVICTION_DEMAND,
   NEUTRAL_GENERATION_HEALTH,
   NEUTRAL_GRAPH_HEALTH,
   NEUTRAL_PLASTICITY_HEALTH,
@@ -46,6 +48,7 @@ import {
   share,
   type EnrichmentHealth,
   type EntityHealth,
+  type EvictionDemand,
   type GenerationHealth,
   type GraphStructureHealth,
   type HealthSnapshot,
@@ -280,6 +283,18 @@ function readNarrativeSeal(db: SqliteHandle, config: Config, now: Date): SealDem
   });
 }
 
+/**
+ * What the substrate could evict, and what a committed eviction still owes. SQLite only, and it
+ * never throws: the census and the pending work are read apart inside, so losing a bounded scan
+ * to a manifest error cannot hide survivor work an acknowledged removal already created.
+ */
+function readEviction(db: SqliteHandle, config: Config, now: Date): EvictionDemand {
+  return readEvictionDemand(db, {
+    now,
+    minAgeMs: config.maintenance.episodeEvictMinAgeMs,
+  });
+}
+
 function readPlasticity(db: SqliteHandle): PlasticityHealth {
   const counters = plasticityCounters(db);
   return {
@@ -345,6 +360,7 @@ export async function observeHealth(
     proposals,
     entities,
     narrativeSeal,
+    eviction,
     plasticity,
     generation,
     effectiveness,
@@ -369,6 +385,9 @@ export async function observeHealth(
     ),
     collect(HEALTH_COLLECTORS.narrativeSeal, deps.logger, degraded, NEUTRAL_SEAL_DEMAND, () =>
       Promise.resolve(readNarrativeSeal(deps.db, deps.config, now)),
+    ),
+    collect(HEALTH_COLLECTORS.eviction, deps.logger, degraded, NEUTRAL_EVICTION_DEMAND, () =>
+      Promise.resolve(readEviction(deps.db, deps.config, now)),
     ),
     collect(HEALTH_COLLECTORS.plasticity, deps.logger, degraded, NEUTRAL_PLASTICITY_HEALTH, () =>
       Promise.resolve(readPlasticity(deps.db)),
@@ -395,6 +414,7 @@ export async function observeHealth(
     proposals,
     entities,
     narrativeSeal,
+    eviction,
     plasticity,
     generation,
     effectiveness,
