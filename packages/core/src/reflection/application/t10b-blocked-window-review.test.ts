@@ -13,6 +13,9 @@ vi.mock('../../infrastructure/graph/narrative-rollup-queries.js', () => ({
   findWindowRollups: async () => [],
 }));
 vi.mock('./consolidation-synthesis.js', () => ({ synthesizeGrounded: seam.synthesize }));
+// The window budget is what this file measures, and it drives the pass with a stub driver. An
+// open family answer keeps that measurement about the budget; the fence has its own substrate.
+vi.mock('./rollup-family-fence.js', () => ({ fenceRollupWindow: async () => undefined }));
 vi.mock('./rollup-write.js', async (original) => ({
   ...(await original<typeof RollupWriter>()),
   writeRollup: seam.write,

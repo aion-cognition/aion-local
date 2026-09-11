@@ -1,4 +1,5 @@
 import { synthesizeGrounded } from './consolidation-synthesis.js';
+import { fenceRollupWindow } from './rollup-family-fence.js';
 import { attachVector, closeInto, writeRollup, type RollupWriteDeps } from './rollup-write.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
@@ -82,6 +83,8 @@ export type RollupReport = {
   readonly failed: number;
   /** Windows V1 refused: the required input did not fit, or the membership was not complete. */
   readonly blocked: number;
+  /** Windows the family fence refused, which this pass no longer represents. */
+  readonly fenced: number;
   /** Member narratives this run closed into a rollup. */
   readonly absorbed: number;
 };
@@ -132,13 +135,15 @@ function toMembers(window: RollupWindow, memberScope: string): readonly Consolid
   }));
 }
 
-type WindowOutcome = 'created' | 'skipped' | 'vetoed' | 'failed' | 'blocked';
+type WindowOutcome = 'created' | 'skipped' | 'vetoed' | 'failed' | 'blocked' | 'fenced';
 
 type WindowResult = {
   readonly outcome: WindowOutcome;
   readonly absorbed: number;
   /** Why V1 refused the window, where it did. */
   readonly blockedReason?: string;
+  /** The window reached a provider before this outcome, so the attempt budget charges it. */
+  readonly spent?: boolean;
 };
 
 /**
@@ -158,6 +163,18 @@ async function rollUpWindow(
   existing: readonly WindowNarrative[],
 ): Promise<WindowResult> {
   const memberScope = rollupMemberScope(settings.scope);
+  const fenceInput = {
+    scope: settings.scope,
+    windowKey: window.key,
+    memberIds: window.members.map((member) => member.id),
+    now: settings.now,
+  };
+  // Before the decision, so a window this pass no longer represents costs no provider call and
+  // no repair close either: the skip branch below absorbs members without asking a model.
+  const nominated = await fenceRollupWindow(deps, fenceInput);
+  if (nominated !== undefined) {
+    return { outcome: 'fenced', absorbed: 0, blockedReason: nominated };
+  }
   const decision = decideSessionNarrative(
     window.members.map((member) => ({
       id: member.id,
@@ -232,6 +249,13 @@ async function rollUpWindow(
       'rollup synthesis failed',
     );
     return { outcome: 'failed', absorbed: 0 };
+  }
+
+  // Again, and now it is the one that matters: the reading above was taken before the synthesis,
+  // and a cutover that landed while the model worked would otherwise be published straight over.
+  const settledFamily = await fenceRollupWindow(deps, fenceInput);
+  if (settledFamily !== undefined) {
+    return { outcome: 'fenced', absorbed: 0, blockedReason: settledFamily, spent: true };
   }
 
   await writeRollup(deps, {
@@ -409,12 +433,15 @@ export async function rollUpNarratives(
   let vetoed = 0;
   let failed = 0;
   let blocked = 0;
+  let fenced = 0;
   let absorbed = 0;
   let examined = 0;
+  let raced = 0;
 
   // `windowLimit` bounds the EXPENSIVE ATTEMPTS a tick makes, not the windows it looks at, and
-  // the two budgets are deliberately different things. A settled window answers `skip` and a
-  // refused one answers `blocked`; neither asks a provider and neither writes, so charging either
+  // the two budgets are deliberately different things. A settled window answers `skip`, a refused
+  // one answers `blocked`, and one the family fence turned away before the synthesis answers
+  // `fenced`; none of the three asks a provider and none writes, so charging them
   // against the budget would leave the run re-examining the same oldest days forever and never
   // reaching the ones that need a rollup — an unchanged blocked prefix would hide every fitting
   // window behind it for as long as it stood. What bounds the scan is the member read above.
@@ -434,6 +461,9 @@ export async function rollUpNarratives(
     const existing = await findWindowRollups(deps.driver, settings.scope, window.key);
     const result = await rollUpWindow(deps, settings, window, existing);
     absorbed += result.absorbed;
+    // A fence that turned the window away AFTER the synthesis still spent the call it is there
+    // to save, so that one is charged and the free refusals are not.
+    raced += result.spent === true ? 1 : 0;
     if (result.outcome === 'created') {
       created += 1;
     } else if (result.outcome === 'skipped') {
@@ -442,10 +472,12 @@ export async function rollUpNarratives(
       vetoed += 1;
     } else if (result.outcome === 'blocked') {
       blocked += 1;
+    } else if (result.outcome === 'fenced') {
+      fenced += 1;
     } else {
       failed += 1;
     }
-    if (created + vetoed + failed >= settings.windowLimit) {
+    if (created + vetoed + failed + raced >= settings.windowLimit) {
       break;
     }
   }
@@ -458,6 +490,7 @@ export async function rollUpNarratives(
     vetoed,
     failed,
     blocked,
+    fenced,
     absorbed,
   };
 }

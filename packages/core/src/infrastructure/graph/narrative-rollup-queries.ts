@@ -3,7 +3,7 @@ import type { Driver } from 'neo4j-driver';
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { runRead } from './connection.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
-import { NARRATIVE_PROPERTIES } from './narrative-queries.js';
+import { NARRATIVE_PROPERTIES, SUMMARIZED_BY_TYPE } from './narrative-queries.js';
 import { SUPERSEDES_TYPE } from './relationships.js';
 import { toGraphDateTime, toGraphInteger, type Row } from './values.js';
 
@@ -141,6 +141,68 @@ export async function findWindowRollups(
     coverageCount: typeof row.coverage_count === 'number' ? row.coverage_count : 0,
     open: row.open === true,
   }));
+}
+
+/**
+ * How far the representation ancestry of a window member is walked.
+ *
+ * A calendar summary holds the narratives it compressed, and the scope below it holds theirs, so
+ * two hops reach the session narratives underneath a week's day summaries. The hop after that
+ * lands on episodes, which carry no representation family of their own.
+ */
+const LINEAGE_DEPTH = 2;
+
+export type RollupLineage = {
+  readonly id: string;
+  readonly ancestors: readonly string[];
+  /** The walk stopped at the caller's proof bound, so these are not all of them. */
+  readonly bounded: boolean;
+};
+
+/**
+ * The narratives a member compressed, which is what a reader has to ask about before that member
+ * is published into something new or absorbed.
+ *
+ * Membership is the summarization edge rather than the stored citation list: a citation names
+ * what the prose quoted, and a member the renderer did not quote is still one the summary covers.
+ * Currency is deliberately not filtered. An absorbed member stays part of what its summary rests
+ * on, and a walk that skipped the closed ones would report a calendar summary as resting on
+ * nothing at all.
+ */
+const FIND_ROLLUP_LINEAGE = [
+  'UNWIND $ids AS wanted',
+  'MATCH (n:Narrative { id: wanted })',
+  'CALL { WITH n',
+  `  MATCH (a:Narrative)-[:${SUMMARIZED_BY_TYPE}*1..${String(LINEAGE_DEPTH)}]->(n)`,
+  '  WITH DISTINCT a.id AS id ORDER BY id LIMIT $limit',
+  '  RETURN collect(id) AS ancestors',
+  '}',
+  'RETURN n.id AS id, ancestors',
+].join('\n');
+
+/** Reads the complete ancestry of each member, or one sentinel past the caller's bound. */
+export async function findRollupLineage(
+  driver: Driver,
+  ids: readonly string[],
+  bound: number,
+): Promise<readonly RollupLineage[]> {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0 || bound <= 0) {
+    return [];
+  }
+  return runRead(
+    driver,
+    FIND_ROLLUP_LINEAGE,
+    { ids: unique, limit: toGraphInteger(bound + 1) },
+    (row: Row) => {
+      const ancestors = Array.isArray(row.ancestors) ? (row.ancestors as string[]) : [];
+      return {
+        id: row.id as string,
+        ancestors: ancestors.slice(0, bound),
+        bounded: ancestors.length > bound,
+      };
+    },
+  );
 }
 
 export type NarrativeBody = {

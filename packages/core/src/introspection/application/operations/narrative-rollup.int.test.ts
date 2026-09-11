@@ -38,6 +38,7 @@ import {
 import { unsupersedeNode } from '../../../infrastructure/graph/unsupersede.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import type { Provider } from '../../../infrastructure/providers/types.js';
+import { PublicationCoordinator } from '../../../infrastructure/publication/coordinator.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
@@ -216,6 +217,15 @@ beforeAll(async () => {
   db = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
   logger = openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'error' });
   await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
+  // The pass reads the durable records under the coverage contract, the way every other covered
+  // entry point does, so the store it runs against is a paired one rather than a bare schema.
+  await new PublicationCoordinator({
+    driver: harness.driver,
+    db,
+    handlers: [],
+    logger,
+    now: () => NOW,
+  }).initialize();
 
   for (const seed of SESSIONS) {
     await seedSessionNarrative(seed);

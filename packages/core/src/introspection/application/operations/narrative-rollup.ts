@@ -112,6 +112,7 @@ function narrativeRollupOperation(
           `${String(report.windows)} closed ${scope} window(s): ${String(report.created)} rolled up ` +
           `over ${String(report.absorbed)} member narrative(s), ${String(report.skipped)} already covered, ` +
           `${String(report.blocked)} blocked for capacity or incomplete membership, ` +
+          `${String(report.fenced)} refused by the family fence, ` +
           `${String(report.vetoed)} vetoed by review, ${String(report.failed)} generation failure(s)`,
       };
     },
