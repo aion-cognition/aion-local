@@ -8,6 +8,8 @@ export const NARRATIVE_MIGRATION_SCHEMA_STATEMENTS = [
     revision INTEGER NOT NULL DEFAULT 0,
     cursor TEXT NOT NULL DEFAULT '',
     blocked_reason TEXT,
+    retry_at TEXT,
+    repair_resume_phase TEXT CHECK (repair_resume_phase IN ('inventory','census')),
     pass_progress_json TEXT,
     prior_gap_digest TEXT,
     lifecycle_state TEXT NOT NULL DEFAULT 'running' CHECK (lifecycle_state IN ('running','blocked','complete','abandoned') AND (lifecycle_state <> 'blocked' OR blocked_reason IS NOT NULL)),
@@ -36,6 +38,12 @@ export const NARRATIVE_MIGRATION_SCHEMA_STATEMENTS = [
 ] as const;
 
 export const NARRATIVE_MIGRATION_COLUMN_ADDITIONS: readonly ColumnAddition[] = [
+  { table: 'narrative_migration_jobs', column: 'retry_at', definition: 'TEXT' },
+  {
+    table: 'narrative_migration_jobs',
+    column: 'repair_resume_phase',
+    definition: "TEXT CHECK (repair_resume_phase IN ('inventory','census'))",
+  },
   { table: 'narrative_migration_jobs', column: 'pass_progress_json', definition: 'TEXT' },
   { table: 'narrative_migration_jobs', column: 'prior_gap_digest', definition: 'TEXT' },
   { table: 'narrative_migration_jobs', column: 'blocked_reason', definition: 'TEXT' },

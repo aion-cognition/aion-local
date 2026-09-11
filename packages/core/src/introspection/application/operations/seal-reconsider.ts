@@ -1,6 +1,5 @@
 import {
   blockedAttempts,
-  suppressionCleared,
   type BlockedAttempt,
 } from '../../../infrastructure/sqlite/chunk-nomination.js';
 import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
@@ -10,20 +9,10 @@ import {
 } from '../../../infrastructure/sqlite/narrative-revisions.js';
 import { getLedgerEntry, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
 import {
-  memberScopesCounted,
-  scopesCounted,
-} from '../../../reflection/application/chunk-evidence.js';
-import {
-  CENSUS_BLOCK_REASON,
-  POLICY_BLOCK_REASONS,
-  SUPPRESSION_BLOCK_REASONS,
-} from '../../../reflection/domain/chunk-outcome.js';
+  chunkBlockPrerequisiteMoved,
+  RECONSIDERABLE_REASONS,
+} from '../../../reflection/application/chunk-reconsider.js';
 import type { OperationContext } from '../../domain/operation.js';
-
-/** Every reason whose prerequisite one of the tests below can ask the records about. */
-const RECONSIDERABLE_REASONS: readonly string[] = [
-  ...new Set([...SUPPRESSION_BLOCK_REASONS, CENSUS_BLOCK_REASON, ...POLICY_BLOCK_REASONS]),
-];
 
 /** Blocked rows one run reads while looking for the ones it may clear. */
 const RECONSIDER_SCAN_LIMIT = 256;
@@ -108,7 +97,7 @@ function discoverReady(
     for (const attempt of page) {
       scanned += 1;
       stopped = { chunkId: attempt.chunkId, revisionNo: attempt.revisionNo };
-      if (prerequisiteMoved(ctx, attempt, inForce)) {
+      if (chunkBlockPrerequisiteMoved(ctx.db, attempt, inForce)) {
         held.push(attempt);
         if (held.length >= limit) {
           break;
@@ -119,30 +108,6 @@ function discoverReady(
   }
   writeBlockedCursor(ctx.db, stopped);
   return held;
-}
-
-/**
- * Whether THIS attempt's own prerequisite has moved.
- *
- * `no_admissible_input` carries two causes and belongs to two sets, so it is asked both questions
- * in turn and an attempt neither can answer stays blocked. The order is the one the separate
- * passes had: a suppression that cleared is a state, and it answers before a bound.
- */
-function prerequisiteMoved(
-  ctx: OperationContext,
-  attempt: BlockedAttempt,
-  inForce: Record<string, number>,
-): boolean {
-  if (SUPPRESSION_BLOCK_REASONS.includes(attempt.reason) && suppressionCleared(ctx.db, attempt)) {
-    return true;
-  }
-  if (attempt.reason === CENSUS_BLOCK_REASON) {
-    return attempt.uncountedScopes.length > 0
-      ? scopesCounted(ctx.db, attempt.uncountedScopes)
-      : memberScopesCounted(ctx.db, attempt.members);
-  }
-  const policy: readonly string[] = POLICY_BLOCK_REASONS;
-  return policy.includes(attempt.reason) && policyMoved(attempt.policy, inForce);
 }
 
 function readBlockedCursor(db: SqliteHandle): BlockedCursor | undefined {
@@ -158,21 +123,4 @@ function readBlockedCursor(db: SqliteHandle): BlockedCursor | undefined {
 
 function writeBlockedCursor(db: SqliteHandle, cursor: BlockedCursor | undefined): void {
   markLedgerApplied(db, RECONSIDER_CURSOR_KEY, cursor === undefined ? {} : { ...cursor });
-}
-
-/**
- * Whether the bounds in force differ from the ones the refusal ran under.
- *
- * Only the numbers the attempt actually recorded are compared: a bound it never wrote down is a
- * bound nothing can say has moved. An attempt with no recorded policy is left blocked rather than
- * reconsidered on every run, which is what a timer would be.
- */
-function policyMoved(
-  recorded: Record<string, number> | undefined,
-  inForce: Record<string, number>,
-): boolean {
-  if (recorded === undefined) {
-    return false;
-  }
-  return Object.entries(recorded).some(([name, value]) => inForce[name] !== value);
 }

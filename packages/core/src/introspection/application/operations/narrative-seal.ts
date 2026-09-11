@@ -21,12 +21,19 @@ import {
   STANDING_HEAD_REASON,
   SYNTHESIS_ATTEMPTED_REASONS,
 } from '../../../reflection/domain/chunk-outcome.js';
+import { sealRetryDelayMs } from '../../../reflection/domain/narrative-retry.js';
 import { narrativeSealRelevance } from '../../domain/narrative-seal.js';
 import type {
   IntrospectionOperation,
   OperationContext,
   OperationOutcome,
 } from '../../domain/operation.js';
+
+export {
+  sealRetryDelayMs,
+  SEAL_RETRY_BASE_MS,
+  SEAL_RETRY_CEILING_MS,
+} from '../../../reflection/domain/narrative-retry.js';
 
 /**
  * The chunk lifecycle's operator.
@@ -59,12 +66,6 @@ export const NARRATIVE_SEAL_OPERATION = 'narrative_seal';
 /** Where the last run's seal nomination stopped. One row, naming a group and nothing else. */
 const CURSOR_KEY = 'narrative_seal:remainder_cursor';
 
-/** The first retry delay after a failed attempt; each further attempt doubles it. */
-export const SEAL_RETRY_BASE_MS = 15 * 60 * 1000;
-
-/** Where doubling stops, so a chunk that has failed all day is still tried tomorrow. */
-export const SEAL_RETRY_CEILING_MS = 6 * 60 * 60 * 1000;
-
 /**
  * What a seal run needs that the loop does not already carry: the resolver that reads a member's
  * evidence, and the coordinator every write goes through. Both are the service's own instances.
@@ -94,12 +95,6 @@ function readCursor(db: SqliteHandle): RemainderCursor | undefined {
 /** Absent clears it, which is what reaching the end of the enumeration means. */
 function writeCursor(db: SqliteHandle, cursor: RemainderCursor | undefined): void {
   markLedgerApplied(db, CURSOR_KEY, cursor === undefined ? {} : { ...cursor });
-}
-
-/** Doubling backoff off the attempts the revision row already counts. */
-export function sealRetryDelayMs(attempts: number): number {
-  const doublings = Math.min(Math.max(0, attempts - 1), 16);
-  return Math.min(SEAL_RETRY_CEILING_MS, SEAL_RETRY_BASE_MS * 2 ** doublings);
 }
 
 function narrativeDeps(ctx: OperationContext, deps: NarrativeMaintenanceDeps): ChunkNarrativeDeps {

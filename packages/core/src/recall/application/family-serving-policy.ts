@@ -47,7 +47,24 @@ export function discloseFamilyGaps(
       });
     }
   }
-  return gaps.length === 0 ? view : { ...view, issues: [...gaps, ...view.issues] };
+  if (gaps.length === 0) {
+    return view;
+  }
+  const values = new Map(view.narrativeFamilies.values);
+  for (const gap of gaps) {
+    if (gap.address.kind !== 'id') {
+      continue;
+    }
+    const held = values.get(gap.address.id);
+    if (held !== undefined) {
+      values.set(gap.address.id, { ...held, policyIssues: [...(held.policyIssues ?? []), gap] });
+    }
+  }
+  return {
+    ...view,
+    narrativeFamilies: { ...view.narrativeFamilies, values },
+    issues: [...gaps, ...view.issues],
+  };
 }
 
 /** The degraded completion has one synchronous, read-only policy pass and no second effects attempt. */
@@ -61,7 +78,7 @@ export function revalidateFamilyPolicy(
     return view;
   }
   const reading = revalidateNarrativeRepresentations(db, view.narrativeFamilies.values, context);
-  const refreshed = new Set(reading.values.keys());
+  const refreshed = reading.rereadIds;
   const owned = new Set(
     [...view.narrativeFamilies.values].flatMap(([id, value]) =>
       refreshed.has(id) ? (value.policyIssues ?? []) : [],
@@ -69,11 +86,7 @@ export function revalidateFamilyPolicy(
   );
   const retained = view.issues.filter(
     (issue) =>
-      !(
-        issue.address.kind === 'id' &&
-        refreshed.has(issue.address.id) &&
-        (issue.field === 'representation_preference' || owned.has(issue))
-      ),
+      !(issue.address.kind === 'id' && refreshed.has(issue.address.id) && owned.has(issue)),
   );
   return discloseFamilyGaps(
     {

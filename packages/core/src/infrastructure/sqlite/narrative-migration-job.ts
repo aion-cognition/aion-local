@@ -1,3 +1,4 @@
+import { IsoTimestampSchema } from '@aion/protocol';
 import { z } from 'zod';
 
 import type { SqliteHandle } from './database.js';
@@ -42,6 +43,8 @@ export type NarrativeMigrationJob = {
   readonly phase: NarrativeMigrationPhase;
   readonly state: NarrativeMigrationState;
   readonly blockedReason?: string;
+  readonly retryAt?: string;
+  readonly repairResumePhase?: 'inventory' | 'census';
   readonly revision: number;
   readonly cursor: string;
   readonly intakeWatermark: number;
@@ -62,6 +65,8 @@ export function readNarrativeMigration(
         phase: string;
         lifecycle_state?: string;
         blocked_reason?: string | null;
+        retry_at?: string | null;
+        repair_resume_phase?: string | null;
         revision: number;
         cursor: string;
         intake_watermark: number;
@@ -85,6 +90,12 @@ export function readNarrativeMigration(
         phase: Phase.parse(row.phase),
         state: migrationState(row.phase, row.lifecycle_state),
         ...(row.blocked_reason == null ? {} : { blockedReason: row.blocked_reason }),
+        ...(row.retry_at == null
+          ? {}
+          : { retryAt: new Date(IsoTimestampSchema.parse(row.retry_at)).toISOString() }),
+        ...(row.repair_resume_phase == null
+          ? {}
+          : { repairResumePhase: z.enum(['inventory', 'census']).parse(row.repair_resume_phase) }),
         revision: row.revision,
         cursor: row.cursor,
         intakeWatermark: row.intake_watermark,
@@ -149,6 +160,7 @@ export function advanceNarrativeMigration(
   phase: NarrativeMigrationPhase,
   cursor: string,
   now: Date,
+  retryAt?: Date,
 ): boolean {
   if (job.revision >= Number.MAX_SAFE_INTEGER) {
     throw new Error('migration revision reached its exact-integer bound');
@@ -156,11 +168,19 @@ export function advanceNarrativeMigration(
   return (
     db
       .prepare(
-        `UPDATE narrative_migration_jobs SET phase = ?, cursor = ?, lifecycle_state = CASE WHEN ? = 'complete' THEN 'complete' ELSE lifecycle_state END, revision = revision + 1, updated_at = ?
+        `UPDATE narrative_migration_jobs SET phase = ?, cursor = ?, retry_at = ?, lifecycle_state = CASE WHEN ? = 'complete' THEN 'complete' ELSE lifecycle_state END, revision = revision + 1, updated_at = ?
       WHERE cohort_id = ? AND phase = ? AND revision = ? AND lifecycle_state = 'running'`,
       )
-      .run(phase, cursor, phase, now.toISOString(), job.cohortId, job.phase, job.revision)
-      .changes === 1
+      .run(
+        phase,
+        cursor,
+        retryAt?.toISOString() ?? null,
+        phase,
+        now.toISOString(),
+        job.cohortId,
+        job.phase,
+        job.revision,
+      ).changes === 1
   );
 }
 

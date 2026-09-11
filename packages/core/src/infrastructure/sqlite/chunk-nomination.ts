@@ -39,10 +39,10 @@ const VERIFIED = 'verified';
  * carrying a capture position, and not already sealed into a chunk. The verification test is a
  * literal string comparison on a NOT NULL column, so no row disappears into a NULL comparison.
  */
-const REMAINDER_PREDICATE = `r.capture_order_value IS NOT NULL
+export const SEAL_REMAINDER_POPULATION = `r.capture_order_value IS NOT NULL
        AND r.capture_order_value <= s.watermark
-       AND NOT ${RESERVED_MIGRATION_SOURCE}
        AND NOT EXISTS (SELECT 1 FROM chunk_members m WHERE m.source_id = r.source_id)`;
+const REMAINDER_PREDICATE = `${SEAL_REMAINDER_POPULATION} AND NOT ${RESERVED_MIGRATION_SOURCE}`;
 
 export type DueChunkGroup = {
   readonly chunkId: string;

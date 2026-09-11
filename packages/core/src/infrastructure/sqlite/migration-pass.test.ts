@@ -22,6 +22,7 @@ import {
   allocateNarrativeRevision,
   CHUNK_REVISION_FAMILY,
   deferRevisionAttempt,
+  blockRevisionAttempt,
 } from './narrative-revisions.js';
 import { seedSource } from '../../evidence/test-support/evidence.fixture.js';
 
@@ -142,4 +143,29 @@ it('names a pin that prevents census after the full verification sweep', () => {
   expect(readMigrationIssues(store.db, 'cohort').issues).toEqual([
     { id: 'source', reason: 'raw proof missing' },
   ]);
+});
+
+it('retains separate reasons from multiple blocked revisions of the same chunk', () => {
+  recordMigrationProgress(store.db, {
+    cohortId: 'cohort',
+    sourceId: 'source',
+    status: 'verified',
+    partitionAssignment: chunkId,
+  });
+  for (const reason of ['member_scope_census_missing', 'member_evidence_missing']) {
+    const row = allocateNarrativeRevision(store.db, CHUNK_REVISION_FAMILY, chunkId, NOW);
+    blockRevisionAttempt(store.db, CHUNK_REVISION_FAMILY, chunkId, row.revisionNo, reason);
+  }
+  for (let pass = 0; pass < 2; pass += 1) {
+    const job = readNarrativeMigration(store.db, 'cohort')!;
+    beginMigrationPass(store.db, job);
+    finishMigrationPass(store.db, job, false, NOW);
+  }
+  expect(readNarrativeMigration(store.db, 'cohort')?.state).toBe('blocked');
+  expect(readMigrationIssues(store.db, 'cohort').issues).toEqual(
+    expect.arrayContaining([
+      { id: chunkId, reason: 'member_scope_census_missing' },
+      { id: chunkId, reason: 'member_evidence_missing' },
+    ]),
+  );
 });

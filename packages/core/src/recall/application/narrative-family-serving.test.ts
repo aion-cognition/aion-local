@@ -190,6 +190,7 @@ it('replaces reread policy issues while preserving an independent citation issue
   const store = new SqliteStore({ filePath: ':memory:' });
   const reread = vi.spyOn(representations, 'revalidateNarrativeRepresentations').mockReturnValue({
     values: new Map(view.narrativeFamilies!.values),
+    rereadIds: new Set(view.narrativeFamilies!.values.keys()),
     dependencies: [],
     issues: [],
   });
@@ -203,6 +204,66 @@ it('replaces reread policy issues while preserving an independent citation issue
     expect(refreshed.issues).toHaveLength(1);
     expect(refreshed.issues[0]).toBe(independent);
     expect([...emittedPackIds(serveFrom(input, refreshed).pack)]).toContain('legacy');
+  } finally {
+    reread.mockRestore();
+    store.close();
+  }
+});
+
+it('preserves an issue for an identity the policy reread never acquired', () => {
+  const missing: EvidenceIssue = {
+    address: { kind: 'id', id: 'fact' },
+    field: 'representation_preference',
+    reason: 'store_unavailable',
+    required: true,
+  };
+  const store = new SqliteStore({ filePath: ':memory:' });
+  try {
+    const result = revalidateFamilyPolicy(
+      store.db,
+      {
+        ...view,
+        issues: [missing],
+        narrativeFamilies: {
+          values: new Map([
+            [
+              'fact',
+              { family: 'unknown', sessions: [], selection: 'unknown', publication: 'unknown' },
+            ],
+          ]),
+        },
+      },
+      checkedContext(),
+      [fact],
+    );
+    expect(result.issues).toContain(missing);
+  } finally {
+    store.close();
+  }
+});
+
+it('does not erase an independently owned preference issue when a policy value is reread', () => {
+  const independent: EvidenceIssue = {
+    address: { kind: 'id', id: 'legacy' },
+    field: 'representation_preference',
+    reason: 'store_unavailable',
+    required: false,
+  };
+  const store = new SqliteStore({ filePath: ':memory:' });
+  const reread = vi.spyOn(representations, 'revalidateNarrativeRepresentations').mockReturnValue({
+    values: new Map(view.narrativeFamilies!.values),
+    rereadIds: new Set(['legacy']),
+    dependencies: [],
+    issues: [],
+  });
+  try {
+    const result = revalidateFamilyPolicy(
+      store.db,
+      { ...view, issues: [independent] },
+      checkedContext(),
+      [legacy],
+    );
+    expect(result.issues).toContain(independent);
   } finally {
     reread.mockRestore();
     store.close();

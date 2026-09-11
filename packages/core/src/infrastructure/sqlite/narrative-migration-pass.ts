@@ -80,7 +80,7 @@ export function beginMigrationPass(db: SqliteHandle, job: NarrativeMigrationJob)
       .run(progress(db, job.cohortId), job.cohortId).changes;
     if (changed > 0) {
       db.prepare(
-        "UPDATE narrative_migration_issues SET active = 0 WHERE cohort_id = ? AND phase IN ('partition','publish','cutover')",
+        "UPDATE narrative_migration_issues SET active = 0 WHERE cohort_id = ? AND (phase IN ('partition','publish','cutover') OR phase LIKE 'blocked_revision:%')",
       ).run(job.cohortId);
     }
   }).immediate();
@@ -122,19 +122,48 @@ function gapDigest(db: SqliteHandle, cohortId: string): string {
 }
 
 /** Timed retries and live claims remain running; a blocked prerequisite never becomes due merely with time. */
-function publicationWait(db: SqliteHandle, job: NarrativeMigrationJob, now: Date): boolean {
-  return (
-    db
-      .prepare(
-        `SELECT 1 FROM migration_progress m JOIN chunks c ON c.chunk_id = m.partition_assignment
-    JOIN chunk_revisions r ON r.chunk_id = c.chunk_id
-    WHERE m.cohort_id = ? AND c.published_revision_no IS NULL
+function publicationWait(
+  db: SqliteHandle,
+  job: NarrativeMigrationJob,
+  now: Date,
+): { waiting: boolean; until?: Date } {
+  const row = db
+    .prepare(
+      `SELECT COUNT(CASE WHEN r.state = 'prepared' THEN 1 END) AS prepared,
+    MIN(CASE WHEN r.state = 'allocated' THEN MAX(COALESCE(r.next_attempt_at,''),COALESCE(r.claim_expires_at,'')) END) AS retry_at
+    FROM chunks c JOIN chunk_revisions r ON r.chunk_id = c.chunk_id
+    WHERE c.published_revision_no IS NULL
+      AND EXISTS (SELECT 1 FROM migration_progress m WHERE m.cohort_id = ? AND m.partition_assignment = c.chunk_id)
       AND (r.state = 'prepared' OR (r.state = 'allocated' AND r.blocked_reason IS NULL
-        AND (r.next_attempt_at > ? OR r.claim_expires_at > ?))) LIMIT 1
+        AND (r.next_attempt_at > ? OR r.claim_expires_at > ?)))
   `,
-      )
-      .get(job.cohortId, now.toISOString(), now.toISOString()) !== undefined
-  );
+    )
+    .get(job.cohortId, now.toISOString(), now.toISOString()) as {
+    prepared: number;
+    retry_at: string | null;
+  };
+  if (row.prepared > 0) {
+    return { waiting: true };
+  }
+  return row.retry_at === null
+    ? { waiting: false }
+    : { waiting: true, until: new Date(row.retry_at) };
+}
+
+/** Every held revision contributes its own repair prerequisite, even when nomination excludes it. */
+function recordMigrationChunkIssues(db: SqliteHandle, job: NarrativeMigrationJob): void {
+  db.prepare(
+    "UPDATE narrative_migration_issues SET active = 0 WHERE cohort_id = ? AND phase LIKE 'blocked_revision:%'",
+  ).run(job.cohortId);
+  db.prepare(
+    `INSERT INTO narrative_migration_issues (cohort_id,phase,subject_id,reason,active)
+    SELECT DISTINCT ?, 'blocked_revision:' || CAST(b.revision_no AS TEXT), b.chunk_id, b.blocked_reason, 1 FROM chunk_revisions b
+    WHERE b.state = 'allocated' AND b.blocked_reason IS NOT NULL
+      AND EXISTS (SELECT 1 FROM migration_progress m WHERE m.cohort_id = ? AND m.partition_assignment = b.chunk_id)
+      AND EXISTS (SELECT 1 FROM narrative_migration_jobs WHERE cohort_id = ? AND revision = ? AND lifecycle_state = 'running')
+    ON CONFLICT(cohort_id,phase,subject_id) DO UPDATE SET reason=excluded.reason,active=1
+  `,
+  ).run(job.cohortId, job.cohortId, job.cohortId, job.revision);
 }
 
 /** A repeated, unchanged full pass stops explicitly. It never declares any outstanding work complete. */
@@ -150,17 +179,22 @@ export function finishMigrationPass(
         return undefined;
       }
       recordMigrationMemberIssues(db, job);
+      recordMigrationChunkIssues(db, job);
       const unassigned = db
         .prepare(
           'SELECT 1 FROM migration_progress WHERE cohort_id = ? AND partition_assignment IS NULL LIMIT 1',
         )
         .get(job.cohortId);
       if (allReady && unassigned === undefined) {
+        db.prepare(
+          "UPDATE narrative_migration_issues SET active = 0 WHERE cohort_id = ? AND (phase IN ('partition','publish','cutover') OR phase LIKE 'blocked_revision:%')",
+        ).run(job.cohortId);
         advanceNarrativeMigration(db, job, 'complete', '', now);
         return undefined;
       }
-      if (publicationWait(db, job, now)) {
-        advanceNarrativeMigration(db, job, 'publish', '', now);
+      const wait = publicationWait(db, job, now);
+      if (wait.waiting) {
+        advanceNarrativeMigration(db, job, 'publish', '', now, wait.until);
         return 'publication_retry_wait';
       }
       const held = db
@@ -199,6 +233,7 @@ export function holdRepeatedCensusRefusal(
       return;
     }
     recordMigrationMemberIssues(db, job);
+    recordMigrationChunkIssues(db, job);
     const digest = gapDigest(db, job.cohortId);
     const row = db
       .prepare('SELECT prior_gap_digest FROM narrative_migration_jobs WHERE cohort_id = ?')

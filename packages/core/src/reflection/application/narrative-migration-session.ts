@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { measureChunkCandidates, type ChunkNarrativeDeps } from './chunk-seal.js';
+import { reconsiderMigrationSession } from './migration-publication.js';
 import { cutoverSessionFamily, ensureSessionFamily } from './narrative-family.js';
 import { ChunkSealRefused } from '../../infrastructure/sqlite/chunk-manifest.js';
 import {
@@ -69,6 +70,7 @@ export async function migrateSessionStep(
     return undefined;
   }
   if (job.phase === 'partition') {
+    reconsiderMigrationSession(deps.db, job, session.sessionId);
     const rows = listMigrationRemainder(
       deps.db,
       job.cohortId,

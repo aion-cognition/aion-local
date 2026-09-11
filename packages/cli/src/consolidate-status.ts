@@ -74,6 +74,9 @@ export function writeMigrationStatus(
   write(
     `frozen policy v${String(job.policy.partitionPolicyVersion)}: ${String(job.policy.maxMembers)} members, ${String(job.policy.renderedInputAllowance)} rendered units, span ${String(job.policy.maxSpanMs)} ms`,
   );
+  if (job.retryAt !== undefined) {
+    write(`next attempt: ${job.retryAt}`);
+  }
   for (const issue of reading.problems?.issues ?? []) {
     write(`${issue.id}: ${issue.reason}`);
   }
@@ -82,5 +85,11 @@ export function writeMigrationStatus(
   }
   if (job.blockedReason !== undefined) {
     write(`blocked: ${job.blockedReason}`);
+    if (job.blockedReason === 'capture_member_bound') {
+      write(
+        'This capture exceeds the fixed cohort bound; abandon this job to release its reservation. Refresh cannot increase that bound.',
+      );
+      write(`aion consolidate abandon --cohort ${job.cohortId}`);
+    }
   }
 }

@@ -1,4 +1,4 @@
-import type { BlockedSourceTally } from './chunk-nomination.js';
+import { SEAL_REMAINDER_POPULATION, type BlockedSourceTally } from './chunk-nomination.js';
 import type { SqliteHandle } from './database.js';
 import { MIGRATION_OWNED_CHUNK, RESERVED_MIGRATION_SOURCE } from './migration-membership.js';
 
@@ -8,8 +8,8 @@ export function migrationHeldSources(db: SqliteHandle): readonly BlockedSourceTa
     .prepare(
       `
     SELECT 'migration_reserved' AS reason, COUNT(*) AS sources, MIN(r.created_at) AS oldest_at
-    FROM source_records r WHERE ${RESERVED_MIGRATION_SOURCE}
-      AND NOT EXISTS (SELECT 1 FROM chunk_members m WHERE m.source_id = r.source_id)
+    FROM source_records r JOIN session_remainders s ON s.session_id = r.session_id
+    WHERE ${RESERVED_MIGRATION_SOURCE} AND ${SEAL_REMAINDER_POPULATION}
     UNION ALL
     SELECT 'migration_owned' AS reason, COUNT(*) AS sources, MIN(c.sealed_at) AS oldest_at
     FROM chunks c JOIN chunk_members m ON m.chunk_id = c.chunk_id

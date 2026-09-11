@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { publishChunkNarrative } from './chunk-narrative.js';
 import type { ChunkNarrativeDeps } from './chunk-seal.js';
 import { runLegacyBackfillBatch } from './legacy-backfill.js';
+import { scheduleMigrationPublicationRetry } from './migration-publication.js';
 import { inventoryLegacyNarrative } from './narrative-family.js';
 import { migrateSessionStep } from './narrative-migration-session.js';
 import { describeError } from '../../infrastructure/errors.js';
@@ -66,6 +67,7 @@ export type NarrativeMigrationReport = {
   readonly phase: NarrativeMigrationJob['phase'];
   readonly complete: boolean;
   readonly state: NarrativeMigrationJob['state'];
+  readonly retryAt?: string;
   readonly steps: number;
   readonly verifiedOutcomes: number;
   readonly sealed: number;
@@ -141,8 +143,9 @@ export async function runNarrativeMigrationBatch(
   let job = readNarrativeMigration(deps.db, options.cohortId);
   if (
     job === undefined ||
-    job.state === 'running' ||
-    (options.refresh && job.state !== 'abandoned')
+    (job.state === 'running' &&
+      (job.retryAt === undefined || job.retryAt <= options.now.toISOString())) ||
+    (options.refresh && job.state !== 'abandoned' && job.blockedReason !== 'capture_member_bound')
   ) {
     await deps.publications.recover();
     job = beginNarrativeMigration(deps.db, options);
@@ -156,6 +159,10 @@ export async function runNarrativeMigrationBatch(
   let steps = 0;
   let stopped: string | undefined;
   while (steps < limit && job.state === 'running') {
+    if (job.retryAt !== undefined && job.retryAt > options.now.toISOString()) {
+      stopped = 'publication_retry_wait';
+      break;
+    }
     if (options.signal?.aborted || performance.now() - started >= deadline) {
       stopped = options.signal?.aborted ? 'aborted' : 'batch_wall_budget';
       break;
@@ -188,6 +195,7 @@ export async function runNarrativeMigrationBatch(
     phase: job.phase,
     complete: job.state === 'complete',
     state: job.state,
+    ...(job.retryAt === undefined ? {} : { retryAt: job.retryAt }),
     steps,
     ...counts.snapshot(),
     ...readMigrationIssues(deps.db, job.cohortId),
@@ -246,7 +254,13 @@ async function step(
     return undefined;
   }
   if (job.phase === 'verify') {
-    const sourceId = nextMigrationSource(deps.db, job.cohortId, job.cursor);
+    const sourceId = nextMigrationSource(
+      deps.db,
+      job.cohortId,
+      job.cursor,
+      false,
+      job.repairResumePhase !== undefined,
+    );
     if (sourceId === undefined) {
       advance('order');
       return undefined;
@@ -280,7 +294,7 @@ async function step(
   if (job.phase === 'order') {
     const sourceId = nextMigrationSource(deps.db, job.cohortId, job.cursor, true);
     if (sourceId === undefined) {
-      advance('inventory');
+      advance(job.repairResumePhase ?? 'inventory');
       return undefined;
     }
     const coverage = readCurrentCoverageContract(deps.db);
@@ -360,6 +374,9 @@ async function step(
       counts.record('published');
     } else if (result.status !== 'skipped') {
       issue(deps, job, chunkId, result.reason);
+    }
+    if (scheduleMigrationPublicationRetry(deps.db, job, result, options.now)) {
+      return 'publication_retry_wait';
     }
     advance('publish', chunkId);
     return undefined;

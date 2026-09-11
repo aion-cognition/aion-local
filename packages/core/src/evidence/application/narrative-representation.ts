@@ -39,6 +39,7 @@ type ScopeSet = { readonly sessions: readonly string[]; readonly known: boolean 
 class RepresentationReader {
   readonly values = new Map<string, NarrativeRepresentation>();
   readonly dependencies: EvidenceDependency[] = [];
+  readonly rereadIds = new Set<string>();
   readonly issues: EvidenceIssue[] = [];
   readonly #db: SqliteHandle;
   readonly #context: CheckedReadContext;
@@ -302,9 +303,6 @@ class RepresentationReader {
       selection: selected,
       publication,
       identity,
-      policyIssues: this.issues.filter(
-        (issue) => issue.address.kind === 'id' && issue.address.id === nodeId,
-      ),
       ...(known ? {} : { knownAtVantage: false as const }),
       ...(retired === undefined ? {} : { retired }),
     });
@@ -318,7 +316,7 @@ function readPolicies(
   context: CheckedReadContext,
   budget: RequestBudget,
   idsAdmitted = false,
-): RepresentationReading {
+): RepresentationReading & { readonly rereadIds: ReadonlySet<string> } {
   const reader = new RepresentationReader(db, context, budget);
   try {
     db.transaction(() => {
@@ -334,6 +332,7 @@ function readPolicies(
           });
           continue;
         }
+        reader.rereadIds.add(identity.nodeId);
         reader.read(identity);
       }
     }).deferred();
@@ -351,6 +350,14 @@ function readPolicies(
         identity,
       });
     }
+  }
+  for (const [id, value] of reader.values) {
+    reader.values.set(id, {
+      ...value,
+      policyIssues: reader.issues.filter(
+        (issue) => issue.address.kind === 'id' && issue.address.id === id,
+      ),
+    });
   }
   return reader;
 }
@@ -398,10 +405,14 @@ export function revalidateNarrativeRepresentations(
   db: SqliteHandle,
   values: ReadonlyMap<string, NarrativeRepresentation>,
   context: CheckedReadContext,
-): RepresentationReading {
+): RepresentationReading & { readonly rereadIds: ReadonlySet<string> } {
   const identities = [...values.values()].flatMap((value) =>
     value.identity === undefined ? [] : [value.identity],
   );
   const reading = readPolicies(db, identities, context, new RequestBudget());
-  return { ...reading, values: new Map([...values, ...reading.values]) };
+  return {
+    ...reading,
+    rereadIds: reading.rereadIds,
+    values: new Map([...values, ...reading.values]),
+  };
 }

@@ -185,3 +185,55 @@ it('reports a blocked run without recovering or constructing a provider', async 
   expect(connection).not.toHaveBeenCalled();
   expect(db).not.toHaveBeenCalled();
 });
+
+it('names abandonment as the capture-bound exit even when refresh was requested', async () => {
+  const store = new SqliteStore({ filePath: path });
+  const now = new Date('2026-09-11T00:00:00Z');
+  const job = beginNarrativeMigration(store.db, {
+    cohortId: 'too-large',
+    now,
+    policy: {
+      maxMembers: 24,
+      maxSpanMs: 86400000,
+      renderedInputAllowance: 16384,
+      partitionPolicyVersion: 1,
+    },
+  });
+  holdNarrativeMigration(store.db, job, 'capture_member_bound', now);
+  store.close();
+  const connection = vi.spyOn(Substrate.prototype, 'connection');
+  const lines: string[] = [];
+  expect(
+    await runConsolidate(['run', '--cohort', 'too-large', '--refresh'], (line) => lines.push(line)),
+  ).toBe(1);
+  expect(lines.join('\n')).toContain('aion consolidate abandon --cohort too-large');
+  expect(lines.join('\n')).toContain('Refresh cannot increase that bound');
+  expect(connection).not.toHaveBeenCalled();
+});
+
+it('shows every persisted chunk prerequisite in status', async () => {
+  const store = new SqliteStore({ filePath: path });
+  const now = new Date('2026-09-11T00:00:00Z');
+  const job = beginNarrativeMigration(store.db, {
+    cohortId: 'blocked-chunk',
+    now,
+    policy: {
+      maxMembers: 24,
+      maxSpanMs: 86400000,
+      renderedInputAllowance: 16384,
+      partitionPolicyVersion: 1,
+    },
+  });
+  store.db
+    .prepare(
+      'INSERT INTO narrative_migration_issues (cohort_id,phase,subject_id,reason,active) VALUES (?,?,?,?,1)',
+    )
+    .run(job.cohortId, 'blocked_revision:1', 'chunk-id', 'member_scope_census_missing');
+  holdNarrativeMigration(store.db, job, 'unchanged_blocking_evidence', now);
+  store.close();
+  const lines: string[] = [];
+  expect(
+    await runConsolidate(['status', '--cohort', 'blocked-chunk'], (line) => lines.push(line)),
+  ).toBe(1);
+  expect(lines).toContain('chunk-id: member_scope_census_missing');
+});

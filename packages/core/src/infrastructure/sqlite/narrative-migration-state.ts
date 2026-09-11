@@ -66,7 +66,7 @@ export function holdNarrativeMigration(
   );
 }
 
-/** Explicit re-entry re-verifies evidence while retaining the captured denominator and policy. */
+/** Re-entry retains completed verification and inventory; only unresolved evidence goes through the producer again. */
 export function refreshNarrativeMigration(
   db: SqliteHandle,
   job: { readonly cohortId: string; readonly phase: string; readonly revision: number },
@@ -75,15 +75,29 @@ export function refreshNarrativeMigration(
   if (!Number.isSafeInteger(job.revision) || job.revision >= Number.MAX_SAFE_INTEGER) {
     throw new Error('migration revision reached its exact-integer bound');
   }
+  const held = db
+    .prepare(
+      'SELECT blocked_reason, repair_resume_phase FROM narrative_migration_jobs WHERE cohort_id = ?',
+    )
+    .get(job.cohortId) as
+    { blocked_reason: string | null; repair_resume_phase: string | null } | undefined;
+  if (held?.blocked_reason === 'capture_member_bound') {
+    return false;
+  }
+  const afterInventory =
+    ['census', 'partition', 'publish', 'cutover', 'complete'].includes(job.phase) ||
+    held?.repair_resume_phase === 'census';
   const capture = job.phase === 'archive' || job.phase === 'graph';
+  const repairResume = afterInventory ? 'census' : 'inventory';
   return db
     .transaction(() => {
       const changed =
         db
           .prepare(
-            "UPDATE narrative_migration_jobs SET lifecycle_state = 'running', blocked_reason = NULL, pass_progress_json = NULL, prior_gap_digest = NULL, phase = ?, cursor = CASE WHEN ? THEN cursor ELSE '' END, revision = revision + 1, updated_at = ? WHERE cohort_id = ? AND revision = ? AND lifecycle_state <> 'abandoned'",
+            "UPDATE narrative_migration_jobs SET lifecycle_state = 'running', blocked_reason = NULL, retry_at = NULL, repair_resume_phase = ?, pass_progress_json = NULL, prior_gap_digest = NULL, phase = ?, cursor = CASE WHEN ? THEN cursor ELSE '' END, revision = revision + 1, updated_at = ? WHERE cohort_id = ? AND revision = ? AND lifecycle_state <> 'abandoned'",
           )
           .run(
+            capture ? null : repairResume,
             capture ? job.phase : 'verify',
             capture ? 1 : 0,
             now.toISOString(),

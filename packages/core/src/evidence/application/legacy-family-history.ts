@@ -23,7 +23,7 @@ export function legacyBeforeFirstSelection(
   if (current === undefined) {
     return undefined;
   }
-  const original = record.publication?.knownFrom ?? readLegacyOriginalClock(db, record);
+  const original = readLegacyOriginalClock(db, record);
   return {
     dependency: current.dependency,
     known: original === undefined ? 'unknown' : original <= knownAt.toISOString(),

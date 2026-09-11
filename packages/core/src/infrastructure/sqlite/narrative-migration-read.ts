@@ -32,10 +32,12 @@ export function nextMigrationSource(
   cohortId: string,
   after: string,
   orderOnly = false,
+  unresolvedOnly = false,
 ): string | undefined {
   const row = db
     .prepare(
-      `SELECT source_id FROM migration_progress WHERE cohort_id = ? AND source_id > ?
+      `SELECT source_id FROM migration_progress m WHERE cohort_id = ? AND source_id > ?
+    ${unresolvedOnly ? "AND (m.status <> 'verified' OR NOT EXISTS (SELECT 1 FROM source_records s WHERE s.source_id = m.source_id AND s.verification_status = 'verified'))" : ''}
     ${orderOnly ? "AND status = 'verified' AND capture_order_value IS NULL" : ''}
     ORDER BY source_id LIMIT 1`,
     )

@@ -88,7 +88,9 @@ export function runConsolidate(
       }
       if (
         status.status === 'read' &&
-        (status.job.state === 'abandoned' || (!flags.refresh && status.job.state !== 'running'))
+        (status.job.state === 'abandoned' ||
+          status.job.blockedReason === 'capture_member_bound' ||
+          (!flags.refresh && status.job.state !== 'running'))
       ) {
         writeMigrationStatus(status, flags.json, write);
         return status.job.state === 'complete' ? 0 : 1;
