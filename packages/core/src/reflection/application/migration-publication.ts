@@ -2,7 +2,6 @@ import type { ChunkPublishReport } from './chunk-narrative.js';
 import { chunkBlockPrerequisiteMoved, RECONSIDERABLE_REASONS } from './chunk-reconsider.js';
 import { blockedAttempts } from '../../infrastructure/sqlite/chunk-blocks.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { CUTOVER_CHUNK_LIMIT } from '../../infrastructure/sqlite/migration-session.js';
 import {
   advanceNarrativeMigration,
   type NarrativeMigrationJob,
@@ -50,6 +49,9 @@ export function scheduleMigrationPublicationRetry(
   return false;
 }
 
+/** Blocked revision attempts inspected for one session, independently of the session's chunk count. */
+const MIGRATION_RECONSIDER_ATTEMPTS = 128;
+
 /** Reconsiders only this cohort's session, using the same prerequisite rule as steady-state sealing. */
 export function reconsiderMigrationSession(
   db: SqliteHandle,
@@ -61,10 +63,10 @@ export function reconsiderMigrationSession(
     sessionId,
     initialOnly: true,
     reasons: RECONSIDERABLE_REASONS,
-    limit: CUTOVER_CHUNK_LIMIT + 1,
+    limit: MIGRATION_RECONSIDER_ATTEMPTS + 1,
   });
-  if (attempts.length > CUTOVER_CHUNK_LIMIT) {
-    recordMigrationIssue(db, job, sessionId, 'partition_chunk_bound');
+  if (attempts.length > MIGRATION_RECONSIDER_ATTEMPTS) {
+    recordMigrationIssue(db, job, sessionId, 'blocked_attempt_scan_bound');
     return;
   }
   for (const attempt of attempts) {

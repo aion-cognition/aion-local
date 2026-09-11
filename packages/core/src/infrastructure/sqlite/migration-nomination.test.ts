@@ -1,3 +1,4 @@
+import { readMigrationIssues } from './narrative-migration-pass.js';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 
 import { sealChunk } from './chunk-manifest.js';
@@ -159,4 +160,23 @@ it('does not reconsider the regrounding attempt of an already-published chunk', 
     readNarrativeRevision(store.db, CHUNK_REVISION_FAMILY, chunkId, attempt.revisionNo)
       ?.blockedReason,
   ).toBe('member_over_resolver_budget');
+});
+
+it('names the attempt scan bound independently of the number of chunks', () => {
+  for (let index = 0; index < 129; index += 1) {
+    const row = allocateNarrativeRevision(store.db, CHUNK_REVISION_FAMILY, chunkId, NOW);
+    blockRevisionAttempt(
+      store.db,
+      CHUNK_REVISION_FAMILY,
+      chunkId,
+      row.revisionNo,
+      'member_over_resolver_budget',
+    );
+  }
+  reconsiderMigrationSession(store.db, readNarrativeMigration(store.db, 'cohort')!, 'session');
+  expect(store.db.prepare('SELECT COUNT(*) AS n FROM chunks').get()).toEqual({ n: 1 });
+  expect(readMigrationIssues(store.db, 'cohort').issues).toContainEqual({
+    id: 'session',
+    reason: 'blocked_attempt_scan_bound',
+  });
 });
