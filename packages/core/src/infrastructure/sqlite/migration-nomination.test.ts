@@ -1,4 +1,3 @@
-import { readMigrationIssues } from './narrative-migration-pass.js';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 
 import { sealChunk } from './chunk-manifest.js';
@@ -6,6 +5,7 @@ import { SqliteStore } from './database.js';
 import { freezeMigrationCohort, recordMigrationProgress } from './migration-cohorts.js';
 import { recordAttemptPolicy } from './narrative-allocations.js';
 import { readNarrativeMigration, beginNarrativeMigration } from './narrative-migration-job.js';
+import { readMigrationIssues } from './narrative-migration-pass.js';
 import { nextMigrationChunk } from './narrative-migration-read.js';
 import { abandonNarrativeMigration } from './narrative-migration-state.js';
 import {
