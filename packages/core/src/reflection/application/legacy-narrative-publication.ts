@@ -164,13 +164,21 @@ export const legacyNarrativePublication = new PublicationOperation({
     ) {
       return { status: 'deferred', reason: 'legacy_source_verification_unproved' };
     }
+    // Three conditions, three tokens, because only one of them means what the caller's routing
+    // takes it to mean. `legacy_family_changed` says the session no longer prefers the legacy
+    // family, which is the one case a chunk writer should take over. A token that moved while the
+    // family stayed legacy is contention to wait out, and a fence naming another session is a
+    // malformed plan; routing either into the chunk writer publishes a chunk for a session whose
+    // committed preference is still legacy.
+    if (data.fence.familyDependency.id !== data.sessionId) {
+      return { status: 'deferred', reason: 'legacy_family_fence_foreign' };
+    }
     const selected = readFamilySelection(context.db, data.sessionId);
-    if (
-      selected?.family !== 'legacy_session_overview' ||
-      selected.version !== data.fence.familyVersion ||
-      data.fence.familyDependency.id !== data.sessionId
-    ) {
+    if (selected?.family !== 'legacy_session_overview') {
       return { status: 'deferred', reason: 'legacy_family_changed' };
+    }
+    if (selected.version !== data.fence.familyVersion) {
+      return { status: 'deferred', reason: 'legacy_family_version_changed' };
     }
     if (verifyEvidenceRevision(context.db, expected.evidence).status !== 'current') {
       return { status: 'deferred', reason: 'legacy_family_revision_changed' };
