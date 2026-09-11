@@ -412,41 +412,48 @@ async function sessionStep(
     const first = rows[0];
     if (first !== undefined) {
       const family = await ensureSessionFamily(deps, session.sessionId);
-      if (family.status !== 'ready') {
-        issue(deps, job, counts, session.sessionId, family.reason);
-      } else if (adoptExistingMigrationChunk(deps.db, job.cohortId, first.sourceId) === undefined) {
-        const coverage = checkPresentCoverage(deps.db, options.now);
-        if (coverage.status !== 'checked') {
-          return coverage.refusal.reason;
-        }
-        const measured = await measureChunkCandidates(
-          deps,
-          rows.map((row) => ({ ...row, createdAt: row.captureOrderValue })),
-          coverage.context,
-          job.policy,
-        );
-        if (measured.status === 'refused') {
-          issue(deps, job, counts, session.sessionId, measured.reason);
-        } else {
-          const decision = decideChunkSeal({
-            remainder: measured.candidates,
-            now: options.now,
-            policy: job.policy,
-            sessionClosing: true,
-          });
-          if (decision.action === 'seal') {
-            const sealed = sealMigrationMembership(deps.db, {
-              cohortId: job.cohortId,
-              sessionId: session.sessionId,
-              at: options.now,
-              members: chosenMigrationMembers(
-                rows,
-                decision.members.map((member) => member.sourceId),
-              ),
+      if (family.status === 'ready') {
+        const adoption = adoptExistingMigrationChunk(deps.db, job.cohortId, first.sourceId);
+        if (adoption.status === 'refused') {
+          for (const problem of adoption.issues) {
+            issue(deps, job, counts, problem.id, problem.reason);
+          }
+        } else if (adoption.status === 'not_sealed') {
+          const coverage = checkPresentCoverage(deps.db, options.now);
+          if (coverage.status !== 'checked') {
+            return coverage.refusal.reason;
+          }
+          const measured = await measureChunkCandidates(
+            deps,
+            rows.map((row) => ({ ...row, createdAt: row.captureOrderValue })),
+            coverage.context,
+            job.policy,
+          );
+          if (measured.status === 'refused') {
+            issue(deps, job, counts, session.sessionId, measured.reason);
+          } else {
+            const decision = decideChunkSeal({
+              remainder: measured.candidates,
+              now: options.now,
+              policy: job.policy,
+              sessionClosing: true,
             });
-            counts.record('sealed', sealed.created ? 1 : 0);
+            if (decision.action === 'seal') {
+              const sealed = sealMigrationMembership(deps.db, {
+                cohortId: job.cohortId,
+                sessionId: session.sessionId,
+                at: options.now,
+                members: chosenMigrationMembers(
+                  rows,
+                  decision.members.map((member) => member.sourceId),
+                ),
+              });
+              counts.record('sealed', sealed.created ? 1 : 0);
+            }
           }
         }
+      } else {
+        issue(deps, job, counts, session.sessionId, family.reason);
       }
     }
     advance('partition', { after: session });

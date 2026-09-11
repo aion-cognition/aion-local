@@ -90,28 +90,45 @@ export function migrationRemainders(
   };
 }
 
-/** A chunk sealed before the capture reservation is adopted whole, never repartitioned. */
+export type MigrationAdoption =
+  | { readonly status: 'not_sealed' }
+  | {
+      readonly status: 'refused';
+      readonly issues: readonly { readonly id: string; readonly reason: string }[];
+    }
+  | { readonly status: 'adopted'; readonly chunkId: string; readonly changed: boolean };
+
+/** A chunk sealed before the capture reservation is adopted whole, never partly reassigned. */
 export function adoptExistingMigrationChunk(
   db: SqliteHandle,
   cohortId: string,
   sourceId: string,
-): string | undefined {
+): MigrationAdoption {
   const chunkId = chunkOfSource(db, sourceId);
   if (chunkId === undefined) {
-    return undefined;
+    return { status: 'not_sealed' };
   }
   return db
-    .transaction(() => {
+    .transaction((): MigrationAdoption => {
       const chunk = readChunk(db, chunkId);
       if (chunk === undefined) {
-        throw new Error('a sealed source has no chunk record');
+        return {
+          status: 'refused',
+          issues: [{ id: chunkId, reason: 'existing_chunk_record_missing' }],
+        };
       }
       if (chunk.memberCount > MIGRATION_SESSION_LIMIT) {
-        throw new Error('existing chunk exceeds the migration membership bound');
+        return {
+          status: 'refused',
+          issues: [{ id: chunkId, reason: 'existing_chunk_member_bound' }],
+        };
       }
       const policy = readMigrationPolicy(db, cohortId);
       if (policy?.partitionPolicyVersion !== chunk.partitionPolicyVersion) {
-        throw new Error('existing chunk belongs to a different partition policy');
+        return {
+          status: 'refused',
+          issues: [{ id: chunkId, reason: 'existing_chunk_policy_mismatch' }],
+        };
       }
       const members = (
         db
@@ -121,15 +138,27 @@ export function adoptExistingMigrationChunk(
           .all(chunkId, MIGRATION_SESSION_LIMIT + 1) as { source_id: string }[]
       ).map((row) => row.source_id);
       if (members.length !== chunk.memberCount) {
-        throw new Error('existing chunk membership exceeds or disagrees with its recorded bound');
+        return {
+          status: 'refused',
+          issues: [{ id: chunkId, reason: 'existing_chunk_membership_unproved' }],
+        };
       }
+      const issues: { id: string; reason: string }[] = [];
+      let changed = false;
       for (const member of members) {
         const row = db
           .prepare(
-            `SELECT capture_order_value FROM migration_progress
-        WHERE cohort_id = ? AND source_id = ?`,
+            'SELECT status, capture_order_value, partition_assignment, partition_gap, reason FROM migration_progress WHERE cohort_id = ? AND source_id = ?',
           )
-          .get(cohortId, member) as { capture_order_value: string | null } | undefined;
+          .get(cohortId, member) as
+          | {
+              status: string;
+              capture_order_value: string | null;
+              partition_assignment: string | null;
+              partition_gap: string | null;
+              reason: string | null;
+            }
+          | undefined;
         const problem = migrationMemberProblem(db, {
           sourceId: member,
           cohortId,
@@ -138,8 +167,19 @@ export function adoptExistingMigrationChunk(
           policyVersion: chunk.partitionPolicyVersion,
         });
         if (problem !== undefined) {
-          throw new Error(`existing chunk ${chunkId}: ${problem}`);
+          let reason = row?.partition_gap ?? problem;
+          if (row?.status === 'pinned' && row.reason !== null) {
+            ({ reason } = row);
+          }
+          issues.push({ id: member, reason });
+        } else if (row?.partition_assignment != null && row.partition_assignment !== chunkId) {
+          issues.push({ id: member, reason: 'existing_chunk_assignment_mismatch' });
+        } else {
+          changed ||= row?.partition_assignment == null;
         }
+      }
+      if (issues.length > 0) {
+        return { status: 'refused', issues };
       }
       for (const member of members) {
         recordMigrationProgress(db, {
@@ -149,7 +189,7 @@ export function adoptExistingMigrationChunk(
           partitionAssignment: chunkId,
         });
       }
-      return chunkId;
+      return { status: 'adopted', chunkId, changed };
     })
     .immediate();
 }
