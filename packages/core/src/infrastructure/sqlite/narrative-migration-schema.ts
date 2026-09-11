@@ -1,0 +1,23 @@
+/** Capture is resumable, but only the completed census becomes a frozen cohort. */
+export const NARRATIVE_MIGRATION_SCHEMA_STATEMENTS = [
+  `CREATE TABLE IF NOT EXISTS narrative_migration_jobs (
+    cohort_id TEXT PRIMARY KEY,
+    phase TEXT NOT NULL CHECK (phase IN ('archive','graph','verify','order','inventory','census','partition','publish','cutover','complete')),
+    revision INTEGER NOT NULL DEFAULT 0,
+    cursor TEXT NOT NULL DEFAULT '',
+    intake_watermark INTEGER NOT NULL,
+    archive_rowid_low INTEGER NOT NULL,
+    archive_rowid_high INTEGER NOT NULL,
+    policy_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS narrative_migration_capture (
+    cohort_id TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    archive_seen INTEGER NOT NULL DEFAULT 0 CHECK (archive_seen IN (0,1)),
+    graph_seen INTEGER NOT NULL DEFAULT 0 CHECK (graph_seen IN (0,1)),
+    PRIMARY KEY (cohort_id, source_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS migration_progress_partition ON migration_progress (partition_assignment, cohort_id)`,
+] as const;

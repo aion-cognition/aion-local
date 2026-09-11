@@ -2,6 +2,7 @@ import type { MemoryPack } from '@aion/protocol';
 
 import type { RestatedClaimPair } from '../../infrastructure/graph/near-duplicate-queries.js';
 import type { FusedItem } from '../domain/fusion.js';
+import { bucketFor } from '../domain/pack-buckets.js';
 import type { PackDecision } from '../domain/pack-decisions.js';
 import { foldableClaims } from '../domain/pack-duplicates.js';
 import { assemblePack, type AssemblePackInput } from '../domain/pack.js';
@@ -56,17 +57,50 @@ export function serveFrom(
   view: ResolvedEvidenceView,
   onDecision?: (decision: PackDecision) => void,
 ): ServedAnswer {
-  const suppressedOwn = suppressedOwnSession({ items: input.ranked, view });
+  const selected = input.ranked.filter((item) => {
+    if (!item.labels.includes('Narrative') || view.narrativeFamilies === undefined) {
+      return true;
+    }
+    const representation = view.narrativeFamilies.values.get(item.id);
+    return representation?.selection === 'selected' && representation.publication === 'established';
+  });
+  const selectedIds = new Set(selected.map((item) => item.id));
+  for (const item of input.ranked) {
+    if (!selectedIds.has(item.id)) {
+      const primary = input.assembly.items.some((candidate) => candidate.id === item.id);
+      const resonant =
+        input.assembly.resonant?.some((candidate) => candidate.id === item.id) ?? false;
+      let bucket: PackDecision['bucket'] = 'intentions';
+      if (primary) {
+        bucket = bucketFor(item.labels) ?? 'narratives';
+      } else if (resonant) {
+        bucket = 'resonant';
+      }
+      onDecision?.({
+        id: item.id,
+        bucket,
+        reason: 'representation_family',
+      });
+    }
+  }
+  const suppressedOwn = suppressedOwnSession({ items: selected, view });
   const suppressed = input.dedup
     ? suppressedRepeats(
-        input.ranked.filter((item) => !suppressedOwn.has(item.id)),
+        selected.filter((item) => !suppressedOwn.has(item.id)),
         input.served,
         view,
       )
     : new Set<string>();
-  const foldable = foldableClaims({ items: input.ranked, pairs: input.restated, view });
+  const foldable = foldableClaims({ items: selected, pairs: input.restated, view });
   const pack = assemblePack({
     ...input.assembly,
+    items: input.assembly.items.filter((item) => selectedIds.has(item.id)),
+    ...(input.assembly.resonant === undefined
+      ? {}
+      : { resonant: input.assembly.resonant.filter((item) => selectedIds.has(item.id)) }),
+    ...(input.assembly.intentions === undefined
+      ? {}
+      : { intentions: input.assembly.intentions.filter((item) => selectedIds.has(item.id)) }),
     ...(onDecision === undefined ? {} : { onDecision }),
     ...(view.relatedClaims.size === 0 ? {} : { relatedClaims: view.relatedClaims }),
     ...(view.provenance.size === 0 ? {} : { provenance: view.provenance }),

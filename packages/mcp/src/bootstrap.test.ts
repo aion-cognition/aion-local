@@ -2,6 +2,7 @@ import {
   AssociationInferenceStage,
   associationOptions,
   cognitiveOptions,
+  CHUNK_BOUNDARY_POLICY,
   DEFAULTS,
   entityDedupOptions,
   EntityDedupStage,
@@ -234,6 +235,11 @@ describe('reflectionStages', () => {
 describe('narrativeOptions', () => {
   it('threads the configured idle window, the scale knobs and the mid-session boundary', () => {
     expect(narrativeOptions(configured)).toEqual({
+      chunkPolicy: {
+        maxMembers: CHUNK_BOUNDARY_POLICY.maxMembers,
+        renderedInputAllowance: configured.maintenance.chunkRenderedInputAllowance,
+        maxSpanMs: configured.maintenance.chunkMaxSpanMs,
+      },
       model: configured.models.reflect,
       idleMs: configured.reflection.narrativeIdleMinutes * MINUTE_MS,
       timeoutMs: configured.reflection.stageTimeoutMs,

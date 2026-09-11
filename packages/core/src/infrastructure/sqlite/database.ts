@@ -5,6 +5,7 @@ import { dirname } from 'node:path';
 import type { ColumnAddition } from './column-additions.js';
 import { IDENTITY_INDEX_STATEMENTS, IDENTITY_SCHEMA_STATEMENTS } from './identity-schema.js';
 import { migrateUnversionedLedgerKeys } from './ledger-version-migration.js';
+import { NARRATIVE_MIGRATION_SCHEMA_STATEMENTS } from './narrative-migration-schema.js';
 import {
   NARRATIVE_COLUMN_ADDITIONS,
   NARRATIVE_INDEX_STATEMENTS,
@@ -263,6 +264,7 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   ...IDENTITY_SCHEMA_STATEMENTS,
   ...NARRATIVE_SCHEMA_STATEMENTS,
   ...PUBLICATION_SCHEMA_STATEMENTS,
+  ...NARRATIVE_MIGRATION_SCHEMA_STATEMENTS,
   ...READINESS_SCHEMA_STATEMENTS,
   // The search projection's ordinary tables only. Its virtual table needs a capability this
   // binary may not have, and a failure creating it here would close every other door too.

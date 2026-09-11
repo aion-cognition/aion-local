@@ -1,6 +1,9 @@
 import type { Driver } from 'neo4j-driver';
 
+import { LEGACY_HEAD_LIMIT } from './family-cutover.js';
+import { dispatchChunkNarrative } from './narrative-chunk-dispatch.js';
 import { compress, type Synthesis } from './narrative-compress.js';
+import { ensureSessionFamily } from './narrative-family.js';
 import {
   attachVector,
   closeSuperseded,
@@ -8,9 +11,12 @@ import {
   writeNarrative,
   type NarrativeWrite,
 } from './narrative-write.js';
+import type { EvidenceResolver } from '../../evidence/application/resolver.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import { describeError } from '../../infrastructure/errors.js';
+import { LEGACY_NARRATIVE_LIMITS } from '../../infrastructure/graph/legacy-narrative-input.js';
+import { findLegacyHeads } from '../../infrastructure/graph/narrative-families.js';
 import {
   findIdleSessions,
   findSessionNarratives,
@@ -19,6 +25,15 @@ import {
 } from '../../infrastructure/graph/narrative-queries.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
+import type { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
+import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { checkPresentCoverage } from '../../recall/application/coverage-checker.js';
+import type { ChunkBoundaryPolicy } from '../domain/chunk-boundary.js';
+import {
+  LegacyPublicationDeferred,
+  legacyInputDigest,
+  type LegacyNarrativeFence,
+} from '../domain/legacy-narrative-fence.js';
 import { decideSessionBoundary } from '../domain/mid-session.js';
 import { narrativeScale } from '../domain/narrative-scale.js';
 import {
@@ -50,9 +65,13 @@ export type NarrativeDeps = {
   readonly driver: Driver;
   readonly provider: Provider;
   readonly logger: Logger;
+  readonly db?: SqliteHandle;
+  readonly publications?: PublicationCoordinator;
+  readonly resolver?: EvidenceResolver;
 };
 
 export type NarrativeOptions = {
+  readonly chunkPolicy?: ChunkBoundaryPolicy;
   readonly model?: string;
   readonly idleMs?: number;
   readonly timeoutMs?: number;
@@ -98,6 +117,7 @@ export type NarrativeResult = {
 
 /** Every option resolved, which is what the compression beside this reads its sizes from. */
 export type NarrativeSettings = {
+  readonly chunkPolicy?: ChunkBoundaryPolicy;
   readonly model: string;
   readonly idleMs: number;
   readonly timeoutMs: number;
@@ -113,11 +133,7 @@ export type NarrativeSettings = {
   readonly signal?: AbortSignal;
 };
 
-/**
- * The provider decides how much of the session one call reads, and the keyed route reads three
- * times as much. A session longer than that is not clipped to its most recent episodes: this is
- * the size of the chunks it is read in instead.
- */
+/** Keeps the legacy renderer's route-specific input sizes. */
 function settingsOf(options: NarrativeOptions, provider: Provider): NarrativeSettings {
   const now = options.now ?? new Date();
   const scale = narrativeScale(
@@ -125,6 +141,7 @@ function settingsOf(options: NarrativeOptions, provider: Provider): NarrativeSet
     options.reflection ?? DEFAULTS.reflection,
   );
   return {
+    ...(options.chunkPolicy === undefined ? {} : { chunkPolicy: options.chunkPolicy }),
     model: options.model ?? DEFAULTS.models.reflect,
     idleMs: options.idleMs ?? DEFAULT_SESSION_IDLE_MS,
     timeoutMs: options.timeoutMs ?? DEFAULTS.reflection.stageTimeoutMs,
@@ -159,6 +176,43 @@ async function narrateSession(
   settings: NarrativeSettings,
   requireIdle: boolean,
 ): Promise<NarrativeResult> {
+  if (deps.db === undefined || deps.publications === undefined) {
+    return {
+      status: 'failed',
+      sessionId,
+      episodes: 0,
+      summary: 'narrative publication is not composed',
+    };
+  }
+  await deps.publications.recover();
+  const family = await ensureSessionFamily(
+    { ...deps, db: deps.db, publications: deps.publications },
+    sessionId,
+  );
+  if (family.status !== 'ready') {
+    return { status: 'failed', sessionId, episodes: 0, summary: family.reason };
+  }
+  const coverage = checkPresentCoverage(deps.db, settings.now);
+  if (coverage.status !== 'checked') {
+    return {
+      status: 'failed',
+      sessionId,
+      episodes: 0,
+      summary: `coverage ${coverage.refusal.reason}`,
+    };
+  }
+  if (family.reading.selection.family === 'chunk') {
+    return dispatchChunkNarrative(
+      { ...deps, db: deps.db, publications: deps.publications },
+      sessionId,
+      settings,
+      !requireIdle,
+    );
+  }
+  const heads = await findLegacyHeads(deps.driver, sessionId, LEGACY_HEAD_LIMIT + 1);
+  if (heads.length > LEGACY_HEAD_LIMIT) {
+    return { status: 'failed', sessionId, episodes: 0, summary: 'legacy head bound exceeded' };
+  }
   const episodes = await loadSessionEpisodes(deps.driver, sessionId, settings.now);
   if (episodes.length === 0) {
     return skipped(sessionId, 0, 'the session holds no episodes');
@@ -179,14 +233,57 @@ async function narrateSession(
   const occurredAt = span.end ?? settings.occurredAt;
   const decision = decideSessionNarrative(episodes, existing, { regenerate: settings.regenerate });
   const generation = settings.regenerate ? NARRATIVE_GROUNDING : '';
-  const narrativeId = narrativeNodeId(sessionId, decision.coverageKey, generation);
+  let narrativeId = narrativeNodeId(sessionId, decision.coverageKey, generation);
+  if (settings.regenerate && existing.some((row) => row.id === narrativeId)) {
+    narrativeId = narrativeNodeId(
+      sessionId,
+      decision.coverageKey,
+      `${generation}:${String(decision.version)}`,
+    );
+  }
+  const fence: LegacyNarrativeFence = {
+    familyVersion: family.reading.selection.version,
+    familyDependency: family.reading.dependency,
+    coverageEpoch: coverage.context.coverageEpoch,
+    heads,
+    inputDigest: legacyInputDigest(episodes, []),
+    includeExtracted: false,
+  };
 
   if (decision.action === 'skip') {
-    await closeSuperseded(deps, decision, narrativeId, settings.now, occurredAt);
+    try {
+      await closeSuperseded(deps, decision, narrativeId, settings.now, occurredAt, fence);
+    } catch (error) {
+      if (error instanceof LegacyPublicationDeferred && error.reason === 'legacy_family_changed') {
+        return dispatchChunkNarrative(
+          { ...deps, db: deps.db, publications: deps.publications },
+          sessionId,
+          settings,
+          !requireIdle,
+        );
+      }
+      throw error;
+    }
     return skipped(sessionId, episodes.length, decision.reason);
   }
 
   const extracted = await loadSessionSourceNodes(deps.driver, sessionId, settings.now);
+  if (
+    episodes.length > LEGACY_NARRATIVE_LIMITS.episodes ||
+    JSON.stringify({ episodes, extracted }).length > LEGACY_NARRATIVE_LIMITS.units
+  ) {
+    return {
+      status: 'failed',
+      sessionId,
+      episodes: episodes.length,
+      summary: 'legacy input exceeds the bounded publication check',
+    };
+  }
+  const fullFence: LegacyNarrativeFence = {
+    ...fence,
+    inputDigest: legacyInputDigest(episodes, extracted),
+    includeExtracted: true,
+  };
 
   let synthesis: Synthesis;
   try {
@@ -226,8 +323,19 @@ async function narrateSession(
     now: settings.now,
     occurredAt,
   };
-  await writeNarrative(deps, write);
-  await closeSuperseded(deps, decision, narrativeId, settings.now, occurredAt);
+  try {
+    await writeNarrative(deps, write, fullFence);
+  } catch (error) {
+    if (error instanceof LegacyPublicationDeferred && error.reason === 'legacy_family_changed') {
+      return dispatchChunkNarrative(
+        { ...deps, db: deps.db, publications: deps.publications },
+        sessionId,
+        settings,
+        !requireIdle,
+      );
+    }
+    throw error;
+  }
   await attachVector(deps, narrativeId, output.narrative);
 
   deps.logger.info(
@@ -321,6 +429,8 @@ export class SessionNarrativeStage implements ReflectionStage {
       driver: ctx.driver,
       provider: ctx.provider,
       logger: ctx.logger,
+      db: ctx.db,
+      ...(ctx.publications === undefined ? {} : { publications: ctx.publications }),
     };
     const settings = settingsOf(
       {
@@ -354,13 +464,7 @@ export class SessionNarrativeStage implements ReflectionStage {
   }
 }
 
-/**
- * The transport-close hook in the shape the MCP service takes it: a synchronous callback.
- * Compression is a model call, so it cannot be awaited on a teardown path: the close is
- * scheduled, a failure is logged rather than raised, and closes queue behind one another so
- * a burst of disconnects does not fire concurrent generations at one local model. Construct
- * one per process, the same lifetime as `SessionManager`.
- */
+/** Queues transport closes so a disconnect burst does not run concurrent model calls. */
 export class SessionNarrativeCloser {
   readonly #deps: NarrativeDeps;
   readonly #options: SessionNarrativeOptions;

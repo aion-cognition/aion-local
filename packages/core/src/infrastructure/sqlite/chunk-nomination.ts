@@ -1,4 +1,5 @@
 import type { SqliteHandle } from './database.js';
+import { MIGRATION_OWNED_CHUNK, RESERVED_MIGRATION_SOURCE } from './migration-membership.js';
 
 // The blocked-attempt reading moved out at this file's ceiling and is re-exported here, because
 // what a refusal recorded is asked of nomination by every caller that asks what is due.
@@ -39,6 +40,7 @@ const VERIFIED = 'verified';
  */
 const REMAINDER_PREDICATE = `r.capture_order_value IS NOT NULL
        AND r.capture_order_value <= s.watermark
+       AND NOT ${RESERVED_MIGRATION_SOURCE}
        AND NOT EXISTS (SELECT 1 FROM chunk_members m WHERE m.source_id = r.source_id)`;
 
 export type DueChunkGroup = {
@@ -81,6 +83,7 @@ export function dueChunkGroups(
                 WHERE m.chunk_id = c.chunk_id) AS capture_key
          FROM chunks c
         WHERE c.published_revision_no IS NULL
+          AND NOT ${MIGRATION_OWNED_CHUNK}
           AND NOT EXISTS (SELECT 1 FROM chunk_revisions b
                            WHERE b.chunk_id = c.chunk_id
                              AND b.state = 'allocated' AND b.blocked_reason IS NOT NULL)

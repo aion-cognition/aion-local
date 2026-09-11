@@ -113,7 +113,7 @@ function asDate(value: unknown): Date | undefined {
  * what happened in the session. Only an explicit forget removes an episode from its
  * narrative, which is the default read mode's own rule.
  */
-function sessionEpisodesStatement(sessionId: string, reference?: Date): GraphStatement {
+export function sessionEpisodesStatement(sessionId: string, reference?: Date): GraphStatement {
   const episode = readModeFragment(withCurrency(reference), 'e', 'rme');
   const cypher = [
     `MATCH (e:Episode)-[:${CONTAINMENT_TYPE}]->(:Session { id: $sessionId })`,
@@ -130,7 +130,7 @@ function sessionEpisodesStatement(sessionId: string, reference?: Date): GraphSta
   return { cypher, parameters: { sessionId, ...episode.parameters } };
 }
 
-function readSessionEpisode(row: Row): SessionEpisode {
+export function readSessionEpisode(row: Row): SessionEpisode {
   const summary = asOptionalText(row.summary);
   const occurredAt = asDate(row.occurred_at);
   const writtenAt = asDate(row.tx_from);
@@ -162,6 +162,8 @@ export async function loadSessionEpisodes(
 const FIND_SESSION_NARRATIVES = [
   `MATCH (n:Narrative)-[:${DERIVES_FROM_TYPE}]->(:Session { id: $sessionId })`,
   `WHERE n.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  `  AND n.${NARRATIVE_PROPERTIES.scope} = 'session'`,
+  `  AND (n.${NARRATIVE_PROPERTIES.family} IS NULL OR n.${NARRATIVE_PROPERTIES.family} = 'legacy_session_overview')`,
   'RETURN',
   '  n.id AS id,',
   `  n.${NARRATIVE_PROPERTIES.version} AS version,`,
@@ -239,7 +241,7 @@ const NARRATIVE_SOURCE_LIMIT = 120;
  * order the episodes happened. A superseded node stays in the set for the same reason a
  * superseded episode does: it is still part of what the session held.
  */
-function sessionSourceNodesStatement(sessionId: string, reference?: Date): GraphStatement {
+export function sessionSourceNodesStatement(sessionId: string, reference?: Date): GraphStatement {
   const node = readModeFragment(withCurrency(reference), 'n', 'rmn');
   const episode = readModeFragment(withCurrency(reference), 'e', 'rme');
   const cypher = [

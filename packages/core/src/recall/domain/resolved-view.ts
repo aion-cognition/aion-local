@@ -1,5 +1,6 @@
 import type { RelatedClaim } from '@aion/protocol';
 
+import type { NarrativeRepresentation } from '../../evidence/application/narrative-representation.js';
 import type { OwnershipVerdict } from '../../evidence/domain/ownership.js';
 import type { EvidenceIssue } from '../../evidence/domain/result.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
@@ -34,6 +35,10 @@ export type ResolvedEvidenceView = {
   readonly degraded: ReadonlySet<string>;
   /** Every issue the reading named, required and optional alike, for the coverage statement. */
   readonly issues: readonly EvidenceIssue[];
+  readonly narrativeFamilies?: {
+    readonly historical: boolean;
+    readonly values: ReadonlyMap<string, NarrativeRepresentation>;
+  };
 };
 
 /**
@@ -65,5 +70,8 @@ export function uncertifiedThroughout(
   view: ResolvedEvidenceView,
   ids: Iterable<string>,
 ): ResolvedEvidenceView {
-  return { ...view, degraded: new Set([...view.degraded, ...ids]) };
+  return {
+    ...view,
+    degraded: new Set([...view.degraded, ...ids]),
+  };
 }

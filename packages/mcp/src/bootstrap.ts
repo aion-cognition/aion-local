@@ -59,23 +59,13 @@ import { AionMcpService } from './service.js';
 import { SessionIdleSweeper } from './session-idle-sweeper.js';
 import type { ToolBackend } from './tools.js';
 
-/**
- * The service owns one driver, one SQLite handle, one session cache, and one cue cache for
- * its whole life, and hands them to every tool call. Construction order is the dependency
- * order (config, log, storage, graph, backbone, provider), so a failure names the first
- * thing that was actually wrong rather than a symptom two layers down.
- */
+/** Constructs the service's shared dependencies in the order startup and teardown require. */
 
 export const GIT_USER_NAME_ENV_VAR = 'AION_GIT_USER_NAME';
 
 const MINUTE_MS = 60 * 1000;
 
-/**
- * The pipeline and its option builders live in `@aion/core`, beside the stage contract, so the
- * introspection loop can build the same stages this service does without depending on the MCP
- * package. They are re-exported here because the CLI's replay and timeline verbs and the gate
- * fixtures reach the pipeline through the service that runs it.
- */
+/** Existing CLI and test consumers share the core pipeline builders through these exports. */
 export { narrativeOptions, narrativeSweepOptions, reflectionStages, workerOptions };
 
 export class GraphUnreachableError extends Error {
@@ -317,7 +307,14 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
         provider: reflectProvider,
         // A destructive stage judgment runs on certified evidence or abstains.
         runner: new ReflectionOrchestrator(
-          { driver, db: store.db, provider: reflectProvider, logger, evidence: judgmentEvidence },
+          {
+            driver,
+            db: store.db,
+            provider: reflectProvider,
+            logger,
+            evidence: judgmentEvidence,
+            publications,
+          },
           stages,
         ),
         logger,
@@ -379,7 +376,14 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     // Both halves of the pinned trigger. The transport close is the boundary the substrate
     // can observe; the sweep is what a client that disconnects without a DELETE (an editor
     // that exits) leaves behind.
-    const narrativeDeps = { driver, provider: reflectProvider, logger };
+    const narrativeDeps = {
+      driver,
+      db: store.db,
+      provider: reflectProvider,
+      logger,
+      publications,
+      resolver,
+    };
     narratives = new SessionNarrativeCloser(narrativeDeps, narrativeOptions(config));
     idleNarratives = new IdleNarrativeSweeper(narrativeDeps, narrativeSweepOptions(config));
     idleNarratives.start();
@@ -483,13 +487,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       service,
       config,
       logger,
-      // Stop the idle sweep before the service closes its own transports, so shutdown cannot
-      // race a sweep tick into closing a session the drain is already tearing down; maintenance
-      // stops next, since a tick that started can still be holding a graph write and its own
-      // abort signal is what lets an operation cut that short; the service closes third, so
-      // every transport closes and its narrative and access-tracking writes are scheduled
-      // before either is awaited; the driver and the store go last, since all of the above are
-      // still writing to them.
+      // Drain background writes before closing their driver and store.
       close: teardown,
     };
   } catch (err) {

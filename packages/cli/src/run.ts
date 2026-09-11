@@ -1,3 +1,4 @@
+import { runConsolidate } from './consolidate.js';
 import { runCosts } from './costs.js';
 import { runDoctor } from './doctor.js';
 import { runForget } from './forget.js';
@@ -26,6 +27,10 @@ type Command = {
 };
 
 const commands: Record<string, Command> = {
+  consolidate: {
+    summary: 'resume or inspect a fixed narrative migration: status | run',
+    run: (argv) => runConsolidate(argv),
+  },
   costs: {
     summary: 'API token usage and estimated cost by day and surface',
     run: (argv) => runCosts(argv),

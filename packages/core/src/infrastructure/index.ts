@@ -43,6 +43,9 @@ export type { ExperienceArchiveRow } from './sqlite/experience-archive.js';
 
 /** C1's canonical mapping, for a reader that must find an occurrence's own archive row. */
 export { listReferenceBatches, readSourceRecord } from './sqlite/source-identity.js';
+export { readNarrativeMigration } from './sqlite/narrative-migration-job.js';
+export { PARTITION_POLICY_VERSION } from './sqlite/chunk-manifest.js';
+export { openReadOnlySqliteHandle } from './sqlite/database.js';
 
 export { countUsageEvents } from './sqlite/usage-events.js';
 

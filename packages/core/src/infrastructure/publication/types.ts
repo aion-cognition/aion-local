@@ -30,6 +30,10 @@ export const PUBLICATION_KINDS = [
   // the chunk family has, publishing through the same coordinator. Its own kind because it is
   // its own writer with its own membership fence, not a variant of the chunk publication.
   'overview_publish',
+  /** The first proved historical capture order, copied under the guard without changing raw data. */
+  'migration_order',
+  /** The temporary whole-session writer remains separately fenced until its family cuts over. */
+  'legacy_narrative_publish',
 ] as const;
 export type PublicationKind = (typeof PUBLICATION_KINDS)[number];
 

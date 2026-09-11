@@ -9,6 +9,7 @@ import type { Driver } from 'neo4j-driver';
 import { arrivalIds, buildRankedLists, firstPassIds, toActivationSeed } from './candidates.js';
 import type { CheckedRead } from './coverage-checker.js';
 import { extractCues, type CueCache, type CueExtractionResult } from './cues.js';
+import { discloseFamilyGaps, revalidateFamilyPolicy } from './family-serving-policy.js';
 import { triggeredIntentions } from './intentions.js';
 import { readModeFor } from './read-mode.js';
 import { emitRecallTrace, notifyRecalled, type RecallListener } from './recall-observers.js';
@@ -305,7 +306,10 @@ export async function handleRecall(
   ]);
   // One view per attempt. Suppression, the fold, rendering and the holdings record all read it,
   // so nothing below can decide from a reading a later stage contradicts.
-  const view = resolvedView({ reading, relatedClaims: claims, sessionId, attribute: ownFilter });
+  const view = discloseFamilyGaps(
+    resolvedView({ reading, relatedClaims: claims, sessionId, attribute: ownFilter }),
+    ranked,
+  );
 
   const timings: StageTimingsMs = {
     cues: cues.ms,
@@ -404,7 +408,12 @@ export async function handleRecall(
   // stage above is re-run, so nothing is re-ranked and no provider is called twice.
   let answer = stated;
   if (disposition.kind === 'declined' && checked !== undefined) {
-    evidence = uncertifiedThroughout(view, ids);
+    evidence = revalidateFamilyPolicy(
+      deps.db,
+      uncertifiedThroughout(view, ids),
+      checked.context,
+      ranked,
+    );
     serving = answerFrom(evidence);
     answer = withCoverage(
       serving.pack,

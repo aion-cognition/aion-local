@@ -1,20 +1,14 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
-import { cleanupNarratives, type NarrativeCleanupDeps } from './narrative-cleanup.js';
+import { cleanupNarratives } from './narrative-cleanup.js';
 import { BITEMPORAL_PROPERTIES } from '../../infrastructure/graph/bitemporal.js';
-import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
+import { MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
 import {
   DERIVES_FROM_TYPE,
   NARRATIVE_PROPERTIES,
 } from '../../infrastructure/graph/narrative-queries.js';
 import { coerceGraphValue } from '../../infrastructure/graph/values.js';
-import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
-import type { Provider, Vector } from '../../infrastructure/providers/types.js';
 import { sealChunk } from '../../infrastructure/sqlite/chunk-manifest.js';
-import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import {
   allocateNarrativeRevision,
   CHUNK_REVISION_FAMILY,
@@ -22,85 +16,53 @@ import {
 } from '../../infrastructure/sqlite/narrative-revisions.js';
 import { recordSourceRecord } from '../../infrastructure/sqlite/source-identity.js';
 import { NARRATIVE_GROUNDING } from '../domain/narrative.js';
-import { NarrativeFakeGraph } from '../test-support/narrative-graph.fixture.js';
+import {
+  deps,
+  OTHER_SESSION_ID as EMPTY_SESSION_ID,
+  generate,
+  graph,
+  NOW,
+  seedEpisode as seedNativeEpisode,
+  SESSION_ID,
+  store,
+} from './test-support/legacy-regression.fixture.js';
 
-const SESSION_ID = 'session-with-episodes';
-const EMPTY_SESSION_ID = 'session-without-episodes';
-const NOW = new Date('2026-04-02T12:00:00Z');
 const EPISODE_OCCURRED_AT = new Date('2026-04-02T10:00:00Z');
-
-const OUTPUT = {
-  sentences: [{ text: 'The orders table was left unsharded.', source_ids: ['S1'] }],
-};
-
-let graph: NarrativeFakeGraph;
-let dataDir: string;
-let logger: Logger;
-let generate: ReturnType<typeof vi.fn>;
-let store: SqliteStore;
-let deps: NarrativeCleanupDeps;
-
-function fakeVectors(texts: readonly string[]): Vector[] {
-  return texts.map(() => [1, 0, 0, 0]);
-}
-
-function seedEpisode(id: string, sessionId: string): void {
-  graph.seedNode(id, ['Episode', 'Memory', 'AionNode'], {
-    [MEMORY_PROPERTIES.text]: `body of ${id}`,
-    [MEMORY_PROPERTIES.sessionId]: sessionId,
-    [BITEMPORAL_PROPERTIES.occurredAt]: EPISODE_OCCURRED_AT,
-    [BITEMPORAL_PROPERTIES.txFrom]: EPISODE_OCCURRED_AT,
+beforeEach(() => {
+  generate.mockResolvedValue({
+    sentences: [{ text: 'The orders table was left unsharded.', source_ids: ['S1'] }],
   });
-  graph.seedEdge(CONTAINMENT_TYPE, id, sessionId);
+});
+async function seedEpisode(id: string, sessionId: string): Promise<void> {
+  await seedNativeEpisode(id, EPISODE_OCCURRED_AT.toISOString(), sessionId);
 }
 
 /** A narrative as the free-prose writer left it: no citations, still standing. */
-function seedOldNarrative(
+async function seedOldNarrative(
   id: string,
   sessionId: string,
   extra: Record<string, unknown> = {},
-): void {
-  graph.seedNode(id, ['Narrative', 'Memory', 'AionNode'], {
+): Promise<void> {
+  await graph.seedNode(id, ['Narrative', 'Memory', 'AionNode'], {
     [MEMORY_PROPERTIES.summary]: 'The session focused on a close-mode probe.',
     [MEMORY_PROPERTIES.text]: 'The probe was presumably gathering detailed data from a target.',
+    [NARRATIVE_PROPERTIES.scope]: 'session',
+    [MEMORY_PROPERTIES.sessionId]: sessionId,
     [NARRATIVE_PROPERTIES.version]: 1,
     [NARRATIVE_PROPERTIES.coverageKey]: 'stale-key',
     [NARRATIVE_PROPERTIES.coverageCount]: 1,
     ...extra,
   });
-  graph.seedEdge(DERIVES_FROM_TYPE, id, sessionId);
+  await graph.seedEdge(DERIVES_FROM_TYPE, id, sessionId);
 }
 
-function narrativesStanding(): { id: string; properties: Record<string, unknown> }[] {
-  return graph
-    .nodesWithLabel('Narrative')
-    .filter((node) => node.properties[BITEMPORAL_PROPERTIES.validUntil] === undefined);
+async function narrativesStanding(): Promise<
+  { id: string; properties: Record<string, unknown> }[]
+> {
+  return (await graph.nodesWithLabel('Narrative')).filter(
+    (node) => node.properties[BITEMPORAL_PROPERTIES.validUntil] === undefined,
+  );
 }
-
-beforeEach(() => {
-  graph = new NarrativeFakeGraph();
-  graph.seedNode(SESSION_ID, ['Session', 'AionNode']);
-  graph.seedNode(EMPTY_SESSION_ID, ['Session', 'AionNode']);
-
-  dataDir = mkdtempSync(join(tmpdir(), 'aion-narrative-cleanup-'));
-  logger = openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' });
-  generate = vi.fn(() => Promise.resolve(OUTPUT));
-  store = new SqliteStore({ filePath: ':memory:' });
-  deps = {
-    driver: graph.driver,
-    db: store.db,
-    provider: {
-      embed: vi.fn((texts: readonly string[]) => Promise.resolve(fakeVectors(texts))),
-      generate,
-    } as unknown as Provider,
-    logger,
-  };
-});
-
-afterEach(() => {
-  store.close();
-  rmSync(dataDir, { recursive: true, force: true });
-});
 
 /**
  * A published chunk revision over one frozen member, and the graph node it wrote. The manifest
@@ -143,8 +105,8 @@ function publishChunkRevisionFor(sessionId: string): string {
 
 describe('narrative cleanup', () => {
   it('regenerates the narrative of a session that still holds episodes', async () => {
-    seedEpisode('episode-1', SESSION_ID);
-    seedOldNarrative('old-narrative', SESSION_ID);
+    await seedEpisode('episode-1', SESSION_ID);
+    await seedOldNarrative('old-narrative', SESSION_ID);
 
     const report = await cleanupNarratives(deps, { now: NOW });
 
@@ -157,7 +119,7 @@ describe('narrative cleanup', () => {
       failed: 0,
     });
 
-    const standing = narrativesStanding();
+    const standing = await narrativesStanding();
     expect(standing).toHaveLength(1);
     expect(standing[0]?.id).not.toBe('old-narrative');
     expect(standing[0]?.properties[MEMORY_PROPERTIES.text]).toBe(
@@ -169,12 +131,12 @@ describe('narrative cleanup', () => {
   });
 
   it('supersedes the old narrative rather than deleting it, on both timelines apart', async () => {
-    seedEpisode('episode-1', SESSION_ID);
-    seedOldNarrative('old-narrative', SESSION_ID);
+    await seedEpisode('episode-1', SESSION_ID);
+    await seedOldNarrative('old-narrative', SESSION_ID);
 
     await cleanupNarratives(deps, { now: NOW });
 
-    const old = graph.nodes.get('old-narrative');
+    const old = await graph.node('old-narrative');
     // The old version stopped covering the session at the end of what the replacement
     // compresses; the substrate stopped holding it at the rewrite.
     expect(coerceGraphValue(old?.properties[BITEMPORAL_PROPERTIES.validUntil])).toEqual(
@@ -182,7 +144,9 @@ describe('narrative cleanup', () => {
     );
     expect(coerceGraphValue(old?.properties[BITEMPORAL_PROPERTIES.txUntil])).toEqual(NOW);
     expect(old?.properties[BITEMPORAL_PROPERTIES.forgottenAt]).toBeUndefined();
-    expect(graph.edgesOfType('SUPERSEDES').map((edge) => edge.targetId)).toEqual(['old-narrative']);
+    expect((await graph.edgesOfType('SUPERSEDES')).map((edge) => edge.targetId)).toEqual([
+      'old-narrative',
+    ]);
   });
 
   /**
@@ -190,7 +154,7 @@ describe('narrative cleanup', () => {
    * the records still hold the narrative up, and this one they cannot speak for at all.
    */
   it('withholds a narrative nothing accounts for rather than forgetting it', async () => {
-    seedOldNarrative('orphan-narrative', EMPTY_SESSION_ID);
+    await seedOldNarrative('orphan-narrative', EMPTY_SESSION_ID);
 
     const report = await cleanupNarratives(deps, { now: NOW });
 
@@ -198,10 +162,10 @@ describe('narrative cleanup', () => {
     expect(report.held).toBe(0);
     expect(report.regenerated).toBe(0);
     expect(generate).not.toHaveBeenCalled();
-    const orphan = graph.nodes.get('orphan-narrative');
+    const orphan = await graph.node('orphan-narrative');
     expect(orphan?.properties[BITEMPORAL_PROPERTIES.forgottenAt]).toBeUndefined();
     expect(orphan?.properties[BITEMPORAL_PROPERTIES.validUntil]).toBeUndefined();
-    expect(narrativesStanding().map((node) => node.id)).toEqual(['orphan-narrative']);
+    expect((await narrativesStanding()).map((node) => node.id)).toEqual(['orphan-narrative']);
   });
 
   /**
@@ -211,21 +175,21 @@ describe('narrative cleanup', () => {
    */
   it('leaves a chunk revision standing when its session holds no episode at all', async () => {
     const nodeId = publishChunkRevisionFor(EMPTY_SESSION_ID);
-    seedOldNarrative(nodeId, EMPTY_SESSION_ID);
+    await seedOldNarrative(nodeId, EMPTY_SESSION_ID);
 
     const report = await cleanupNarratives(deps, { now: NOW });
 
     expect(report.held).toBe(1);
     expect(report.withheld).toBe(0);
     expect(generate).not.toHaveBeenCalled();
-    const chunk = graph.nodes.get(nodeId);
+    const chunk = await graph.node(nodeId);
     expect(chunk?.properties[BITEMPORAL_PROPERTIES.forgottenAt]).toBeUndefined();
-    expect(narrativesStanding().map((node) => node.id)).toEqual([nodeId]);
+    expect((await narrativesStanding()).map((node) => node.id)).toEqual([nodeId]);
   });
 
   it('leaves a narrative already written under the current grounding revision alone', async () => {
-    seedEpisode('episode-1', SESSION_ID);
-    seedOldNarrative('grounded-narrative', SESSION_ID, {
+    await seedEpisode('episode-1', SESSION_ID);
+    await seedOldNarrative('grounded-narrative', SESSION_ID, {
       [NARRATIVE_PROPERTIES.citations]: ['episode-1'],
       [NARRATIVE_PROPERTIES.grounding]: NARRATIVE_GROUNDING,
     });
@@ -237,8 +201,8 @@ describe('narrative cleanup', () => {
   });
 
   it('converges: a second pass finds nothing left to repair', async () => {
-    seedEpisode('episode-1', SESSION_ID);
-    seedOldNarrative('old-narrative', SESSION_ID);
+    await seedEpisode('episode-1', SESSION_ID);
+    await seedOldNarrative('old-narrative', SESSION_ID);
     await cleanupNarratives(deps, { now: NOW });
 
     const second = await cleanupNarratives(deps, { now: NOW });
@@ -248,14 +212,14 @@ describe('narrative cleanup', () => {
   });
 
   it('counts a failed regeneration and leaves the old narrative standing', async () => {
-    seedEpisode('episode-1', SESSION_ID);
-    seedOldNarrative('old-narrative', SESSION_ID);
+    await seedEpisode('episode-1', SESSION_ID);
+    await seedOldNarrative('old-narrative', SESSION_ID);
     generate.mockRejectedValueOnce(new Error('ollama is down'));
 
     const report = await cleanupNarratives(deps, { now: NOW });
 
     expect(report.failed).toBe(1);
     expect(report.regenerated).toBe(0);
-    expect(narrativesStanding().map((node) => node.id)).toEqual(['old-narrative']);
+    expect((await narrativesStanding()).map((node) => node.id)).toEqual(['old-narrative']);
   });
 });

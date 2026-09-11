@@ -103,3 +103,8 @@ export {
   UNANIMOUS_APPLY_METHOD,
 } from './application/proposals.js';
 export type { ApplyScope } from './application/proposals.js';
+export {
+  runNarrativeMigrationBatch,
+  NARRATIVE_MIGRATION_LIMITS,
+} from './application/narrative-migration.js';
+export { CHUNK_BOUNDARY_POLICY } from './domain/chunk-boundary.js';

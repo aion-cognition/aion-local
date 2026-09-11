@@ -188,6 +188,8 @@ export const NARRATIVE_SCHEMA_STATEMENTS: readonly string[] = [
     family TEXT NOT NULL DEFAULT 'legacy_session_overview',
     verification_status TEXT NOT NULL,
     verification_json TEXT,
+    published_operation_id TEXT,
+    published_known_from TEXT CHECK ((published_operation_id IS NULL) = (published_known_from IS NULL)),
     retired_at TEXT,
     retirement_family_json TEXT,
     created_at TEXT NOT NULL
@@ -211,6 +213,12 @@ export const NARRATIVE_SCHEMA_STATEMENTS: readonly string[] = [
  * which is what makes a fresh file and a retrofitted one the same table.
  */
 export const NARRATIVE_COLUMN_ADDITIONS: readonly ColumnAddition[] = [
+  { table: 'legacy_narratives', column: 'published_operation_id', definition: 'TEXT' },
+  {
+    table: 'legacy_narratives',
+    column: 'published_known_from',
+    definition: 'TEXT CHECK ((published_operation_id IS NULL) = (published_known_from IS NULL))',
+  },
   { table: 'chunks', column: 'overlaps_json', definition: 'TEXT' },
   { table: 'chunks', column: 'overlaps_truncated', definition: 'INTEGER' },
   { table: 'chunk_revisions', column: 'coverage_gaps_json', definition: 'TEXT' },

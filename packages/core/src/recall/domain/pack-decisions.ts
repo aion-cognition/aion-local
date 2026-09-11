@@ -10,6 +10,8 @@ import type { PackBucket } from './pack-buckets.js';
  */
 
 export const PACK_DECISIONS = [
+  /** The session selects another representation, or its historical preference is unproved. */
+  'representation_family',
   'accepted',
   /** The same node under the same id, already printed. Identity, not a fold. */
   'already_packed',

@@ -7,6 +7,7 @@ export type LegacyNarrativeRecord = {
   readonly verificationJson: string | null;
   readonly retiredAt: string | null;
   readonly retirementFamilyJson: string | null;
+  readonly publication?: { readonly operationId: string; readonly knownFrom: string };
 };
 
 type LegacyRow = {
@@ -16,9 +17,14 @@ type LegacyRow = {
   verification_json: string | null;
   retired_at: string | null;
   retirement_family_json: string | null;
+  published_operation_id: string | null;
+  published_known_from: string | null;
 };
 
 function readRow(row: LegacyRow): LegacyNarrativeRecord {
+  if ((row.published_operation_id == null) !== (row.published_known_from == null)) {
+    throw new Error('legacy publication binding is incomplete');
+  }
   return {
     narrativeId: row.narrative_id,
     sessionId: row.session_id,
@@ -26,7 +32,38 @@ function readRow(row: LegacyRow): LegacyNarrativeRecord {
     verificationJson: row.verification_json,
     retiredAt: row.retired_at,
     retirementFamilyJson: row.retirement_family_json,
+    ...(row.published_operation_id == null || row.published_known_from == null
+      ? {}
+      : {
+          publication: {
+            operationId: row.published_operation_id,
+            knownFrom: row.published_known_from,
+          },
+        }),
   };
+}
+
+/** Only a new controlled publication owns this birth time; an inventory never replaces it. */
+export function acknowledgeLegacyNarrativeBirth(
+  db: SqliteHandle,
+  narrativeId: string,
+  operationId: string,
+  knownFrom: string,
+): void {
+  if (!db.inTransaction) {
+    throw new Error('legacy narrative birth requires its acknowledgment transaction');
+  }
+  const held = readLegacyNarrative(db, narrativeId);
+  if (
+    held === undefined ||
+    (held.publication !== undefined &&
+      (held.publication.operationId !== operationId || held.publication.knownFrom !== knownFrom))
+  ) {
+    throw new Error('legacy narrative publication identity changed');
+  }
+  db.prepare(
+    'UPDATE legacy_narratives SET published_operation_id = ?, published_known_from = ? WHERE narrative_id = ?',
+  ).run(operationId, knownFrom, narrativeId);
 }
 
 /** The preserved legacy identity and its independent representation retirement. */

@@ -2,6 +2,10 @@ import type { Driver } from 'neo4j-driver';
 
 import { readRelationScope } from './dependencies.js';
 import { durableLineage, type DurableLineage } from './durable-lineage.js';
+import {
+  readNarrativeRepresentations,
+  type NarrativeRepresentation,
+} from './narrative-representation.js';
 import { ownershipIncidence, readOwnership } from './ownership.js';
 import {
   fetchClaimProvenance,
@@ -50,17 +54,16 @@ export type ItemMetadata = {
   /** The caller-independent summary the serving layer derives its own/other verdict from. */
   readonly ownership: OwnershipSummary;
   /**
-   * The published narrative revision this item is cited by, when the substrate can say. No
-   * producer writes the citation records yet, so the honest answer is that the binding is
-   * unavailable rather than that there is none.
+   * The published revisions citing this item. An unproved citation census answers unavailable
+   * rather than claiming no revision cites it.
    */
   readonly narrativeBinding: NarrativeBinding;
+  /** Explicit inspection keeps the node; default serving follows this separate family choice. */
+  readonly representation?: NarrativeRepresentation;
 };
 
 /**
- * What the citation records say about this item: the published revisions citing it, or that the
- * records could not answer. Nothing writes them yet, so the second is the usual answer today and
- * the first becomes possible the moment they exist.
+ * The committed citation population, with unknown census kept separate from verified empty.
  */
 export type NarrativeBinding =
   | { readonly status: 'cited'; readonly revisionIds: readonly string[] }
@@ -230,16 +233,39 @@ export async function readItemMetadata(
   for (const row of incidence.rows) {
     byNode.set(row.nodeId, [...(byNode.get(row.nodeId) ?? []), row]);
   }
+  const representations = await readNarrativeRepresentations(
+    deps,
+    accepted,
+    input.context,
+    input.budget,
+  );
+  dependencies.push(...representations.dependencies);
 
   for (const id of accepted) {
     const address = idAddress(id);
+    if (representations.values.get(id)?.knownAtVantage === false) {
+      record(address, [issueOn(address, 'narrative_revision', 'not_found', true)], 'resident');
+      continue;
+    }
     try {
-      readOne(deps, input, id, byNode.get(id) ?? [], overRows || overWalk, provenance, {
-        record,
-        results,
-        issues,
-        dependencies,
-      });
+      readOne(
+        deps,
+        input,
+        id,
+        byNode.get(id) ?? [],
+        overRows || overWalk,
+        provenance,
+        {
+          record,
+          results,
+          issues,
+          dependencies,
+        },
+        representations.values.get(id),
+        representations.issues.filter(
+          (issue) => issue.address.kind === 'id' && issue.address.id === id,
+        ),
+      );
     } catch {
       // Every store this read consults can be unavailable, and each one answers the same way:
       // a named result for the address that could not be read, never a rejected batch.
@@ -304,6 +330,8 @@ function readOne(
   overRows: boolean,
   provenance: ReadonlyMap<string, ItemProvenance>,
   sink: MetadataSink,
+  representation?: NarrativeRepresentation,
+  representationIssues: readonly EvidenceIssue[] = [],
 ): void {
   const { record, results, issues, dependencies } = sink;
   {
@@ -314,7 +342,7 @@ function readOne(
     // independent origin, and filtering ownership to extraction loses the entity's owners.
     const rows = incidenceOf.filter((row) => row.role === 'extraction');
     const owners = incidenceOf.filter((row) => OWNERSHIP_ROLES.has(row.role));
-    const nodeIssues: EvidenceIssue[] = [];
+    const nodeIssues: EvidenceIssue[] = [...representationIssues];
 
     let attributionProved = true;
     for (const { role, direction } of OWNERSHIP_SCOPES) {
@@ -408,6 +436,7 @@ function readOne(
       unknownAttribution: ownership.unknownAttribution || !attributionProved,
       ownership,
       narrativeBinding: binding,
+      ...(representation === undefined ? {} : { representation }),
     };
     if (input.budget.chargeMetadataBytes(utf8Bytes(JSON.stringify(value))) !== undefined) {
       nodeIssues.push(issueOn(address, 'ownership', 'budget_limit', true));

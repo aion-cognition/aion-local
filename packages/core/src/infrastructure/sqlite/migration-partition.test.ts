@@ -15,6 +15,7 @@ import {
   rememberMigrationOrder,
   rememberMigrationPolicy,
   sourceReservedForMigration,
+  sealMigrationMembership,
 } from './migration-partition.js';
 import { readSourceRecord } from './source-identity.js';
 import { seedSource } from '../../evidence/test-support/evidence.fixture.js';
@@ -164,6 +165,34 @@ describe('fixed historical partition records', () => {
         .immediate(),
     ).toThrow('interrupted');
     expect(listMigrationRemainder(store.db, 'cohort', 'session', 10)).toEqual([]);
+  });
+
+  it('rechecks raw verification even when a repeated seal already owns the same membership', () => {
+    rememberMigrationPolicy(store.db, 'cohort', POLICY);
+    order('a');
+    const members = listMigrationRemainder(store.db, 'cohort', 'session', 10);
+    const first = sealMigrationMembership(store.db, {
+      cohortId: 'cohort',
+      sessionId: 'session',
+      members,
+      at: NOW,
+    });
+    expect(first.created).toBe(true);
+    store.db
+      .prepare(
+        "UPDATE source_records SET verification_status = 'pinned', verification_reason = 'withdrawn' WHERE source_id = 'a'",
+      )
+      .run();
+    expect(() =>
+      sealMigrationMembership(store.db, {
+        cohortId: 'cohort',
+        sessionId: 'session',
+        members,
+        at: NOW,
+      }),
+    ).toThrow('verified migration membership');
+    expect(readSourceRecord(store.db, 'a')?.verificationStatus).toBe('pinned');
+    expect(readMigrationProgress(store.db, 'cohort', 'a')?.partitionAssignment).toBe(first.chunkId);
   });
 
   it('reopens the saved policy/order and adds nullable fields on a legacy schema', () => {

@@ -1,7 +1,10 @@
 import { reflectionCompletionPublication } from './completion-publication.js';
+import { familyCutoverPublication } from './family-cutover.js';
 import { intakePublication } from './intake-publication.js';
 import { legacyMaterializationPublication } from './legacy-materialization.js';
+import { legacyNarrativePublication } from './legacy-narrative-publication.js';
 import { claimMergePublication } from './merge-publication.js';
+import { migrationOrderPublication } from './migration-order.js';
 import { narrativePublication } from './narrative-publication.js';
 import { narrativeFamilyRepairPublication } from './narrative-repair.js';
 import { overviewPublication } from './overview-publication.js';
@@ -29,6 +32,9 @@ export const INSTALLED_PUBLICATION_HANDLERS: readonly PublicationHandler[] = [
   statedReferencesPublication,
   projectionRebuildPublication,
   reflectionCompletionPublication,
+  familyCutoverPublication,
+  migrationOrderPublication,
+  legacyNarrativePublication,
   legacyMaterializationPublication,
   claimMergePublication,
   narrativePublication,

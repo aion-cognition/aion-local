@@ -1,19 +1,27 @@
+import { randomUUID } from 'node:crypto';
+
+import { legacyCoverageEdgeId } from './legacy-coverage.js';
 import type { NarrativeDeps } from './narratives.js';
 import { attachContentVectors } from './vectors.js';
 import {
   supersedeInTransaction,
   writeStampedDerivedNodeInTransaction,
 } from '../../infrastructure/graph/bitemporal.js';
-import { inWriteTransaction } from '../../infrastructure/graph/connection.js';
+import type { GraphTransaction } from '../../infrastructure/graph/connection.js';
 import { upsertEdgeInTransaction } from '../../infrastructure/graph/edges.js';
 import { MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
 import { closeNarrativeEdgesInTransaction } from '../../infrastructure/graph/narrative-edge-queries.js';
+import { NARRATIVE_PUBLISHED_BY } from '../../infrastructure/graph/narrative-families.js';
 import {
   DERIVES_FROM_TYPE,
   NARRATIVE_PROPERTIES,
   SUMMARIZED_BY_TYPE,
 } from '../../infrastructure/graph/narrative-queries.js';
 import type { GraphProperties } from '../../infrastructure/graph/values.js';
+import {
+  LegacyPublicationDeferred,
+  type LegacyNarrativeFence,
+} from '../domain/legacy-narrative-fence.js';
 import {
   NARRATIVE_GROUNDING,
   SESSION_NARRATIVE_SCOPE,
@@ -55,8 +63,19 @@ export type NarrativeWrite = {
  * invisible to vector search. `citations` carries the ids every stored sentence cited, which
  * is what makes the claim auditable after the fact.
  */
-function narrativeProperties(input: NarrativeWrite): GraphProperties {
+export type NarrativeGraphWrite = Pick<
+  NarrativeWrite,
+  'narrativeId' | 'sessionId' | 'span' | 'now' | 'occurredAt'
+> & {
+  readonly operationId: string;
+  readonly decision: Pick<NarrativeDecision, 'version' | 'coverageKey' | 'episodeIds'>;
+  readonly output: Pick<GroundedNarrative, 'summary' | 'narrative' | 'citations' | 'kept'>;
+  readonly source: Pick<NarrativeSource, 'coverage'>;
+};
+
+function narrativeProperties(input: NarrativeGraphWrite): GraphProperties {
   return {
+    [NARRATIVE_PUBLISHED_BY]: input.operationId,
     [MEMORY_PROPERTIES.summary]: input.output.summary,
     [MEMORY_PROPERTIES.text]: input.output.narrative,
     [NARRATIVE_PROPERTIES.citations]: [...input.output.citations],
@@ -71,6 +90,7 @@ function narrativeProperties(input: NarrativeWrite): GraphProperties {
     [NARRATIVE_PROPERTIES.coverage]: input.source.coverage,
     [NARRATIVE_PROPERTIES.spanStart]: input.span.start,
     [NARRATIVE_PROPERTIES.spanEnd]: input.span.end,
+    [NARRATIVE_PROPERTIES.family]: 'legacy_session_overview',
   };
 }
 
@@ -80,20 +100,36 @@ function narrativeProperties(input: NarrativeWrite): GraphProperties {
  * than with the oldest. Edge counts are zero: these are structural facts, not observations,
  * so a repeat write moves nothing.
  */
-export async function writeNarrative(deps: NarrativeDeps, input: NarrativeWrite): Promise<void> {
-  await inWriteTransaction(deps.driver, async (tx) => {
-    await writeStampedDerivedNodeInTransaction(tx, {
-      label: 'Narrative',
-      id: input.narrativeId,
-      now: input.now,
-      occurredAt: input.occurredAt,
-      properties: narrativeProperties(input),
-    });
+export async function writeNarrativeInTransaction(
+  tx: GraphTransaction,
+  input: NarrativeGraphWrite,
+): Promise<void> {
+  await writeStampedDerivedNodeInTransaction(tx, {
+    label: 'Narrative',
+    id: input.narrativeId,
+    now: input.now,
+    occurredAt: input.occurredAt,
+    properties: narrativeProperties(input),
+  });
 
+  await upsertEdgeInTransaction(tx, {
+    type: DERIVES_FROM_TYPE,
+    sourceId: input.narrativeId,
+    targetId: input.sessionId,
+    strength: 1,
+    confidence: 1,
+    signals: NARRATIVE_SIGNALS,
+    provenance: NARRATIVE_PROVENANCE,
+    count: 0,
+    now: input.now,
+  });
+
+  for (const episodeId of input.decision.episodeIds) {
     await upsertEdgeInTransaction(tx, {
-      type: DERIVES_FROM_TYPE,
-      sourceId: input.narrativeId,
-      targetId: input.sessionId,
+      id: legacyCoverageEdgeId(episodeId, input.narrativeId),
+      type: SUMMARIZED_BY_TYPE,
+      sourceId: episodeId,
+      targetId: input.narrativeId,
       strength: 1,
       confidence: 1,
       signals: NARRATIVE_SIGNALS,
@@ -101,21 +137,7 @@ export async function writeNarrative(deps: NarrativeDeps, input: NarrativeWrite)
       count: 0,
       now: input.now,
     });
-
-    for (const episodeId of input.decision.episodeIds) {
-      await upsertEdgeInTransaction(tx, {
-        type: SUMMARIZED_BY_TYPE,
-        sourceId: episodeId,
-        targetId: input.narrativeId,
-        strength: 1,
-        confidence: 1,
-        signals: NARRATIVE_SIGNALS,
-        provenance: NARRATIVE_PROVENANCE,
-        count: 0,
-        now: input.now,
-      });
-    }
-  });
+  }
 }
 
 /**
@@ -131,8 +153,8 @@ export async function writeNarrative(deps: NarrativeDeps, input: NarrativeWrite)
  * matches what is still open. `narrative_cleanup` repairs the residue of any close that ran
  * before this one existed.
  */
-export async function closeSuperseded(
-  deps: NarrativeDeps,
+export async function closeSupersededInTransaction(
+  tx: GraphTransaction,
   decision: NarrativeDecision,
   narrativeId: string,
   now: Date,
@@ -143,26 +165,101 @@ export async function closeSuperseded(
     return;
   }
 
-  await inWriteTransaction(deps.driver, async (tx) => {
-    for (const oldId of superseded) {
-      await supersedeInTransaction(tx, {
-        oldId,
-        newId: narrativeId,
-        now,
-        // An older version stopped covering the session at the replacement's own world time,
-        // which is not the moment the rewrite ran.
-        validUntil: occurredAt,
-        signals: NARRATIVE_SIGNALS,
-        provenance: NARRATIVE_PROVENANCE,
-      });
-    }
-
-    await closeNarrativeEdgesInTransaction(tx, {
-      narrativeIds: superseded,
+  for (const oldId of superseded) {
+    await supersedeInTransaction(tx, {
+      oldId,
+      newId: narrativeId,
+      now,
+      // An older version stopped covering the session at the replacement's own world time,
+      // which is not the moment the rewrite ran.
       validUntil: occurredAt,
-      txUntil: now,
+      signals: NARRATIVE_SIGNALS,
+      provenance: NARRATIVE_PROVENANCE,
     });
+  }
+
+  await closeNarrativeEdgesInTransaction(tx, {
+    narrativeIds: superseded,
+    validUntil: occurredAt,
+    txUntil: now,
   });
+}
+
+/** The caller supplies the dependency captured before it began reading or synthesizing. */
+export async function writeNarrative(
+  deps: NarrativeDeps,
+  input: NarrativeWrite,
+  fence?: LegacyNarrativeFence,
+): Promise<void> {
+  if (deps.publications === undefined || fence === undefined) {
+    throw new Error('legacy narration requires a composed publisher and run-start fence');
+  }
+  const outcome = await deps.publications.publish({
+    kind: 'legacy_narrative_publish',
+    operationId: `legacy-narrative:${randomUUID()}`,
+    payload: {
+      mode: 'publish',
+      sessionId: input.sessionId,
+      nodeId: input.narrativeId,
+      coverageKey: input.decision.coverageKey,
+      version: input.decision.version,
+      sourceIds: input.decision.episodeIds,
+      summary: input.output.summary,
+      narrative: input.output.narrative,
+      citations: input.output.citations,
+      kept: input.output.kept,
+      coverage: input.source.coverage,
+      spanStart: input.span.start?.toISOString() ?? null,
+      spanEnd: input.span.end?.toISOString() ?? null,
+      occurredAt: input.occurredAt.toISOString(),
+      readAt: input.now.toISOString(),
+      fence,
+    },
+  });
+  if (outcome.status !== 'acknowledged') {
+    throw new LegacyPublicationDeferred(outcome.reason);
+  }
+}
+
+export async function closeSuperseded(
+  deps: NarrativeDeps,
+  decision: NarrativeDecision,
+  narrativeId: string,
+  now: Date,
+  occurredAt: Date,
+  fence?: LegacyNarrativeFence,
+): Promise<void> {
+  if (decision.supersedes.length === 0) {
+    return;
+  }
+  if (deps.publications === undefined || fence === undefined) {
+    throw new Error('legacy repair requires a composed publisher and run-start fence');
+  }
+  const outcome = await deps.publications.publish({
+    kind: 'legacy_narrative_publish',
+    operationId: `legacy-repair:${randomUUID()}`,
+    payload: {
+      mode: 'repair',
+      sessionId: fence.familyDependency.id,
+      nodeId: narrativeId,
+      coverageKey: decision.coverageKey,
+      version: decision.version,
+      sourceIds: decision.episodeIds,
+      summary: '',
+      narrative: '',
+      citations: [],
+      kept: 0,
+      coverage: 0,
+      spanStart: null,
+      spanEnd: null,
+      occurredAt: occurredAt.toISOString(),
+      readAt: now.toISOString(),
+      fence,
+    },
+  });
+  if (outcome.status !== 'acknowledged') {
+    throw new LegacyPublicationDeferred(outcome.reason);
+  }
 }
 
 /**

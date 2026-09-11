@@ -4,6 +4,7 @@ import type { JudgmentEvidence, WithheldWork } from '../../evidence/application/
 import type { EpisodeContext } from '../../infrastructure/graph/episode-context.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
+import type { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 
 /**
@@ -116,6 +117,7 @@ export type StageSettlement = {
  * reads the same turns once.
  */
 export type StageContext = {
+  readonly publications?: PublicationCoordinator;
   readonly driver: Driver;
   readonly db: SqliteHandle;
   readonly provider: Provider;

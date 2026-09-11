@@ -1,4 +1,5 @@
 import { SessionNarrativeStage, type SessionNarrativeOptions } from './narratives.js';
+import { CHUNK_MAX_MEMBERS } from '../domain/chunk-boundary.js';
 import { AssociationInferenceStage, type AssociationStageOptions } from './stages/associations.js';
 import {
   CognitiveExtractionStage,
@@ -124,6 +125,11 @@ export function reinforcementOptions(config: Config): Required<ReinforcementEnqu
 
 export function narrativeOptions(config: Config): WiredNarrativeOptions {
   return {
+    chunkPolicy: {
+      maxMembers: CHUNK_MAX_MEMBERS,
+      renderedInputAllowance: config.maintenance.chunkRenderedInputAllowance,
+      maxSpanMs: config.maintenance.chunkMaxSpanMs,
+    },
     model: config.models.reflect,
     idleMs: config.reflection.narrativeIdleMinutes * MINUTE_MS,
     timeoutMs: config.reflection.stageTimeoutMs,

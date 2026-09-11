@@ -18,7 +18,7 @@ import {
 } from '../../evidence/domain/result.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 import type { ItemOrigin } from '../../infrastructure/graph/origin-queries.js';
-import type { ReadMode } from '../../infrastructure/graph/read-modes.js';
+import { isTimeTravel, type ReadMode } from '../../infrastructure/graph/read-modes.js';
 import type { ResolvedEvidenceView } from '../domain/resolved-view.js';
 
 /**
@@ -33,6 +33,7 @@ export type EvidenceReading =
       readonly kind: 'resolved';
       readonly results: ReadonlyMap<string, EvidenceResult<ItemMetadata>>;
       readonly issues: ResolvedEvidenceView['issues'];
+      readonly historical?: boolean;
     }
   | {
       readonly kind: 'stage';
@@ -69,7 +70,12 @@ export async function readEvidence(
     const batch = await resolver.resolveMetadata(input.ids, input.context, {
       maxRoots: MAX_DERIVATION_ROOTS,
     });
-    return { kind: 'resolved', results: batch.results, issues: batch.issues };
+    return {
+      kind: 'resolved',
+      results: batch.results,
+      issues: batch.issues,
+      historical: isTimeTravel(input.mode),
+    };
   }
   const [provenance, origins] = await Promise.all([
     claimProvenance(stage, input.ids, input.mode),
@@ -157,6 +163,43 @@ export function resolvedView(input: ResolvedViewInput): ResolvedEvidenceView {
       ownership: folded.ownership,
       degraded: folded.degraded,
       issues: reading.issues,
+      narrativeFamilies: {
+        historical: reading.historical ?? false,
+        values: new Map(
+          [...reading.results.values()].flatMap((result) => {
+            if (result.address.kind !== 'id') {
+              return [];
+            }
+            const { id } = result.address;
+            if (result.value?.representation !== undefined) {
+              return [[id, result.value.representation] as const];
+            }
+            if (
+              reading.issues.some(
+                (issue) =>
+                  issue.address.kind === 'id' &&
+                  issue.address.id === id &&
+                  issue.field === 'narrative_revision' &&
+                  issue.reason === 'not_found',
+              )
+            ) {
+              return [
+                [
+                  id,
+                  {
+                    family: 'unknown' as const,
+                    sessions: [],
+                    selection: 'not_selected' as const,
+                    publication: 'established' as const,
+                    knownAtVantage: false as const,
+                  },
+                ] as const,
+              ];
+            }
+            return [];
+          }),
+        ),
+      },
     };
   }
   const ownership = new Map<string, OwnershipVerdict>();

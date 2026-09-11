@@ -24,11 +24,9 @@ import {
 
 const NOW = new Date('2026-09-08T10:00:00.000Z');
 const logger = { warn: vi.fn() };
-
 const CONTENT: ReflectionContent = {
   turns: [{ role: 'user', text: 'the migration took 45 seconds', occurred_at: NOW.toISOString() }],
 };
-
 type QueryLog = { readonly cyphers: string[] };
 
 /**
@@ -141,7 +139,7 @@ describe('the evidence resolver', () => {
     );
 
     expect(batch.results.size).toBe(2);
-    expect(log.cyphers).toHaveLength(2);
+    expect(log.cyphers).toHaveLength(3);
     expect(log.cyphers.some((cypher) => cypher.includes('payload_json'))).toBe(false);
   });
 

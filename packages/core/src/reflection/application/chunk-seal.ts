@@ -1,6 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 
 import { resolveChunkMemberAlone, resolveChunkMembers } from './chunk-evidence.js';
+import { ensureSessionFamily } from './narrative-family.js';
 import type { EvidenceResolver } from '../../evidence/application/resolver.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
@@ -11,6 +12,7 @@ import {
   readRemainderMembers,
   sealChunk,
   unorderedSessionSources,
+  type RemainderMember,
 } from '../../infrastructure/sqlite/chunk-manifest.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
@@ -89,6 +91,41 @@ async function admissionOf(
     : { status: 'renderable', text: settled.text };
 }
 
+/** The live tail and a frozen migration use the same source adapter and rendered-input admission. */
+export async function measureChunkCandidates(
+  deps: ChunkNarrativeDeps,
+  remainder: readonly RemainderMember[],
+  context: CheckedReadContext,
+  policy: ChunkBoundaryPolicy,
+): Promise<
+  | { readonly status: 'measured'; readonly candidates: readonly ChunkCandidate[] }
+  | { readonly status: 'refused'; readonly reason: string }
+> {
+  const resolved = await resolveChunkMembers(
+    deps.resolver,
+    deps.db,
+    remainder.map((row) => row.sourceId),
+    context,
+  );
+  const candidates: ChunkCandidate[] = [];
+  for (const [index, row] of remainder.entries()) {
+    const member = resolved.readings[index];
+    if (member === undefined) {
+      return { status: 'refused', reason: `${row.sourceId} has no evidence result` };
+    }
+    const { text, ...admission } = await admissionOf(deps, member, context, policy);
+    candidates.push({
+      sourceId: row.sourceId,
+      captureOrderValue: row.captureOrderValue,
+      occurredAt: new Date(row.occurredAt),
+      arrivalAt: new Date(row.createdAt),
+      admission,
+      ...(text === undefined ? {} : { text }),
+    });
+  }
+  return { status: 'measured', candidates };
+}
+
 /**
  * Seals the next chunk of a session's tail, or says why it is not time.
  *
@@ -122,31 +159,17 @@ export async function sealSessionChunk(
   if (coverage.status !== 'checked') {
     return { held, status: 'refused', reason: `coverage ${coverage.refusal.reason}` };
   }
-  const resolved = await resolveChunkMembers(
-    deps.resolver,
-    deps.db,
-    remainder.map((row) => row.sourceId),
-    coverage.context,
-  );
-  const candidates: ChunkCandidate[] = [];
-  for (const [index, row] of remainder.entries()) {
-    const member = resolved.readings[index];
-    if (member === undefined) {
-      return { held, status: 'refused', reason: `${row.sourceId} has no evidence result` };
-    }
-    const { text, ...admission } = await admissionOf(deps, member, coverage.context, policy);
-    candidates.push({
-      sourceId: row.sourceId,
-      captureOrderValue: row.captureOrderValue,
-      occurredAt: new Date(row.occurredAt),
-      arrivalAt: new Date(row.createdAt),
-      admission,
-      ...(text === undefined ? {} : { text }),
-    });
+  const family = await ensureSessionFamily(deps, sessionId);
+  if (family.status !== 'ready') {
+    return { held, status: 'refused', reason: family.reason };
+  }
+  const measured = await measureChunkCandidates(deps, remainder, coverage.context, policy);
+  if (measured.status !== 'measured') {
+    return { held, ...measured };
   }
 
   const decision = decideChunkSeal({
-    remainder: candidates,
+    remainder: measured.candidates,
     now: options.now,
     sessionClosing: options.sessionClosing ?? false,
     ...(options.policy === undefined ? {} : { policy: options.policy }),

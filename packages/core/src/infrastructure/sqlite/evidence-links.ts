@@ -160,6 +160,8 @@ export type MaterializedLinkVersion = {
   readonly recordedValues: Record<string, unknown>;
   readonly temporalProof: Record<string, unknown>;
   readonly observedAt: Date;
+  /** A new legacy narrative uses the same first-version primitive without claiming it was backfilled. */
+  readonly recordSource?: 'legacy_materialization' | 'legacy_narrative';
 };
 
 export type MaterializedLinkOutcome = {
@@ -189,7 +191,7 @@ export function prepareMaterializedLinkVersion(
       db.prepare(
         `INSERT INTO evidence_links
            (link_id, kind, qualifier, from_id, to_id, original_rel_id, record_source, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'legacy_materialization', ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (link_id) DO UPDATE SET
            original_rel_id = COALESCE(evidence_links.original_rel_id, excluded.original_rel_id)`,
       ).run(
@@ -199,6 +201,7 @@ export function prepareMaterializedLinkVersion(
         input.fromId,
         input.toId,
         input.originalRelId,
+        input.recordSource ?? 'legacy_materialization',
         input.observedAt.toISOString(),
       );
       const held = db

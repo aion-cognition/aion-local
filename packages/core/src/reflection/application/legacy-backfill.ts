@@ -198,6 +198,8 @@ export type BackfillBatchRequest = {
    * proof still holds.
    */
   readonly reverify?: boolean;
+  /** Deliberate refresh of named frozen members, including already-verified ones. Requires reverify. */
+  readonly sourceIds?: readonly string[];
 };
 
 export type MemberOutcome = {
@@ -237,9 +239,25 @@ export async function runLegacyBackfillBatch(
   // and an explicit re-verification is the request to try it again on better evidence — if the
   // selection stayed on the unreached members, the only way back into the population would be
   // editing the progress table by hand.
-  const members = (
-    request.reverify === true ? listRepairableCohortMembers : listAccountedCohortMembers
-  )(deps.db, request.cohortId, '', request.limit ?? DEFAULT_PAGE);
+  const members =
+    request.sourceIds === undefined
+      ? (request.reverify === true ? listRepairableCohortMembers : listAccountedCohortMembers)(
+          deps.db,
+          request.cohortId,
+          '',
+          request.limit ?? DEFAULT_PAGE,
+        )
+      : [...new Set(request.sourceIds)];
+  if (
+    request.sourceIds !== undefined &&
+    (request.reverify !== true ||
+      members.length > (request.limit ?? DEFAULT_PAGE) ||
+      members.some(
+        (sourceId) => readMigrationProgress(deps.db, request.cohortId, sourceId) === undefined,
+      ))
+  ) {
+    throw new Error('explicit re-verification requires bounded members of the frozen cohort');
+  }
   const outcomes: MemberOutcome[] = [];
   let indexEnqueued = 0;
   for (const sourceId of members) {

@@ -1,7 +1,9 @@
 import { z } from 'zod';
 
+import { sealChunk, type ChunkSealOutcome } from './chunk-manifest.js';
 import type { SqliteHandle } from './database.js';
-import { readMigrationCohort } from './migration-cohorts.js';
+import { readMigrationCohort, recordMigrationProgress } from './migration-cohorts.js';
+import { migrationMemberProblem, RESERVED_MIGRATION_SOURCE } from './migration-membership.js';
 
 export type MigrationPartitionPolicy = {
   readonly maxMembers: number;
@@ -16,6 +18,10 @@ const PartitionPolicy = z.strictObject({
   maxSpanMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   partitionPolicyVersion: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
 });
+
+export function parseMigrationPartitionPolicy(value: unknown): MigrationPartitionPolicy {
+  return PartitionPolicy.parse(value);
+}
 
 export type MigrationOrderedSource = {
   readonly sourceId: string;
@@ -162,11 +168,62 @@ export function listMigrationRemainder(
 export function sourceReservedForMigration(db: SqliteHandle, sourceId: string): boolean {
   return (
     db
-      .prepare(
-        `SELECT 1 FROM migration_progress m JOIN migration_cohorts c ON c.cohort_id = m.cohort_id
-      WHERE m.source_id = ? AND m.partition_assignment IS NULL
-        AND c.partition_policy_json IS NOT NULL LIMIT 1`,
-      )
+      .prepare(`SELECT 1 FROM (SELECT ? AS source_id) r WHERE ${RESERVED_MIGRATION_SOURCE}`)
       .get(sourceId) !== undefined
   );
+}
+
+/** Membership and its cohort assignment commit together; a crash cannot leave a half-assigned chunk. */
+export function sealMigrationMembership(
+  db: SqliteHandle,
+  input: {
+    readonly cohortId: string;
+    readonly sessionId: string;
+    readonly members: readonly MigrationOrderedSource[];
+    readonly at: Date;
+  },
+): ChunkSealOutcome {
+  const policy = readMigrationPolicy(db, input.cohortId);
+  if (policy === undefined) {
+    throw new Error('migration membership requires its frozen policy');
+  }
+  if (input.members.length > policy.maxMembers) {
+    throw new Error('migration membership exceeds its fixed member bound');
+  }
+  return db
+    .transaction(() => {
+      for (const member of input.members) {
+        const problem = migrationMemberProblem(db, {
+          cohortId: input.cohortId,
+          sourceId: member.sourceId,
+          sessionId: input.sessionId,
+          order: member.captureOrderValue,
+          policyVersion: policy.partitionPolicyVersion,
+        });
+        if (problem !== undefined) {
+          throw new Error(`migration member ${member.sourceId} ${problem}`);
+        }
+      }
+      const result = sealChunk(db, {
+        sessionId: input.sessionId,
+        sourceIds: input.members.map((row) => row.sourceId),
+        sealedAt: input.at,
+        partitionPolicyVersion: policy.partitionPolicyVersion,
+        migrationCohortId: input.cohortId,
+        expected: input.members.map((row) => ({
+          sourceId: row.sourceId,
+          captureOrderValue: row.captureOrderValue,
+        })),
+      });
+      for (const member of input.members) {
+        recordMigrationProgress(db, {
+          cohortId: input.cohortId,
+          sourceId: member.sourceId,
+          status: 'verified',
+          partitionAssignment: result.chunkId,
+        });
+      }
+      return result;
+    })
+    .immediate();
 }

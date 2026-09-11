@@ -5,6 +5,7 @@ import { errorMessage, roundMs } from '../../infrastructure/errors.js';
 import { loadEpisodeContext } from '../../infrastructure/graph/episode-context.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
+import type { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   getLedgerEntry,
@@ -62,6 +63,7 @@ export type ReflectionRun = {
 };
 
 export type ReflectionOrchestratorDeps = {
+  readonly publications?: PublicationCoordinator;
   readonly driver: Driver;
   readonly db: SqliteHandle;
   readonly provider: Provider;
@@ -259,6 +261,7 @@ export class ReflectionOrchestrator {
       occurredAt: episode.occurredAt ?? now,
       pipelineVersion,
       ...(this.#deps.evidence === undefined ? {} : { evidence: this.#deps.evidence }),
+      ...(this.#deps.publications === undefined ? {} : { publications: this.#deps.publications }),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     };
 

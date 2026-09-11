@@ -196,7 +196,15 @@ export function narrativeRegroundingOperation(batch: number): IntrospectionOpera
           ? { examined: 0, stale: 0, republished: 0 }
           : await regroundChunkFamilies(ctx, ctx.narratives, batch);
       const report = await cleanupNarratives(
-        { driver: ctx.driver, db: ctx.db, provider: ctx.provider, logger: ctx.logger },
+        {
+          driver: ctx.driver,
+          db: ctx.db,
+          provider: ctx.provider,
+          logger: ctx.logger,
+          ...(ctx.narratives === undefined
+            ? {}
+            : { publications: ctx.narratives.publications, resolver: ctx.narratives.resolver }),
+        },
         {
           limit: ctx.config.maintenance.narrativeCleanupBatch,
           model: ctx.config.models.reflect,
