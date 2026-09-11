@@ -20,6 +20,12 @@ export const NARRATIVE_MIGRATION_SCHEMA_STATEMENTS = [
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
+  /**
+   * `archive_seen` is written on every capture row and read by nothing. The census digest is
+   * computed from `graph_seen` alone, because what a cohort has to account for is the population
+   * the graph shows. The archive half is recorded so the two passes remain separable, and a reader
+   * must not take it for a count anything has validated.
+   */
   `CREATE TABLE IF NOT EXISTS narrative_migration_capture (
     cohort_id TEXT NOT NULL,
     source_id TEXT NOT NULL,

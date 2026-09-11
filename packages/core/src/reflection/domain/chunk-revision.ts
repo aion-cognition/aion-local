@@ -57,6 +57,15 @@ export type CoverageGap =
     }
   | { readonly reason: 'suppressed_member'; readonly sourceId: string };
 
+/**
+ * The failures a publication attempt records AFTER the provider was asked.
+ *
+ * Every other failure it can report happens before the call. The distinction is what the one cost
+ * measurement this lifecycle contributes rests on, so the set is a closed union rather than a list
+ * of strings beside the literals that produce it.
+ */
+export type ChunkSynthesisFailureReason = 'synthesis_failed' | 'no_grounded_sentence';
+
 export type ChunkBlockReason =
   | 'member_scope_census_missing'
   | 'member_evidence_missing'

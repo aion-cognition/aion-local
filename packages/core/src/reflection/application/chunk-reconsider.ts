@@ -27,7 +27,8 @@ export function chunkBlockPrerequisiteMoved(
   attempt: BlockedAttempt,
   inForce: Record<string, number>,
 ): boolean {
-  if (SUPPRESSION_BLOCK_REASONS.includes(attempt.reason) && suppressionCleared(db, attempt)) {
+  const suppression: readonly string[] = SUPPRESSION_BLOCK_REASONS;
+  if (suppression.includes(attempt.reason) && suppressionCleared(db, attempt)) {
     return true;
   }
   if (attempt.reason === CENSUS_BLOCK_REASON) {

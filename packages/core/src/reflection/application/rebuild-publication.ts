@@ -223,7 +223,10 @@ export const projectionRebuildPublication = new PublicationOperation({
         ? undefined
         : getExperienceById(context.db, record.canonicalArchiveId);
     if (record === undefined || row === undefined) {
-      return { status: 'rejected', reason: 'rebuild_proof_incomplete' } as const;
+      // Its own token. The proof vocabulary's `incomplete` means a record whose verified digest,
+      // identity hash or archive schema version is null, and an operator grouping refusals could
+      // not tell that from the record or its archive row being gone.
+      return { status: 'rejected', reason: 'rebuild_record_absent' } as const;
     }
     const archived = archivedContent(row.payload);
     const current = verifyRebuildProof(

@@ -270,8 +270,8 @@ async function attemptPublication(
   }
   // A deferral happens after the output exists, so it cost a call; a failure may be either side
   // of one, and the lifecycle's own reason set is what says which.
-  const synthesized =
-    report.status === 'deferred' || SYNTHESIS_ATTEMPTED_REASONS.includes(report.reason);
+  const attempted: readonly string[] = SYNTHESIS_ATTEMPTED_REASONS;
+  const synthesized = report.status === 'deferred' || attempted.includes(report.reason);
   // Only a deferral and a failure reach here, and both are dated. The publication leaves its fresh
   // row due now and hands the wait to whichever scheduler owns the chunk, and this is that
   // scheduler in steady state. An undated deferral re-nominated the chunk on the next tick, and

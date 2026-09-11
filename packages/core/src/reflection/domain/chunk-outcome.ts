@@ -1,4 +1,8 @@
-import type { ChunkBlockReason, ChunkRevisionDecision } from './chunk-revision.js';
+import type {
+  ChunkBlockReason,
+  ChunkRevisionDecision,
+  ChunkSynthesisFailureReason,
+} from './chunk-revision.js';
 
 /**
  * What a publication attempt's REASON says about what it cost and what it established.
@@ -26,11 +30,11 @@ export const STANDING_HEAD_REASON: ChunkSkipReason = 'head_current';
 /**
  * The failure reasons that mean a provider was actually asked.
  *
- * Every other failure the publication returns happens before the call. This set has to move with
- * the lifecycle's failure vocabulary: a new PRE-call failure reason must not be added here, and a
- * new post-call one must.
+ * Every other failure the publication returns happens before the call. Typed against the
+ * lifecycle's post-call failure union, so adding a reason there without deciding which side of the
+ * provider call it falls on is a compile error rather than a silent miscount.
  */
-export const SYNTHESIS_ATTEMPTED_REASONS: readonly string[] = [
+export const SYNTHESIS_ATTEMPTED_REASONS: readonly ChunkSynthesisFailureReason[] = [
   'synthesis_failed',
   'no_grounded_sentence',
 ];
@@ -51,7 +55,7 @@ export const SYNTHESIS_ATTEMPTED_REASONS: readonly string[] = [
  * names a class and the records have to name the cause. Membership here only puts the attempt in
  * front of the prerequisite test.
  */
-export const SUPPRESSION_BLOCK_REASONS: readonly string[] = [
+export const SUPPRESSION_BLOCK_REASONS: readonly ChunkBlockReason[] = [
   'no_admissible_input',
   'required_transition_evidence_suppressed',
 ];

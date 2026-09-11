@@ -44,6 +44,7 @@ import {
   decideChunkRevision,
   planChunkInput,
   type ChunkMemberEvidence,
+  type ChunkSynthesisFailureReason,
 } from '../domain/chunk-revision.js';
 
 /**
@@ -97,6 +98,10 @@ function operationPrefix(chunkId: string): string {
 function publicationOperationId(chunkId: string, revisionNo: number): string {
   return `${operationPrefix(chunkId)}${String(revisionNo)}`;
 }
+
+/** The two failures that happen after the provider was asked, named from the lifecycle union. */
+const SYNTHESIS_FAILED: ChunkSynthesisFailureReason = 'synthesis_failed';
+const NO_GROUNDED_SENTENCE: ChunkSynthesisFailureReason = 'no_grounded_sentence';
 
 /**
  * How long a claim holds its number without publishing.
@@ -326,7 +331,7 @@ export async function publishChunkNarrative(
     recordRevisionAttemptFailure(deps.db, CHUNK_REVISION_FAMILY, {
       familyKey: chunkId,
       revisionNo: allocation.revisionNo,
-      reason: 'synthesis_failed',
+      reason: SYNTHESIS_FAILED,
     });
     releaseClaim(deps, chunkId, allocation.revisionNo);
     deps.logger.warn({ err, chunkId }, 'chunk narrative synthesis failed');
@@ -334,21 +339,21 @@ export async function publishChunkNarrative(
       status: 'failed',
       chunkId,
       revisionNo: allocation.revisionNo,
-      reason: 'synthesis_failed',
+      reason: SYNTHESIS_FAILED,
     };
   }
   if (synthesis.output.kept === 0) {
     recordRevisionAttemptFailure(deps.db, CHUNK_REVISION_FAMILY, {
       familyKey: chunkId,
       revisionNo: allocation.revisionNo,
-      reason: 'no_grounded_sentence',
+      reason: NO_GROUNDED_SENTENCE,
     });
     releaseClaim(deps, chunkId, allocation.revisionNo);
     return {
       status: 'failed',
       chunkId,
       revisionNo: allocation.revisionNo,
-      reason: 'no_grounded_sentence',
+      reason: NO_GROUNDED_SENTENCE,
     };
   }
 

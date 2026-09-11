@@ -47,6 +47,11 @@ export const IDENTITY_SCHEMA_STATEMENTS: readonly string[] = [
    * have an original turn id, so the column is nullable and the uniqueness rule that covers
    * it is a partial index rather than a constraint. `role` is the role that was recorded, or
    * null. It is never inferred from position or content.
+   *
+   * `graph_clocks_json` here has neither a producer nor a reader: no caller supplies a part-level
+   * value, and the one accessor reads the column of the same name on `source_records`. It is the
+   * per-part half of a pair whose record half is live, kept so a future producer writes where the
+   * record already says clocks belong, and nothing consumes it until one exists.
    */
   `CREATE TABLE IF NOT EXISTS source_parts (
     source_id TEXT NOT NULL,
