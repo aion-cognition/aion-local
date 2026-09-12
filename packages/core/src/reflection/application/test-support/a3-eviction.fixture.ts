@@ -190,10 +190,15 @@ function census(sourceId: string): void {
   establishScope(store.db, sourceId, durableRoleScope('stated_derivation', 'out'), NOW);
 }
 
-export async function acceptEpisode(identity: string, marker: string): Promise<string> {
+export async function acceptEpisode(
+  identity: string,
+  marker: string,
+  /** How long the body is. A member over the rendered-input allowance seals as a coverage gap. */
+  sentences = 8,
+): Promise<string> {
   const result = await handleReflection(
     intake,
-    { observations: [`${marker}: ${'the project keeps its source evidence. '.repeat(8)}`] },
+    { observations: [`${marker}: ${'the project keeps its source evidence. '.repeat(sentences)}`] },
     { identity, now: NOW },
   );
   census(result.episode_id);

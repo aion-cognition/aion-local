@@ -544,25 +544,62 @@ it('lets a healthy member stand beside a suppressed neighbour in its own chunk',
   });
 });
 
-it('pins a member whose chunk carries a gap the rider does not name', async () => {
-  const first = await acceptEpisode('evict-oversized-gap', 'S1');
-  await acceptEpisode('evict-oversized-gap', 'S2');
-  // An allowance below either member's rendered size, so the head publishes gaps that are real
-  // and are not suppressions. The rider names one reason, and this is not it.
-  const chunkId = await sealAndPublish(first, {
+it('pins a member whose own chunk could not cover it', async () => {
+  // The reachable non-suppression gap. A member no full render can admit seals into a chunk of
+  // its own, so its gap is always addressed at itself and the rider's address half is what
+  // refuses it. This is the only shape the seal path produces today.
+  const oversized = await acceptEpisode('evict-oversized-gap', 'S1', 40);
+  const chunkId = await sealAndPublish(oversized, {
     ...CHUNK_BOUNDARY_POLICY,
-    renderedInputAllowance: 200,
+    renderedInputAllowance: 600,
   });
   const head = readPublishedRevision(store.db, CHUNK_REVISION_FAMILY, chunkId);
-  const gaps = JSON.parse(head?.coverageGapsJson ?? '[]') as { reason: string }[];
-  expect(gaps.length).toBeGreaterThan(0);
-  expect(gaps.every((gap) => gap.reason === 'oversized_member')).toBe(true);
+  expect(JSON.parse(head?.coverageGapsJson ?? '[]')).toMatchObject([
+    { reason: 'oversized_member', sourceId: oversized },
+  ]);
 
-  finishReadiness(first);
-  await indexSource(first);
+  finishReadiness(oversized);
+  await indexSource(oversized);
 
-  expect(durableEligibility(store.db, first, POLICY)).toEqual({
+  expect(durableEligibility(store.db, oversized, POLICY)).toEqual({
     status: 'pinned',
     reason: 'chunk_coverage_incomplete',
   });
+});
+
+it('pins a member whose neighbour carries a gap for a reason the rider does not name', async () => {
+  const healthy = await acceptEpisode('evict-rider-reason', 'S1');
+  const neighbour = await acceptEpisode('evict-rider-reason', 'S2');
+  const chunkId = await sealAndPublish(healthy);
+  await forgetSource(neighbour);
+  await republishChunk(chunkId);
+
+  const head = readPublishedRevision(store.db, CHUNK_REVISION_FAMILY, chunkId);
+  finishReadiness(healthy);
+  await indexSource(healthy);
+  expect(durableEligibility(store.db, healthy, POLICY).status).toBe('eligible');
+
+  // The rider names one reason, and the seal cannot currently produce any other one on a
+  // NEIGHBOUR: a member no render can admit is isolated into a chunk of its own. So the reason
+  // half is defence for a gap reason that does not exist yet, and the only way to ask whether it
+  // holds is to put that gap on the published head and take it off again.
+  const original = head?.coverageGapsJson ?? '[]';
+  const restore = store.db.prepare(
+    `UPDATE ${CHUNK_REVISION_FAMILY.revisionTable} SET coverage_gaps_json = ?
+       WHERE ${CHUNK_REVISION_FAMILY.keyColumn} = ? AND revision_no = ?`,
+  );
+  restore.run(
+    JSON.stringify([{ reason: 'oversized_member', sourceId: neighbour, submitted: [] }]),
+    chunkId,
+    head?.revisionNo ?? 0,
+  );
+  try {
+    expect(durableEligibility(store.db, healthy, POLICY)).toEqual({
+      status: 'pinned',
+      reason: 'chunk_coverage_incomplete',
+    });
+  } finally {
+    restore.run(original, chunkId, head?.revisionNo ?? 0);
+  }
+  expect(durableEligibility(store.db, healthy, POLICY).status).toBe('eligible');
 });
