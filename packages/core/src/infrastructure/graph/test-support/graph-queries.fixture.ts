@@ -10,6 +10,7 @@ import { CO_OCCURS_TYPE, SIMILAR_TYPE } from '../association-queries.js';
 import { BITEMPORAL_PROPERTIES, closeRelationshipFragment } from '../bitemporal.js';
 import { readFirst, runRead, runWrite } from '../connection.js';
 import { CONTEXT_VECTOR_PROPERTY } from '../context-vector-queries.js';
+import { CONTEXT_VECTOR_SYNCED_AT_PROPERTY } from '../context-vector-sync.js';
 import { DECAYED_AT_PROPERTY } from '../edge-weights.js';
 import {
   ENTITY_ALIASES_NORM_PROPERTY,
@@ -23,7 +24,13 @@ import { MEMORY_PROPERTIES } from '../episodes.js';
 import { BASE_NODE_LABEL, ENTITY_LABEL, EXTRACTION_TYPE } from '../labels.js';
 import { SUPERSEDES_TYPE } from '../relationships.js';
 import { LAST_ACCESSED_PROPERTY } from '../seed-queries.js';
-import { fromGraphVector, toGraphDateTime, toGraphVector, type Row } from '../values.js';
+import {
+  fromGraphDateTime,
+  fromGraphVector,
+  toGraphDateTime,
+  toGraphVector,
+  type Row,
+} from '../values.js';
 
 /**
  * Read-only assertions for integration tests that live outside this directory. Cypher lives
@@ -592,6 +599,22 @@ export async function contextVector(driver: Driver, id: string): Promise<Vector 
     (row) => row.vec,
   );
   return fromGraphVector(raw);
+}
+
+/**
+ * The sync stamp beside the vector, which tells a later pass "already looked at" from "never
+ * looked at". Every writer of the property stamps it; a node with a context vector and no stamp
+ * means one of them wrote outside the guarded operation.
+ */
+export async function contextVectorSyncedAt(driver: Driver, id: string): Promise<Date | undefined> {
+  const raw = await readFirst(
+    driver,
+    `MATCH (n:${BASE_NODE_LABEL} { id: $id })
+     RETURN n.${CONTEXT_VECTOR_SYNCED_AT_PROPERTY} AS stamp`,
+    { id },
+    (row) => row.stamp,
+  );
+  return fromGraphDateTime(raw);
 }
 
 export type VectorNeighbor = {

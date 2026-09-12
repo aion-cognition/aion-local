@@ -152,17 +152,25 @@ function detailOf(
   recovered: number,
   examined: number,
 ): string {
+  const refused =
+    repaired.refusal === undefined ? '' : ` (the guard refused the batch: ${repaired.refusal})`;
   return (
     `${String(tally.evicted)} of ${String(tally.attempted)} eviction attempt(s) acknowledged, ` +
     `${String(tally.deferred)} deferred, ${String(tally.pinned)} pinned under the guard ` +
     `over ${String(examined)} source(s) examined; ` +
     `${String(repaired.recomputed)} survivor vector(s) recomputed, ` +
-    `${String(repaired.cleared)} cleared, ${String(repaired.classified)} carrying none, ` +
+    `${String(repaired.cleared)} cleared, ${String(repaired.stamped)} unweighted, ` +
+    `${String(repaired.classified)} carrying none, ` +
     `${String(repaired.deferred)} left owed ` +
     `of ${String(repaired.attempted)} attempted, ` +
-    `${String(repaired.lapsed)} parked obligation(s) aged out; ` +
+    `${String(repaired.lapsed)} parked obligation(s) aged out${refused}; ` +
     `${String(recovered)} pending publication(s) recovered`
   );
+}
+
+/** The graph writes the repair published: a stamp is a write, and a hold is not. */
+function repairedCount(repaired: SurvivorRepairReport): number {
+  return repaired.recomputed + repaired.cleared + repaired.stamped + repaired.classified;
 }
 
 async function runEvict(ctx: OperationContext, scales: EvictScales): Promise<OperationOutcome> {
@@ -179,7 +187,7 @@ async function runEvict(ctx: OperationContext, scales: EvictScales): Promise<Ope
     ctx.logger.warn({ err }, 'episode evict could not complete a pending publication');
   }
   const repaired = await repairSurvivors(
-    { driver: ctx.driver, db: ctx.db, now: ctx.now },
+    { driver: ctx.driver, db: ctx.db, publications, now: ctx.now },
     scales.batch,
   );
   let held: string | undefined;
@@ -191,7 +199,7 @@ async function runEvict(ctx: OperationContext, scales: EvictScales): Promise<Ope
   }
   if (held !== undefined) {
     return {
-      status: repaired.recomputed + repaired.cleared + repaired.classified > 0 ? 'applied' : 'noop',
+      status: repairedCount(repaired) > 0 ? 'applied' : 'noop',
       itemsProcessed: repaired.attempted,
       itemsAffected: 0,
       detail: `a prior publication is unsettled (${held}); no eviction was attempted. ${detailOf(
@@ -224,7 +232,7 @@ async function runEvict(ctx: OperationContext, scales: EvictScales): Promise<Ope
     };
   }
   const detail = detailOf(tally, repaired, recovered, scan.examined);
-  const affected = tally.evicted + repaired.recomputed + repaired.cleared + repaired.classified;
+  const affected = tally.evicted + repairedCount(repaired);
   if (affected === 0 && recovered === 0) {
     return noop(`nothing due; ${detail}`);
   }

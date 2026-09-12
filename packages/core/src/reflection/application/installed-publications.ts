@@ -1,5 +1,6 @@
 import { calendarRollupPublication } from './calendar-rollup-publication.js';
 import { reflectionCompletionPublication } from './completion-publication.js';
+import { contextVectorSyncPublication } from './context-vector-sync.js';
 import { episodeEvictionPublication } from './episode-eviction.js';
 import { evictionArmingPublication } from './eviction-arming.js';
 import { familyCutoverPublication } from './family-cutover.js';
@@ -51,6 +52,10 @@ export const INSTALLED_PUBLICATION_HANDLERS: readonly PublicationHandler[] = [
   orphanSuppressionPublication,
   sourceSuppressionPublication,
   episodeEvictionPublication,
+  // Reached from three passes, which is the reason it exists: reflection's last stage, the
+  // staleness scan and the survivor repair all recompute the same served property, and a
+  // process composing a smaller set would meet one of them pending and refuse.
+  contextVectorSyncPublication,
   // Installed like any other, and reached from nowhere but the operator's command. A pending
   // arming act has to be recoverable by whatever process finds it, which is what installing it
   // in the one shared set is for; nothing here starts it.

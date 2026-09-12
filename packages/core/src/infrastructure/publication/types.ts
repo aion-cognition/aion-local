@@ -8,10 +8,10 @@ export type JsonObject = { readonly [key: string]: JsonValue };
 export const PUBLICATION_PROTOCOL_VERSION = 1;
 export const GRAPH_COMPLETION_EFFECT = 'publication:graph_completion';
 /**
- * The closed set of operation kinds the coordinator admits. Eighteen: the twelve the design
- * signed off, and six the implementation added, each with its reason stated at the entry. A kind
- * outside this list is refused at construction, and a kind here with no installed handler is
- * refused at publish. Count them from this list rather than from any prose about it.
+ * The closed set of operation kinds the coordinator admits. Nineteen: the twelve the design
+ * signed off, and seven the implementation added, each with its reason stated at the entry. A
+ * kind outside this list is refused at construction, and a kind here with no installed handler
+ * is refused at publish. Count them from this list rather than from any prose about it.
  */
 export const PUBLICATION_KINDS = [
   'intake',
@@ -53,6 +53,12 @@ export const PUBLICATION_KINDS = [
   // a substrate somebody deliberately said could, and that statement has to be recoverable and
   // readable afterwards like any other.
   'eviction_arming',
+  // Recomputing the served `context_vec` from a node's current neighbourhood. Its own kind
+  // rather than a variant of `semantic_write`, because it derives no new meaning: it makes a
+  // stored aggregate agree with the neighbourhood it was taken over, and one receipt covers a
+  // set of nodes whose membership the intent names exactly. It is a publication at all because
+  // three passes had reason to move that property and only a receipt can say which one did.
+  'context_vector_sync',
 ] as const;
 export type PublicationKind = (typeof PUBLICATION_KINDS)[number];
 

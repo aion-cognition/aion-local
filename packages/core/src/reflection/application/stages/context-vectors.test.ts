@@ -5,33 +5,56 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ContextVectorStage } from './context-vectors.js';
-import { CONTEXT_VECTOR_PROPERTY } from '../../../infrastructure/graph/context-vector-queries.js';
 import type { Row } from '../../../infrastructure/graph/values.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import type { Provider } from '../../../infrastructure/providers/types.js';
-import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import type {
+  PublicationCoordinator,
+  PublicationRequest,
+} from '../../../infrastructure/publication/coordinator.js';
+import type { JsonValue, PublicationOutcome } from '../../../infrastructure/publication/types.js';
+import { activateCoverageContract } from '../../../infrastructure/sqlite/coverage-contract.js';
+import { SqliteStore } from '../../../infrastructure/sqlite/database.js';
 import type { StageContext } from '../../domain/stage.js';
 import { PIPELINE_VERSION } from '../../domain/version.js';
 
 /**
- * Exercises the stage's control flow against a minimal stand-in for the driver, dispatched
- * by which of this module's four query shapes a statement matches. `FakeGraph` (reflection's
- * shared fixture) does not model these queries and belongs to other stages' tests, so this
- * stub is local and disposable. The real Cypher is proven against a live Neo4j in
- * `context-vectors.int.test.ts`.
+ * What the stage still decides, now that the write is a publication.
+ *
+ * It nominates: the episode's own family, closed over the far endpoints of the edges this run
+ * wrote, deduplicated. It hands that set to `context_vector_sync` and reports what the receipt
+ * says. It decides nothing about any individual node — the weighted mean is
+ * `reflection/domain/context-vector.test.ts` and the per-node dispositions are the operation's,
+ * proved against a real store in `reflection/application/context-vector-sync.int.test.ts`.
+ *
+ * So the driver stub here only answers the two READS, and the coordinator stub records the one
+ * request. A statement reaching the stub driver that is not one of those two reads is the
+ * failure this file is watching for: it would mean the stage had gone back to writing.
  */
 type QueryHandler = (cypher: string, parameters: Record<string, unknown>) => Row[];
+
+/** The run-start neighbourhood binding the publication takes; not a decision this stage makes. */
+function isRevisionQuery(cypher: string): boolean {
+  return cypher.includes('RETURN n.id AS id, degree AS degree');
+}
 
 function stubDriver(handler: QueryHandler): Driver {
   const executeQuery = async (
     cypher: string,
     parameters: Record<string, unknown> = {},
-  ): Promise<unknown> => ({
-    records: handler(cypher, parameters).map((row) => ({ toObject: () => row })),
-    summary: {
-      counters: { updates: () => ({ nodesCreated: 0, relationshipsCreated: 0, propertiesSet: 0 }) },
-    },
-  });
+  ): Promise<unknown> => {
+    const rows = isRevisionQuery(cypher)
+      ? (parameters.ids as string[]).map((id) => ({ id, degree: 1, moved: '2026-08-28T09:00:00Z' }))
+      : handler(cypher, parameters);
+    return {
+      records: rows.map((row) => ({ toObject: () => row })),
+      summary: {
+        counters: {
+          updates: () => ({ nodesCreated: 0, relationshipsCreated: 0, propertiesSet: 0 }),
+        },
+      },
+    };
+  };
   return { executeQuery } as unknown as Driver;
 }
 
@@ -44,34 +67,70 @@ function isClosureQuery(cypher: string): boolean {
   return cypher.includes('RETURN DISTINCT m.id AS id');
 }
 
-function isNeighborQuery(cypher: string): boolean {
-  return cypher.includes('UNWIND $nodeIds AS nodeId') && !isClosureQuery(cypher);
-}
-
-function isWriteQuery(cypher: string): boolean {
-  return cypher.includes(`SET n.${CONTEXT_VECTOR_PROPERTY}`);
-}
-
 const EPISODE_ID = 'episode-1';
 const NOW = new Date('2026-08-28T09:05:00.000Z');
 
+/** Every request the stage made, so a case can assert both what was published and that one was. */
+type Published = PublicationRequest[];
+
+/**
+ * The coordinator as the stage uses it: one `publish`, one answer. Cast rather than built,
+ * because a real one wants a driver, a store and an initialized receipt, and what this file
+ * asks of it is which nodes it was handed.
+ */
+function stubPublications(
+  captured: Published,
+  answer: (request: PublicationRequest) => PublicationOutcome,
+): PublicationCoordinator {
+  return {
+    publish: (request: PublicationRequest): Promise<PublicationOutcome> => {
+      captured.push(request);
+      return Promise.resolve(answer(request));
+    },
+  } as unknown as PublicationCoordinator;
+}
+
+function acknowledged(result: JsonValue): PublicationOutcome {
+  return {
+    status: 'acknowledged',
+    operationId: 'op-1',
+    sequence: '1',
+    result,
+    knownFrom: NOW.toISOString(),
+    observedAckAt: NOW.toISOString(),
+    clockClamped: false,
+  };
+}
+
+function nodesOf(captured: Published): string[] {
+  const payload = captured[0]?.payload as { nodes?: { id: string }[] } | undefined;
+  return (payload?.nodes ?? []).map((node) => node.id);
+}
+
 let dataDir: string;
 let logger: Logger;
+let store: SqliteStore;
 
 beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), 'aion-context-vector-stage-'));
   logger = openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' });
+  // A real store rather than a stand-in: the publication binds the coverage epoch at run start,
+  // and a faked read of it would prove the binding against a value this file chose.
+  store = new SqliteStore({ filePath: join(dataDir, 'aion.sqlite') });
+  activateCoverageContract(store.db, { activatedAt: NOW, fieldPolicyVersion: 1 });
 });
 
 afterEach(() => {
+  store.close();
   rmSync(dataDir, { recursive: true, force: true });
 });
 
-function buildContext(driver: Driver): StageContext {
+function buildContext(driver: Driver, publications?: PublicationCoordinator): StageContext {
   return {
     driver,
-    db: undefined as unknown as SqliteHandle,
+    db: store.db,
     provider: undefined as unknown as Provider,
+    ...(publications === undefined ? {} : { publications }),
     episodeId: EPISODE_ID,
     episode: {
       id: EPISODE_ID,
@@ -87,19 +146,39 @@ function buildContext(driver: Driver): StageContext {
 }
 
 describe('ContextVectorStage', () => {
-  it('skips cleanly when the episode touched no affected memory node', async () => {
-    let neighborQueryIssued = false;
-    const driver = stubDriver((cypher) => {
-      if (isAffectedIdsQuery(cypher)) {
-        return [];
-      }
-      if (isNeighborQuery(cypher)) {
-        neighborQueryIssued = true;
-      }
+  it('refuses before it reads anything when no coordinator is composed', async () => {
+    let queried = false;
+    const driver = stubDriver(() => {
+      queried = true;
       return [];
     });
 
     const outcome = await new ContextVectorStage().run(buildContext(driver));
+
+    expect(outcome).toEqual({
+      status: 'failed',
+      summary: 'context vector recomputation is not composed: no publication coordinator',
+    });
+    // The property cannot be written at all without the guard, so a pipeline missing it says so
+    // rather than spending two reads to arrive at the same refusal.
+    expect(queried).toBe(false);
+  });
+
+  it('skips cleanly when the episode touched no affected memory node', async () => {
+    const captured: Published = [];
+    const driver = stubDriver((cypher) => {
+      if (isAffectedIdsQuery(cypher)) {
+        return [];
+      }
+      throw new Error(`unexpected statement:\n${cypher}`);
+    });
+
+    const outcome = await new ContextVectorStage().run(
+      buildContext(
+        driver,
+        stubPublications(captured, () => acknowledged(null)),
+      ),
+    );
 
     expect(outcome).toEqual({
       status: 'skipped',
@@ -111,72 +190,52 @@ describe('ContextVectorStage', () => {
         proof: { affectedNodes: 0 },
       },
     });
-    expect(neighborQueryIssued).toBe(false);
+    expect(captured).toEqual([]);
   });
 
-  it('skips cleanly when no affected node has a vectored neighbor', async () => {
-    let writeQueryIssued = false;
+  it('nominates exactly the family it read and publishes it once', async () => {
+    const captured: Published = [];
     const driver = stubDriver((cypher) => {
-      if (isAffectedIdsQuery(cypher)) {
-        return [{ id: EPISODE_ID }];
-      }
-      if (isNeighborQuery(cypher)) {
-        return [];
-      }
-      if (isWriteQuery(cypher)) {
-        writeQueryIssued = true;
-      }
-      return [];
-    });
-
-    const outcome = await new ContextVectorStage().run(buildContext(driver));
-
-    expect(outcome).toEqual({
-      status: 'skipped',
-      summary: 'no affected node has a vectored neighbor',
-      retryable: true,
-    });
-    expect(writeQueryIssued).toBe(false);
-  });
-
-  it('computes the weighted mean per affected node and writes it in one batch', async () => {
-    const written: { id: string; vector: number[] }[] = [];
-    const driver = stubDriver((cypher, parameters) => {
       if (isAffectedIdsQuery(cypher)) {
         return [{ id: EPISODE_ID }, { id: 'entity-a' }];
       }
       if (isClosureQuery(cypher)) {
         return [];
       }
-      if (isNeighborQuery(cypher)) {
-        return [
-          { nodeId: EPISODE_ID, neighborId: 'entity-a', strength: 1, vector: [1, 0] },
-          { nodeId: EPISODE_ID, neighborId: 'entity-b', strength: 1, vector: [0, 1] },
-          // entity-a has no vectored neighbor of its own: it must not appear in the write.
-        ];
-      }
-      if (isWriteQuery(cypher)) {
-        const entries = parameters.entries as { id: string; vector: number[] }[];
-        written.push(...entries);
-        return entries.map((entry) => ({ id: entry.id }));
-      }
       throw new Error(`unexpected statement:\n${cypher}`);
     });
 
-    const outcome = await new ContextVectorStage().run(buildContext(driver));
+    const outcome = await new ContextVectorStage().run(
+      buildContext(
+        driver,
+        stubPublications(captured, () =>
+          acknowledged({
+            recomputed: [EPISODE_ID],
+            cleared: [],
+            stamped: [],
+            holds: [{ id: 'entity-a', reason: 'neighbor_vector_pending' }],
+          }),
+        ),
+      ),
+    );
 
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.kind).toBe('context_vector_sync');
+    // Sorted, not in read order: the intent's own discipline, so one population always
+    // produces one digest whichever read found which member first.
+    expect(nodesOf(captured)).toEqual(['entity-a', EPISODE_ID]);
     expect(outcome.status).toBe('ok');
-    expect(outcome.summary).toBe(`recomputed context_vec for 1 of 2 affected node(s)`);
+    // Reported from the receipt, not from the nomination: the stage nominated two and the
+    // operation wrote one, and a summary counted off the nomination would claim both.
+    expect(outcome.summary).toBe(
+      'recomputed context_vec for 1 of 2 affected node(s), 0 cleared, 0 unweighted, 1 held',
+    );
     expect(outcome.counts).toEqual({ contextVectors: 1 });
-    expect(written).toHaveLength(1);
-    expect(written[0]?.id).toBe(EPISODE_ID);
-    expect(written[0]?.vector[0]).toBeCloseTo(0.5, 5);
-    expect(written[0]?.vector[1]).toBeCloseTo(0.5, 5);
   });
 
-  it('folds the far endpoints of the edges this run wrote into the set it recomputes', async () => {
+  it('folds the far endpoints of the edges this run wrote into the set it nominates', async () => {
+    const captured: Published = [];
     let closureAnchors: readonly string[] = [];
-    let recomputeRequest: readonly string[] = [];
     const driver = stubDriver((cypher, parameters) => {
       if (isAffectedIdsQuery(cypher)) {
         return [{ id: EPISODE_ID }];
@@ -187,40 +246,48 @@ describe('ContextVectorStage', () => {
         // family, and the stage is what deduplicates the two sets.
         return [{ id: EPISODE_ID }, { id: 'entity-far' }];
       }
-      if (isNeighborQuery(cypher)) {
-        recomputeRequest = parameters.nodeIds as string[];
-        return [
-          { nodeId: EPISODE_ID, neighborId: 'entity-far', strength: 1, vector: [1, 0] },
-          { nodeId: 'entity-far', neighborId: EPISODE_ID, strength: 1, vector: [0, 1] },
-        ];
-      }
-      if (isWriteQuery(cypher)) {
-        const entries = parameters.entries as { id: string }[];
-        return entries.map((entry) => ({ id: entry.id }));
-      }
       throw new Error(`unexpected statement:\n${cypher}`);
     });
 
-    const outcome = await new ContextVectorStage().run(buildContext(driver));
+    const outcome = await new ContextVectorStage().run(
+      buildContext(
+        driver,
+        stubPublications(captured, () =>
+          acknowledged({
+            recomputed: [EPISODE_ID, 'entity-far'],
+            cleared: [],
+            stamped: [],
+            holds: [],
+          }),
+        ),
+      ),
+    );
 
     expect(closureAnchors).toEqual([EPISODE_ID]);
-    expect(recomputeRequest).toEqual([EPISODE_ID, 'entity-far']);
-    expect(outcome.summary).toBe('recomputed context_vec for 2 of 2 affected node(s)');
+    expect(nodesOf(captured)).toEqual(['entity-far', EPISODE_ID]);
     expect(outcome.counts).toEqual({ contextVectors: 2 });
   });
 
   it('returns a failed outcome without throwing when the graph read fails', async () => {
+    const captured: Published = [];
     const driver = stubDriver(() => {
       throw new Error('neo4j unreachable');
     });
 
-    const outcome = await new ContextVectorStage().run(buildContext(driver));
+    const outcome = await new ContextVectorStage().run(
+      buildContext(
+        driver,
+        stubPublications(captured, () => acknowledged(null)),
+      ),
+    );
 
     expect(outcome.status).toBe('failed');
     expect(outcome.summary).toContain('neo4j unreachable');
+    expect(captured).toEqual([]);
   });
 
-  it('returns a failed outcome without throwing when the batched write fails', async () => {
+  it('reports the guard’s refusal rather than a recomputation it did not get', async () => {
+    const captured: Published = [];
     const driver = stubDriver((cypher) => {
       if (isAffectedIdsQuery(cypher)) {
         return [{ id: EPISODE_ID }];
@@ -228,15 +295,23 @@ describe('ContextVectorStage', () => {
       if (isClosureQuery(cypher)) {
         return [];
       }
-      if (isNeighborQuery(cypher)) {
-        return [{ nodeId: EPISODE_ID, neighborId: 'entity-a', strength: 1, vector: [1, 0] }];
-      }
-      throw new Error('write rejected');
+      throw new Error(`unexpected statement:\n${cypher}`);
     });
 
-    const outcome = await new ContextVectorStage().run(buildContext(driver));
+    const outcome = await new ContextVectorStage().run(
+      buildContext(
+        driver,
+        stubPublications(captured, (request) => ({
+          status: 'deferred',
+          operationId: request.operationId,
+          sequence: '1',
+          reason: 'every_binding_moved',
+        })),
+      ),
+    );
 
     expect(outcome.status).toBe('failed');
-    expect(outcome.summary).toContain('write rejected');
+    expect(outcome.summary).toBe('context vector recomputation was refused: every_binding_moved');
+    expect(outcome.counts).toBeUndefined();
   });
 });

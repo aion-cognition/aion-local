@@ -17,6 +17,7 @@ import { ContextVectorStage } from '../../reflection/application/stages/context-
 import { EntityExtractionStage } from '../../reflection/application/stages/entities.js';
 import { EntityDedupStage } from '../../reflection/application/stages/entity-dedup.js';
 import { SemanticRelationshipStage } from '../../reflection/application/stages/semantic-relationships.js';
+import { activatedCoordinator } from '../../reflection/application/test-support/publication-substrate.fixture.js';
 import { directIntakePublisher } from '../../reflection/test-support/direct-intake.fixture.js';
 import { SessionManager } from '../../session/session-manager.js';
 import { DEFAULTS } from '../config/defaults.js';
@@ -31,6 +32,7 @@ import {
   type Neo4jHarness,
 } from '../graph/test-support/neo4j-harness.fixture.js';
 import { openLogger } from '../logging/logger.js';
+import type { PublicationCoordinator } from '../publication/coordinator.js';
 import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
 
 /**
@@ -70,6 +72,7 @@ let dataDir: string;
 let episodeId: string;
 let events: GenerationEvent[];
 let router: ProviderRouter;
+let publications: PublicationCoordinator;
 
 function config(apiKey: string): Config {
   return {
@@ -95,6 +98,16 @@ beforeAll(async () => {
 
   router = newRouter(API_KEY);
   const backbone = await bootstrapBackbone(harness.driver, { memberName: MEMBER_NAME });
+  // Ahead of `directIntakePublisher`, which inserts a pairing row already marked initialized so
+  // it can skip the protocol: a coordinator built after it finds a guard node nothing minted.
+  publications = await activatedCoordinator(
+    {
+      driver: harness.driver,
+      db,
+      logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
+    },
+    'anthropic-routing',
+  );
   const intake: ReflectionIntakeDeps = {
     driver: harness.driver,
     db,
@@ -142,6 +155,7 @@ describe.skipIf(API_KEY === '')('enrichment on the Anthropic route', () => {
         db,
         provider,
         logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
+        publications,
       },
       [
         new EntityExtractionStage(),

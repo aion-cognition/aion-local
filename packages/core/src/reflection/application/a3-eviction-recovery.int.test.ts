@@ -241,7 +241,7 @@ it('clears a survivor context vector whose last vectored neighbour was removed',
   });
   expect(outcome.status).toBe('acknowledged');
 
-  const repaired = await repairSurvivors({ driver, db: store.db, now: NOW }, 8);
+  const repaired = await repairSurvivors({ driver, db: store.db, publications, now: NOW }, 8);
 
   expect(repaired.deferred).toBe(0);
   expect(repaired.cleared).toBeGreaterThanOrEqual(1);
@@ -311,7 +311,7 @@ it('carries a discarded attempt\u2019s obligation into the attempt that commits'
   expect(runnable.length).toBe(1);
 
   // And it completes exactly once: the second pass finds this operation owing nothing.
-  const repaired = await repairSurvivors({ driver, db: store.db, now: NOW }, 8);
+  const repaired = await repairSurvivors({ driver, db: store.db, publications, now: NOW }, 8);
   expect(repaired.cleared + repaired.recomputed).toBeGreaterThanOrEqual(1);
   expect(
     listRunnableSurvivorWork(store.db, NOW, 8).filter((task) => task.nodeId === survivorId),
@@ -347,7 +347,7 @@ it('settles a survivor that carries no context vector instead of retrying it for
     ).status,
   ).toBe('acknowledged');
 
-  const repaired = await repairSurvivors({ driver, db: store.db, now: NOW }, 8);
+  const repaired = await repairSurvivors({ driver, db: store.db, publications, now: NOW }, 8);
 
   expect(repaired.classified).toBeGreaterThanOrEqual(1);
   // Settled from durable state with what it actually is, not deferred into a fifteen-minute loop

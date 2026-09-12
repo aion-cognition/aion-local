@@ -1,17 +1,14 @@
 import type { Driver } from 'neo4j-driver';
 
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
-import { runRead, runWrite, type GraphStatement } from './connection.js';
+import { runRead, type GraphStatement } from './connection.js';
 import { ENTITY_MENTION_TYPE } from './entity-queries.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from './episodes.js';
 import { BASE_NODE_LABEL, EXTRACTION_TYPE, MEMORY_LABEL } from './labels.js';
 import { SUMMARIZED_BY_TYPE } from './narrative-queries.js';
 import { readModeFragment, withCurrency } from './read-modes.js';
-import { fromGraphVector, toGraphDateTime, toGraphVector, type Row } from './values.js';
-import type {
-  ComputedContextVector,
-  NeighborContentVector,
-} from '../../reflection/domain/context-vector.js';
+import { fromGraphVector, toGraphDateTime, type Row } from './values.js';
+import type { NeighborContentVector } from '../../reflection/domain/context-vector.js';
 
 /**
  * Reflection's last stage recomputes `context_vec` for every `:Memory` node this run's
@@ -191,30 +188,11 @@ export async function findNeighborContentVectors(
 }
 
 /**
- * The id seek goes through `AionNode` rather than `Memory`: migration 001 gives every node
- * the `aion_node_id_unique` constraint, but declares no id constraint on `Memory` itself
- * (only its vector and range indexes), so matching on `Memory { id: … }` would plan as a
- * label scan. Every id this stage writes already carries both labels.
+ * This module writes nothing.
+ *
+ * It used to carry a `writeContextVectors` that set `context_vec` from the driver with no sync
+ * stamp and no receipt — the third of three writers of one served property, and the only one
+ * that left no trace a later pass could read. Every write of the property now goes through the
+ * guarded `context_vector_sync` operation and lands in `context-vector-sync.ts`; what stays
+ * here are the reads that nominate the population.
  */
-const WRITE_CONTEXT_VECTORS = [
-  'UNWIND $entries AS entry',
-  `MATCH (n:${BASE_NODE_LABEL}:${MEMORY_LABEL} { id: entry.id })`,
-  `SET n.${CONTEXT_VECTOR_PROPERTY} = entry.vector`,
-  'RETURN n.id AS id',
-].join('\n');
-
-/** The ids actually written, fewer than the batch when an affected node was forgotten between the two reads. */
-export async function writeContextVectors(
-  driver: Driver,
-  entries: readonly ComputedContextVector[],
-): Promise<string[]> {
-  if (entries.length === 0) {
-    return [];
-  }
-  return runWrite(
-    driver,
-    WRITE_CONTEXT_VECTORS,
-    { entries: entries.map((entry) => ({ id: entry.id, vector: toGraphVector(entry.vector) })) },
-    (row) => row.id as string,
-  );
-}

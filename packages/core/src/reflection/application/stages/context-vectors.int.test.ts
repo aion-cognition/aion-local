@@ -11,6 +11,7 @@ import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js'
 import { resonantNodes } from '../../../infrastructure/graph/resonance-queries.js';
 import {
   contextVector,
+  contextVectorSyncedAt,
   vectorIndexNeighbors,
 } from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
@@ -20,9 +21,11 @@ import {
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import type { Provider } from '../../../infrastructure/providers/types.js';
+import type { PublicationCoordinator } from '../../../infrastructure/publication/coordinator.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import type { StageContext } from '../../domain/stage.js';
 import { PIPELINE_VERSION } from '../../domain/version.js';
+import { activatedCoordinator } from '../test-support/publication-substrate.fixture.js';
 
 /**
  * A small hand-built neighborhood rather than a full LLM enrichment: this stage is pure
@@ -59,6 +62,7 @@ let harness: Neo4jHarness;
 let db: SqliteHandle;
 let dataDir: string;
 let logger: Logger;
+let publications: PublicationCoordinator;
 
 async function seedNeighborhood(driver: Driver): Promise<void> {
   await writeStampedNode(driver, {
@@ -172,6 +176,9 @@ beforeAll(async () => {
   db = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
   logger = openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' });
   await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
+  // The stage publishes, so the coordinator and an active coverage record are part of the
+  // composition: the operation binds the epoch at run start and the guard compares it.
+  publications = await activatedCoordinator({ driver: harness.driver, db, logger }, 'ctx-vec');
   await seedNeighborhood(harness.driver);
 }, 300_000);
 
@@ -186,6 +193,7 @@ function buildContext(now: Date = NOW): StageContext {
     driver: harness.driver,
     db,
     provider: undefined as unknown as Provider,
+    publications,
     episodeId: EPISODE_ID,
     episode: {
       id: EPISODE_ID,
@@ -225,6 +233,15 @@ describe('ContextVectorStage against a live graph', () => {
     // moved its neighborhood and this run must not recompute it.
     const entityC = await contextVector(harness.driver, 'entity-c');
     expect(entityC).toBeUndefined();
+
+    // The stamp the stage used to leave off. Without it the maintenance scan cannot tell a node
+    // this run just recomputed from one nothing has ever looked at, and both passes hand the
+    // same node back and forth.
+    expect(await contextVectorSyncedAt(harness.driver, 'entity-b')).toBeInstanceOf(Date);
+    expect(await contextVectorSyncedAt(harness.driver, EPISODE_ID)).toBeInstanceOf(Date);
+    // And it is not stamped on a node this run did not write, which is what makes the stamp a
+    // statement about a reading rather than about the tick.
+    expect(await contextVectorSyncedAt(harness.driver, 'entity-c')).toBeUndefined();
   });
 
   it('makes the recomputed node findable by KNN over context_vec_idx', async () => {

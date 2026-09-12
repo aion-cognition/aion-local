@@ -153,6 +153,9 @@ async function summarizeNeighborhood(episodeId: string, at: Date): Promise<void>
     driver: substrate.driver,
     db: substrate.db,
     provider: substrate.provider,
+    // The recomputation publishes, the way it does in the service. Composed without the guard
+    // the stage refuses, and every neighborhood below would be summarized by nothing.
+    publications: substrate.publications,
     episodeId,
     episode,
     logger: substrate.logger,

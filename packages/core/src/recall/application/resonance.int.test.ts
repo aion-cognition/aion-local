@@ -25,8 +25,10 @@ import {
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider, StructuredRequest, Vector } from '../../infrastructure/providers/types.js';
+import type { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { ContextVectorStage } from '../../reflection/application/stages/context-vectors.js';
+import { activatedCoordinator } from '../../reflection/application/test-support/publication-substrate.fixture.js';
 import type { StageContext } from '../../reflection/domain/stage.js';
 import { PIPELINE_VERSION } from '../../reflection/domain/version.js';
 import { SessionManager } from '../../session/session-manager.js';
@@ -156,6 +158,7 @@ let harness: Neo4jHarness;
 let db: SqliteHandle;
 let dataDir: string;
 let logger: Logger;
+let publications: PublicationCoordinator;
 let deps: RecallDeps;
 
 async function writeEpisode(id: string, text: string, vector: Vector, at: Date): Promise<void> {
@@ -203,6 +206,7 @@ function stageContext(episodeId: string, text: string): StageContext {
     driver: harness.driver,
     db,
     provider,
+    publications,
     episodeId,
     episode: {
       id: episodeId,
@@ -224,6 +228,8 @@ beforeAll(async () => {
   db = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
   logger = openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'debug' });
   await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
+  // The context-vector stage publishes, so the guard is part of this substrate.
+  publications = await activatedCoordinator({ driver: harness.driver, db, logger }, 'resonance');
 
   const backbone = await bootstrapBackbone(harness.driver, { memberName: MEMBER_NAME });
   deps = {

@@ -1,15 +1,10 @@
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
-import { findNeighborContentVectors } from '../../../infrastructure/graph/context-vector-queries.js';
-import {
-  findStaleContextVectorNodes,
-  markContextVectorSynced,
-  writeContextVectorSync,
-} from '../../../infrastructure/graph/context-vector-sync.js';
+import { findStaleContextVectorNodes } from '../../../infrastructure/graph/context-vector-sync.js';
+import { publishContextVectorSync } from '../../../reflection/application/context-vector-sync.js';
 import {
   attachContentVectors,
   findPendingVectorNodes,
 } from '../../../reflection/application/vectors.js';
-import { computeContextVectors } from '../../../reflection/domain/context-vector.js';
 import type { HealthSnapshot } from '../../domain/health.js';
 import type {
   IntrospectionOperation,
@@ -59,9 +54,23 @@ async function backfillContentVectors(
   return { processed: pending.length, affected: written.length };
 }
 
-async function refreshContextVectors(
-  ctx: OperationContext,
-): Promise<{ processed: number; affected: number }> {
+type RefreshTally = { processed: number; affected: number; refusal?: string };
+
+/**
+ * The staleness scan nominates; `context_vector_sync` writes.
+ *
+ * The scan's own answer used to be stamped whatever it found, on the argument that a node left
+ * unstamped comes back at the head of every later tick. That argument still holds and the
+ * operation still stamps for it — but only over a neighbourhood the guard could read whole. A
+ * node whose neighbours have no embeddings yet is now a named hold rather than a stamp, because
+ * stamping it would take it out of the scan's ordering before anything computed its context, and
+ * no edge has to move for its neighbour's vector to arrive.
+ */
+async function refreshContextVectors(ctx: OperationContext): Promise<RefreshTally> {
+  const publications = ctx.narratives?.publications;
+  if (publications === undefined) {
+    return { processed: 0, affected: 0, refusal: 'no publication coordinator composed' };
+  }
   const staleIds = await findStaleContextVectorNodes(
     ctx.driver,
     ctx.config.maintenance.contextRefreshBatchSize,
@@ -69,18 +78,23 @@ async function refreshContextVectors(
   if (staleIds.length === 0) {
     return { processed: 0, affected: 0 };
   }
-  const neighbors = await findNeighborContentVectors(ctx.driver, staleIds);
-  const computed = computeContextVectors(neighbors);
-  const written = await writeContextVectorSync(ctx.driver, computed, ctx.now);
-  // A stale node the computation yields nothing for still counts as examined. The scan orders on
-  // this stamp, so leaving it unwritten hands the same node back at the head of every later tick.
-  const seen = new Set(written);
-  await markContextVectorSynced(
-    ctx.driver,
-    staleIds.filter((id) => !seen.has(id)),
-    ctx.now,
+  const outcome = await publishContextVectorSync(
+    { driver: ctx.driver, db: ctx.db, publications, now: ctx.now },
+    {
+      basis: 'staleness_scan',
+      // No one subject: the scan's population is whatever fell behind, across every session.
+      subject: null,
+      members: staleIds.map((id) => ({ id, workId: null })),
+    },
   );
-  return { processed: staleIds.length, affected: written.length };
+  if (outcome.status !== 'published') {
+    return { processed: staleIds.length, affected: 0, refusal: outcome.reason };
+  }
+  const { recomputed, cleared, stamped } = outcome.result;
+  return {
+    processed: staleIds.length,
+    affected: recomputed.length + cleared.length + stamped.length,
+  };
 }
 
 /**
@@ -104,13 +118,17 @@ export function vectorBackfillOperation(): IntrospectionOperation {
 
       const itemsProcessed = content.processed + context.processed;
       const itemsAffected = content.affected + context.affected;
+      const refused =
+        context.refusal === undefined
+          ? ''
+          : ` (the context pass published nothing: ${context.refusal})`;
       return {
         status: itemsAffected === 0 ? 'noop' : 'applied',
         itemsProcessed,
         itemsAffected,
         detail:
           `${String(content.affected)} of ${String(content.processed)} pending content vectors embedded, ` +
-          `${String(context.affected)} of ${String(context.processed)} stale context vectors refreshed`,
+          `${String(context.affected)} of ${String(context.processed)} stale context vectors refreshed${refused}`,
       };
     },
   };
