@@ -10,6 +10,7 @@ import {
   stopRehearsalSubstrate,
   type RehearsalSubstrate,
 } from './test-support/consolidation-rehearsal.fixture.js';
+import { seedRetainedClaim } from './test-support/graph-queries.fixture.js';
 import { intakePublication } from '../../reflection/application/intake-publication.js';
 import { projectionRebuildPublication } from '../../reflection/application/rebuild-publication.js';
 import { statedReferencesPublication } from '../../reflection/application/reference-publication.js';
@@ -69,6 +70,29 @@ async function acceptSource(marker: string): Promise<string> {
     throw new Error(`intake ${marker} was not accepted`);
   }
   return (outcome.result as { sourceId: string }).sourceId;
+}
+
+/** One intake that carries a statement, so the reference half runs inside the intake publication. */
+function intakePayload(marker: string, targetId: string): Record<string, unknown> {
+  return {
+    identity: 'member-1',
+    sessionId,
+    payloadJson: JSON.stringify(content(marker)),
+    referencesJson: JSON.stringify({ derived_from: [targetId] }),
+    lane: null,
+    originJson: null,
+    pipelineVersion: PIPELINE_VERSION,
+    occurredAt: NOW.toISOString(),
+    indexPolicy: 'archive-v1',
+    readiness: null,
+  };
+}
+
+/** Stands in for the activation that lands between a prepared attempt and its recovery. */
+function moveCoverageEpoch(marker: string): void {
+  store.db
+    .prepare('UPDATE coverage_contract SET epoch = ? WHERE epoch = ?')
+    .run(`${marker}-activation`, readCurrentCoverageContract(store.db)?.epoch ?? '');
 }
 
 function statePayload(
@@ -281,10 +305,7 @@ it('settles a delivery whose first attempt was prepared and then discarded', asy
 
   // An activation lands in the gap, so the recovery's recheck defers and the attempt is discarded
   // with its prepared version left where a retry can find it.
-  const epoch = readCurrentCoverageContract(store.db)?.epoch;
-  store.db
-    .prepare('UPDATE coverage_contract SET epoch = ? WHERE epoch = ?')
-    .run(`${marker}-activation`, epoch);
+  moveCoverageEpoch(marker);
   expect(await coordinator.recover()).toMatchObject({ status: 'deferred' });
   expect(unsettledLinkStates(store.db, source)).toEqual(['stated']);
 
@@ -340,6 +361,94 @@ it('leaves a settled version with the operation that committed it', async () => 
   expect(versionRow(linkId)).toEqual(settled);
   expect(settled.operation_id).toBe(`references-${marker}-1`);
   expect(listStatedLinks(store.db, source)).toHaveLength(1);
+});
+
+it('settles a delivery whose retry classifies its target differently', async () => {
+  const marker = `reclassified-${String(serial)}`;
+  const source = await acceptSource(`${marker}-source`);
+  const target = `claim-${marker}`;
+  const payload = statePayload(source, marker, { derivedFrom: [target] });
+
+  failAt = 'prepared';
+  await expect(
+    coordinator.publish({
+      kind: 'stated_references',
+      operationId: `references-${marker}-1`,
+      payload,
+    }),
+  ).rejects.toThrow();
+  // Nothing accounts for the target yet, so the statement is recorded against an unresolved id.
+  expect(listStatedLinks(store.db, source)[0]).toMatchObject({
+    qualifier: 'unresolved',
+    knownFrom: null,
+  });
+
+  moveCoverageEpoch(marker);
+  expect(await coordinator.recover()).toMatchObject({ status: 'deferred' });
+  // The substrate starts holding the target between the discarded attempt and the retry, so the
+  // retry classifies it differently and the link address it writes under moves with the class.
+  await seedRetainedClaim(substrate.harness.driver, { id: target, sourceId: source });
+
+  const retry = await coordinator.publish({
+    kind: 'stated_references',
+    operationId: `references-${marker}-2`,
+    payload,
+  });
+
+  expect(retry.status).toBe('acknowledged');
+  const links = listStatedLinks(store.db, source);
+  expect(links).toHaveLength(1);
+  expect(links[0]).toMatchObject({ qualifier: 'retained_node', toId: target });
+  expect(links[0]?.knownFrom).not.toBeNull();
+  // The address the first attempt wrote under is one nothing will name again, so its row is
+  // released rather than left owed: the source keeps no obligation the eviction fence pins on.
+  expect(unsettledLinkStates(store.db, source)).toEqual([]);
+  expect(
+    listEvidenceAcknowledgments(store.db, source).filter(
+      (entry) => entry.effectKind === 'stated_references',
+    ),
+  ).toMatchObject([{ state: 'completed' }]);
+});
+
+it('settles an intake delivery whose retry classifies its target differently', async () => {
+  const marker = `intake-reclassified-${String(serial)}`;
+  const target = `claim-${marker}`;
+
+  failAt = 'prepared';
+  await expect(
+    coordinator.publish({
+      kind: 'intake',
+      operationId: `intake-${marker}-1`,
+      payload: intakePayload(marker, target),
+    }),
+  ).rejects.toThrow();
+  const source = (
+    store.db
+      .prepare('SELECT source_id FROM source_reference_batches ORDER BY rowid DESC LIMIT 1')
+      .get() as { source_id: string }
+  ).source_id;
+  expect(listStatedLinks(store.db, source)[0]).toMatchObject({
+    qualifier: 'unresolved',
+    knownFrom: null,
+  });
+
+  moveCoverageEpoch(marker);
+  expect(await coordinator.recover()).toMatchObject({ status: 'deferred' });
+  await seedRetainedClaim(substrate.harness.driver, { id: target, sourceId: source });
+
+  // The same push again: the occurrence is already held, and the delivery key is the set it
+  // carried rather than the classes that set resolved to, so the retry offers the same delivery.
+  const retry = await coordinator.publish({
+    kind: 'intake',
+    operationId: `intake-${marker}-2`,
+    payload: intakePayload(marker, target),
+  });
+
+  expect(retry.status).toBe('acknowledged');
+  const links = listStatedLinks(store.db, source);
+  expect(links).toHaveLength(1);
+  expect(links[0]).toMatchObject({ qualifier: 'retained_node', knownFrom: expect.any(String) });
+  expect(unsettledLinkStates(store.db, source)).toEqual([]);
 });
 
 it('refuses a statement about a source the records do not hold', async () => {

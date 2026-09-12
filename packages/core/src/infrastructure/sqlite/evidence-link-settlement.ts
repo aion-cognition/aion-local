@@ -39,24 +39,60 @@ export type LinkVersionKey = {
 };
 
 /**
- * Which of the versions an acknowledgment covers are still outside the committed view.
+ * Every version one DELIVERY still holds outside the committed view, at whatever address it wrote
+ * them under.
  *
- * The acknowledgment moves rows by operation, and the row it means to move is addressed by
- * delivery. Those are two identities, so a count of changed rows says how many moved and not
- * whether the ones this settlement named are among them. This asks about exactly those, after
- * the update, and an answer that is not empty is a settlement reporting an effect it did not have.
+ * Scoped to the delivery rather than to a list of addresses, because the address is not stable. A
+ * stated link id is derived from what the target turned out to be, and that classification is
+ * re-read from the graph on every attempt: a target the substrate started holding between a
+ * discarded attempt and its retry is classified differently, so the retry writes a different link
+ * and the first attempt's row keeps this delivery's key under an address nobody names again. A
+ * question asked about the current attempt's addresses cannot see that row; a question asked about
+ * the delivery can.
+ *
+ * A stated version's key is the delivery, a colon and the link, so membership is an EQUALITY against
+ * that key rebuilt from the row's own link id. Written that way rather than as a prefix test on
+ * purpose: delivery keys are not prefix-free by construction, and a prefix test would claim another
+ * delivery's rows whenever one key happened to start with another. No pattern is involved either,
+ * so a delivery key carrying a wildcard character means nothing here.
  */
-export function unsettledLinkVersions(
+export function heldDeliveryLinkVersions(
   db: SqliteHandle,
-  keys: readonly LinkVersionKey[],
-): readonly string[] {
+  fromId: string,
+  deliveryKey: string,
+): readonly LinkVersionKey[] {
+  const rows = db
+    .prepare(
+      `SELECT v.link_id AS link_id, v.operation_key AS operation_key
+       FROM evidence_links l
+       JOIN evidence_link_versions v ON v.link_id = l.link_id
+       WHERE l.from_id = ? AND v.known_from IS NULL AND v.operation_key = ? || v.link_id
+       ORDER BY v.link_id`,
+    )
+    .all(fromId, `${deliveryKey}:`) as { link_id: string; operation_key: string }[];
+  return rows.map((row) => ({ linkId: row.link_id, operationKey: row.operation_key }));
+}
+
+/**
+ * Drops named versions that are still outside the committed view.
+ *
+ * The caller decides which: the one case is a delivery whose retry no longer names the address a
+ * discarded attempt wrote, where the old row is owed by an operation that will never acknowledge
+ * and addressed by a link nothing will name again. Nothing was in the committed view and no
+ * projection points at it, so dropping it returns the records to the state before that attempt.
+ *
+ * Returns how many were released.
+ */
+export function releaseLinkVersions(db: SqliteHandle, keys: readonly LinkVersionKey[]): number {
   const statement = db.prepare(
-    `SELECT 1 AS owed FROM evidence_link_versions
+    `DELETE FROM evidence_link_versions
      WHERE link_id = ? AND operation_key = ? AND known_from IS NULL`,
   );
-  return keys
-    .filter((key) => statement.get(key.linkId, key.operationKey) !== undefined)
-    .map((key) => key.operationKey);
+  let released = 0;
+  for (const key of keys) {
+    released += statement.run(key.linkId, key.operationKey).changes;
+  }
+  return released;
 }
 
 /**

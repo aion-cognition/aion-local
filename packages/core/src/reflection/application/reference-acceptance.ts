@@ -3,7 +3,8 @@ import type { ConfirmationStatement, ReferenceStatements } from './reference-sta
 import { durableRoleScope, type DurableRole } from '../../evidence/domain/scopes.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
-  unsettledLinkVersions,
+  heldDeliveryLinkVersions,
+  releaseLinkVersions,
   type LinkVersionKey,
 } from '../../infrastructure/sqlite/evidence-link-settlement.js';
 import {
@@ -256,6 +257,18 @@ export function prepareReferenceAcceptance(
     introduced: acceptance.targets.map((target) => target.id),
   });
   const keys = statedLinkKeys(acceptance);
+  // An address this delivery wrote before and no longer names. The link id is derived from what
+  // the target turned out to be, and an earlier attempt asked the graph a moment when the answer
+  // was different: the id it wrote under is one no later attempt will ever address again, so the
+  // row is owed by a dead operation and unreachable by the re-adoption. It was never acknowledged
+  // and never visible, so it is released rather than left pinning this source out of eviction.
+  const named = new Set(keys.map((key) => key.operationKey));
+  releaseLinkVersions(
+    db,
+    heldDeliveryLinkVersions(db, acceptance.sourceId, acceptance.deliveryKey).filter(
+      (held) => !named.has(held.operationKey),
+    ),
+  );
   for (const [index, target] of acceptance.targets.entries()) {
     const key = keys[index];
     if (key === undefined) {
@@ -340,10 +353,13 @@ export function acknowledgeReferenceAcceptance(
     settlement.knownFrom,
     settlement.observedAckAt,
   );
-  // Membership in the operation is not proof of effect. The versions are addressed by delivery and
-  // promoted by operation, so a row left behind under another operation would stay outside the
-  // committed view while this acknowledgment recorded the obligation settled.
-  const owed = unsettledLinkVersions(db, statedLinkKeys(settlement));
+  // Membership in the operation is not proof of effect, and the question is asked at DELIVERY
+  // granularity because that is the identity the obligation is recorded under. The versions are
+  // addressed by delivery and promoted by operation, so a row left behind under another operation
+  // would stay outside the committed view while this acknowledgment recorded the obligation
+  // settled. Asking only about the addresses this attempt named would miss a row an earlier
+  // attempt wrote under a different classification of the same target.
+  const owed = heldDeliveryLinkVersions(db, settlement.sourceId, settlement.deliveryKey);
   if (owed.length > 0) {
     throw new Error(
       `reference delivery ${settlement.deliveryKey} left ${String(owed.length)} stated link version(s) unsettled`,
