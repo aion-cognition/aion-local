@@ -137,6 +137,28 @@ export async function moveEdgeStrength(
 }
 
 /**
+ * Renames one edge's identity, leaving the count, the endpoints and every property alone.
+ *
+ * The equal-count replacement, done reversibly. A census that compared how many incident edges it
+ * found would see no difference; what moved is which edges they are. Nothing is deleted and
+ * nothing is created, so the case reaches the guard through a mutation a test is allowed to make.
+ */
+export async function renameEdgeIdentity(
+  driver: Driver,
+  relationId: string,
+  replacementId: string,
+): Promise<void> {
+  await runWrite(
+    driver,
+    {
+      cypher: 'MATCH ()-[r]-() WHERE r.id = $relationId SET r.id = $replacementId',
+      parameters: { relationId, replacementId },
+    },
+    () => undefined,
+  );
+}
+
+/**
  * An edge from a raw node to something the node registry does not name. The endpoint carries no
  * base label, which is what an administrative node looks like from the census's side.
  */

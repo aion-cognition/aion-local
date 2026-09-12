@@ -30,6 +30,7 @@ import { readSourceRecord } from '../../../infrastructure/sqlite/source-identity
 import { readGenerationWork } from '../../../infrastructure/sqlite/source-readiness.js';
 import { runSourceIndexJob } from '../../../introspection/application/source-index.js';
 import { SessionManager } from '../../../session/session-manager.js';
+import type { ChunkBoundaryPolicy } from '../../domain/chunk-boundary.js';
 import { publishChunkNarrative, sealSessionChunk } from '../chunk-narrative.js';
 import type { ChunkNarrativeDeps } from '../chunk-seal.js';
 import {
@@ -41,6 +42,10 @@ import { INSTALLED_PUBLICATION_HANDLERS } from '../installed-publications.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../intake.js';
 import { LaneAssigner } from '../lanes.js';
 import { publishPipelineReadinessPolicy } from '../readiness.js';
+import {
+  sourceSuppressionOperationId,
+  sourceSuppressionPublication,
+} from '../source-suppression.js';
 
 /**
  * A substrate the eviction battery may actually delete from.
@@ -65,6 +70,7 @@ export let chunks: ChunkNarrativeDeps;
 let intake: ReflectionIntakeDeps;
 let substrate: RehearsalSubstrate;
 let dir: string;
+let armAttempt = 0;
 let failAt: { boundary: PublicationBoundary; match: string } | undefined;
 let hookAt: { boundary: PublicationBoundary; match: string; run: () => Promise<void> } | undefined;
 
@@ -215,18 +221,44 @@ export function sessionOf(sourceId: string): string {
   return record.sessionId;
 }
 
-export async function sealAndPublish(sourceId: string): Promise<string> {
+export async function sealAndPublish(
+  sourceId: string,
+  policy?: ChunkBoundaryPolicy,
+): Promise<string> {
   const sealed = await sealSessionChunk(chunks, sessionOf(sourceId), {
     now: NOW,
     sessionClosing: true,
+    ...(policy === undefined ? {} : { policy }),
   });
   expect(sealed.status).toBe('sealed');
   if (sealed.status !== 'sealed') {
     throw new Error('fixture did not seal');
   }
-  const published = await publishChunkNarrative(chunks, sealed.chunkId, { now: NOW });
-  expect(published.status).toBe('published');
+  await republishChunk(sealed.chunkId, policy);
   return sealed.chunkId;
+}
+
+/**
+ * A second revision over frozen membership, which is how a coverage gap reaches a published head.
+ * The gaps are computed when the narrative is written, so a member suppressed after the first
+ * revision only shows up in the next one.
+ */
+export async function republishChunk(chunkId: string, policy?: ChunkBoundaryPolicy): Promise<void> {
+  const published = await publishChunkNarrative(chunks, chunkId, {
+    now: NOW,
+    ...(policy === undefined ? {} : { policy }),
+  });
+  expect(published.status).toBe('published');
+}
+
+/** The operator's forget, through the writer that owns it, so the state is committed not written. */
+export async function forgetSource(sourceId: string): Promise<void> {
+  const outcome = await publications.publish({
+    kind: sourceSuppressionPublication.kind,
+    operationId: sourceSuppressionOperationId('forget', sourceId, NOW),
+    payload: { act: 'forget', nodeId: sourceId, observedAt: NOW.toISOString() },
+  });
+  expect(outcome.status).toBe('acknowledged');
 }
 
 /** The readiness rows a finished pipeline leaves: every stage settled, the inventory closed. */
@@ -285,9 +317,14 @@ export async function activateCoverage(): Promise<void> {
  */
 export async function armEviction(): Promise<void> {
   const epoch = readCurrentCoverageContract(store.db)?.epoch ?? '';
+  armAttempt += 1;
   const outcome = await publications.publish({
     kind: evictionArmingPublication.kind,
-    operationId: evictionArmingOperationId(EVICTION_COMPATIBILITY_REVISION, epoch),
+    // One identity per call rather than the command's, which is derived from the revision and the
+    // epoch alone. The battery clears the fence to show a source pinned without it and arms again
+    // to show it is not, and a replay of the first act's identity would hand back that act's
+    // recorded result without writing anything.
+    operationId: `${evictionArmingOperationId(EVICTION_COMPATIBILITY_REVISION, epoch)}:${String(armAttempt)}`,
     payload: { revision: EVICTION_COMPATIBILITY_REVISION, coverageEpoch: epoch },
   });
   expect(outcome.status).toBe('acknowledged');

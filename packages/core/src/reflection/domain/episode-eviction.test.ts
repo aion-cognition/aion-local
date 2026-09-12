@@ -254,3 +254,35 @@ describe('removalSetBound', () => {
     expect(removalSetBound(1, EVICTION_BOUNDS.edges + 1)).toBe('removal_set_edges_bound');
   });
 });
+
+describe('an equal-count replacement of the incident set', () => {
+  /**
+   * The relation id is the first field of every category-digest row, so a set that differs by one
+   * identity differs in the digest. The guard compares the digest before it compares the identity
+   * list, which is why an equal-count replacement is answered `removal_categories_moved` and the
+   * identity comparison behind it never speaks. That comparison is defence for a future digest
+   * that stops carrying the id, and this case is what would notice if the id left it.
+   */
+  it('moves the category digest, which is checked before the identity list', () => {
+    const original = classifyRemovalSet([
+      { ...outward('MENTIONS', ['Entity']), relationId: 'rel-original' },
+    ]);
+    const replaced = classifyRemovalSet([
+      { ...outward('MENTIONS', ['Entity']), relationId: 'rel-replacement' },
+    ]);
+    expect(original.status).toBe('classified');
+    expect(replaced.status).toBe('classified');
+    if (original.status !== 'classified' || replaced.status !== 'classified') {
+      return;
+    }
+    expect(original.edges).toHaveLength(replaced.edges.length);
+    expect(replaced.categoryDigest).not.toBe(original.categoryDigest);
+  });
+
+  it('carries the relation id inside the per-edge digest as well', () => {
+    const edges = [outward('MENTIONS', ['Entity'])] as const;
+    expect(preservedEdgeDigest({ ...edges[0], relationId: 'rel-original' })).not.toBe(
+      preservedEdgeDigest({ ...edges[0], relationId: 'rel-replacement' }),
+    );
+  });
+});

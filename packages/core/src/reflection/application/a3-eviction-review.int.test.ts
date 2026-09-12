@@ -10,9 +10,11 @@ import {
   driver,
   eligibleSource,
   finishReadiness,
+  forgetSource,
   indexSource,
   NOW,
   publications,
+  republishChunk,
   sealAndPublish,
   sessionOf,
   store,
@@ -21,6 +23,7 @@ import { inWriteTransaction } from '../../infrastructure/graph/connection.js';
 import {
   moveEdgeStrength,
   nodeExists,
+  renameEdgeIdentity,
   seedForeignEndpointEdge,
   seedStrayTurn,
   seedUnknownEdge,
@@ -40,6 +43,10 @@ import {
   statedLinkId,
 } from '../../infrastructure/sqlite/evidence-links.js';
 import {
+  CHUNK_REVISION_FAMILY,
+  readPublishedRevision,
+} from '../../infrastructure/sqlite/narrative-revisions.js';
+import {
   completeSourceWork,
   createSourceWork,
   readActiveGeneration,
@@ -52,6 +59,7 @@ import {
   recordSourceParts,
 } from '../../infrastructure/sqlite/source-identity.js';
 import { readSourceResidency } from '../../infrastructure/sqlite/source-lifecycle.js';
+import { CHUNK_BOUNDARY_POLICY } from '../domain/chunk-boundary.js';
 
 /**
  * The destructive battery. Every case runs against real SQLite and a throwaway Neo4j, and every
@@ -520,4 +528,78 @@ it('refuses a raw container carrying a semantic label as well', async () => {
   expect(outcome).toMatchObject({ status: 'deferred', reason: 'removal_label_mixed' });
   expect(await nodeExists(driver, sourceId)).toBe(true);
   await setNodeLabel(driver, { id: sourceId, label: 'Insight', present: false });
+});
+
+it('refuses an equal-count replacement of the incident set, and removes nothing', async () => {
+  const sourceId = await eligibleSource('evict-equal-count', 'S1', true);
+  const nomination = await nominate(sourceId);
+  const relationId = nomination.plan.relationIds[0] ?? '';
+  expect(relationId).not.toBe('');
+
+  // Counts are never the test. The edge count is what it was, the endpoints are what they were,
+  // and every property is untouched: one edge answers to a different identity. Nothing was
+  // deleted and nothing was created to do it.
+  await renameEdgeIdentity(driver, relationId, `${relationId}-replacement`);
+
+  const outcome = await publishEviction(nomination);
+
+  // `removal_categories_moved`, not `incident_set_moved`. The relation id is the first field of
+  // every category-digest row, so a set that differs by one identity differs in the digest, and
+  // the digest is compared two lines before the identity list. The identity comparison behind it
+  // is defence for a future digest that stops carrying the id.
+  expect(outcome).toMatchObject({ status: 'deferred', reason: 'removal_categories_moved' });
+  expect(await nodeExists(driver, sourceId)).toBe(true);
+
+  await renameEdgeIdentity(driver, `${relationId}-replacement`, relationId);
+});
+
+it('lets a healthy member stand beside a suppressed neighbour in its own chunk', async () => {
+  const healthy = await acceptEpisode('evict-suppressed-rider', 'S1');
+  const suppressed = await acceptEpisode('evict-suppressed-rider', 'S2');
+  const chunkId = await sealAndPublish(healthy);
+
+  await forgetSource(suppressed);
+  // The gaps are computed when the narrative is written, so the suppression reaches the head on
+  // the next revision over the same frozen membership.
+  await republishChunk(chunkId);
+  const head = readPublishedRevision(store.db, CHUNK_REVISION_FAMILY, chunkId);
+  expect(JSON.parse(head?.coverageGapsJson ?? '[]')).toEqual([
+    { reason: 'suppressed_member', sourceId: suppressed },
+  ]);
+
+  finishReadiness(healthy);
+  await indexSource(healthy);
+
+  // The rider: a proved suppression on another member is a fact about that member, and the
+  // coverage over this one is whole.
+  expect(durableEligibility(store.db, healthy, POLICY).status).toBe('eligible');
+  // The suppressed member pins itself, and on its own state rather than on the gap it caused.
+  // That check runs before the gap check, so it never exercises the rider on itself.
+  expect(durableEligibility(store.db, suppressed, POLICY)).toEqual({
+    status: 'pinned',
+    reason: 'source_state_unsettled',
+  });
+});
+
+it('pins a member whose chunk carries a gap the rider does not name', async () => {
+  const first = await acceptEpisode('evict-oversized-gap', 'S1');
+  await acceptEpisode('evict-oversized-gap', 'S2');
+  // An allowance below either member's rendered size, so the head publishes gaps that are real
+  // and are not suppressions. The rider names one reason, and this is not it.
+  const chunkId = await sealAndPublish(first, {
+    ...CHUNK_BOUNDARY_POLICY,
+    renderedInputAllowance: 200,
+  });
+  const head = readPublishedRevision(store.db, CHUNK_REVISION_FAMILY, chunkId);
+  const gaps = JSON.parse(head?.coverageGapsJson ?? '[]') as { reason: string }[];
+  expect(gaps.length).toBeGreaterThan(0);
+  expect(gaps.every((gap) => gap.reason === 'oversized_member')).toBe(true);
+
+  finishReadiness(first);
+  await indexSource(first);
+
+  expect(durableEligibility(store.db, first, POLICY)).toEqual({
+    status: 'pinned',
+    reason: 'chunk_coverage_incomplete',
+  });
 });
