@@ -99,7 +99,7 @@ describe('renderStatus', () => {
 
     const text = lines.join('\n');
     expect(text).toContain(
-      'queue    interactive=2 bulk=5, oldest unclaimed 2m, 1 exhausted, 9 index pending',
+      'queue    interactive=2 bulk=5, oldest unclaimed 2m, 1 exhausted, 9 source-index rows pending',
     );
     expect(text).toContain('lag      p95 intake-to-enriched 42s, 7 reinforcement rows dropped');
   });

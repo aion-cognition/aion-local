@@ -222,6 +222,14 @@ are shared with the workstream that owns each area (`floors.fixtures.ts`,
   daemon's resident-model list, which the whole machine shares: a concurrent file generating
   against the same model would reload it mid-eviction and fail the poll. `npm run
   test:integration` runs both projects; a bare `--project integration` filter skips them.
+- A root that boots the service under a key unloads the local generation tags on its way up,
+  and the daemon those tags live in is the whole machine's. `reconcileModels`
+  (`packages/mcp/src/boot-models.ts`) unloads what a remote-routed role no longer needs, so
+  `mcp/service.int` and `cli/last.int` under `AION_ANTHROPIC_API_KEY` pull `qwen3:8b` out from
+  under any local-route file running abreast of them, and the `integration` project runs files
+  in parallel. Neither root claims anything about residency, which is why nothing there fails:
+  the file that breaks is the other one. Run keyed service-boot roots in a selection of their
+  own, or in the serial `integration-ollama` project where the residency roots already live.
 - A rehearsal that loads fixtures, injects faults, or tears a store down starts from
   `startRehearsalSubstrate()` (`test-support/consolidation-rehearsal.fixture.ts`) rather than
   from the harness directly. It refuses before anything connects when the environment offers

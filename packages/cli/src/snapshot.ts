@@ -4,15 +4,9 @@ import {
   describeError,
   edgeWeightDistribution,
   generationCounters,
-  introspectionCycle,
-  introspectionOperations,
-  latestLedgerEntry,
   listLastPackSessions,
   listOllamaModels,
-  listOperationStats,
   listResidentModels,
-  meanOperationDurationMs,
-  OPERATION_LEDGER_PREFIX,
   PACK_METHODS,
   packMethodCounters,
   packMethodLegStats,
@@ -29,7 +23,6 @@ import {
   type GenerationCounters,
   type GraphConnection,
   type GraphCounts,
-  type OperationStats,
   type PackMethodCounters,
   type PackMethodLegStats,
   type PlasticityCounters,
@@ -41,6 +34,12 @@ import {
 
 import { ageOf, formatEdgeWeights } from './format.js';
 import { renderGeneration } from './generation-section.js';
+import { renderLanes } from './lanes-section.js';
+import {
+  collectMaintenance,
+  renderMaintenance,
+  type MaintenanceSnapshot,
+} from './maintenance-section.js';
 import {
   collectMergeShadow,
   renderMergeShadow,
@@ -56,25 +55,6 @@ import { renderRecallProbe } from './recall-probe-section.js';
  * the spirit metric's per-method pack shares, the maintenance ledger, and the per-label graph
  * breakdown after the same base sections `status` already printed.
  */
-
-/**
- * One maintenance operation's record: the counters the engine keeps, plus what its most
- * recent bucket claim wrote to the ops ledger. The two come from different places on purpose.
- * The counters answer how the operation has been doing over its life; the ledger entry is the
- * evidence that one particular window ran and what it did in it.
- */
-export type MaintenanceOperationReading = {
-  readonly stats: OperationStats;
-  readonly lastStatus?: string;
-  readonly lastItemsAffected?: number;
-  readonly lastDetail?: string;
-};
-
-export type MaintenanceSnapshot = {
-  /** Ticks the loop has taken. Starvation is measured in these, not in wall time. */
-  readonly cycle: number;
-  readonly operations: readonly MaintenanceOperationReading[];
-};
 
 /** The verbose-only readings `stats` adds on top of the base view `status` also renders. */
 export type SnapshotExtras = {
@@ -118,42 +98,6 @@ export type Snapshot = {
   /** Present only when the caller asked for it; `status` leaves it unset, `stats` fills it in. */
   readonly extras?: SnapshotExtras;
 };
-
-/** The engine writes this object as the ledger summary; a hand-edited row may not match it. */
-type LedgerSummary = {
-  readonly status?: unknown;
-  readonly itemsAffected?: unknown;
-  readonly detail?: unknown;
-};
-
-function readLedgerSummary(summary: unknown): LedgerSummary {
-  if (typeof summary !== 'object' || summary === null) {
-    return {};
-  }
-  return summary;
-}
-
-/**
- * Reads the catalog rather than a stored list of names, so an operation registered in
- * `introspectionOperations` shows up here with no second place to remember to add it. One that
- * has never run reports zeroes, which is the honest reading and not an omission.
- */
-export function collectMaintenance(db: SqliteHandle, config: Config): MaintenanceSnapshot {
-  const names = introspectionOperations(config).map((operation) => operation.name);
-  const operations = listOperationStats(db, names).map((stats) => {
-    const entry = latestLedgerEntry(db, `${OPERATION_LEDGER_PREFIX}${stats.name}:`);
-    const summary = readLedgerSummary(entry?.summary);
-    return {
-      stats,
-      ...(typeof summary.status === 'string' ? { lastStatus: summary.status } : {}),
-      ...(typeof summary.itemsAffected === 'number'
-        ? { lastItemsAffected: summary.itemsAffected }
-        : {}),
-      ...(typeof summary.detail === 'string' ? { lastDetail: summary.detail } : {}),
-    };
-  });
-  return { cycle: introspectionCycle(db), operations };
-}
 
 export function collectSnapshot(
   config: Config,
@@ -242,112 +186,6 @@ function totalMethodCount(counters: PackMethodCounters): number {
   return PACK_METHODS.reduce((sum, method) => sum + counters[method], 0);
 }
 
-const OPERATION_NAME_WIDTH = 24;
-
-/**
- * One line per registered operation. An operation with no runs says so rather than printing a
- * row of zeroes that reads like a measurement, since "never selected" and "selected and did
- * nothing" are different answers to the only question this section exists for.
- */
-function renderMaintenance(snapshot: MaintenanceSnapshot, now: number, write: Writer): void {
-  write('');
-  write('maintenance');
-  write(
-    `  cycle ${String(snapshot.cycle)}, ${String(snapshot.operations.length)} operations registered`,
-  );
-  for (const reading of snapshot.operations) {
-    const { stats } = reading;
-    const name = stats.name.padEnd(OPERATION_NAME_WIDTH);
-    if (stats.lastRunAt === undefined) {
-      write(`  ${name} never selected`);
-      continue;
-    }
-    const age = ageOf(Math.max(0, now - Date.parse(stats.lastRunAt)));
-    const affected =
-      reading.lastItemsAffected === undefined
-        ? ''
-        : ` (${String(reading.lastItemsAffected)} affected)`;
-    const mean = meanOperationDurationMs(stats);
-    const cost = mean === undefined ? '' : `  ~${(mean / 1000).toFixed(1)}s/run`;
-    write(
-      `  ${name} runs ${String(stats.runs)}  improved ${String(stats.improved)}  ` +
-        `unchanged ${String(stats.unchanged)}  failed ${String(stats.failed)}  ` +
-        `unmeasured ${String(stats.unmeasured)}${cost}  ` +
-        `last ${age} ago ${reading.lastStatus ?? 'unrecorded'}${affected}`,
-    );
-  }
-}
-
-/** The longest lane name, so every `MODE:` in the section starts at one column. */
-const LANE_NAME_WIDTH = 19;
-
-/**
- * The lanes that act on their own between two ticks of a person looking, with the two-word
- * verdict `aion status` gives every one of them: `acting` or `off`, never a third state a
- * knob's own vocabulary might suggest. `merge_auto`, `proposal_resolution` and
- * `proposal_hygiene` read their one dedicated boolean. The two proposal lanes get a line each
- * because one off does not stop the other: resolution decides an open row on its merits, and
- * hygiene ages out whatever resolution keeps failing on.
- * Supersession has no boolean of its own: `propose` queues everything and
- * closes nothing, so `unanimous` and the legacy `auto` are what "acting" means for it, and the
- * mode name is shown alongside for the same reason `queue` shows a lane's own depth rather
- * than just a total. The cascade's judge tier reads the same way under
- * `AION_ENTITY_MERGE_MODE`, and it is a separate line from `merge_auto` because the two are
- * separate switches: `merge_auto` governs the deterministic tier, which merges whatever the
- * judge tier is doing. Tier 3 only acts when its kill switch is on and its own mode knob says
- * `act`; `propose` records a recommendation and runs nothing, which reads as `off` here for
- * the same reason it reads as `off` in `docs/operations.md`. `keyed_close` is an eighth
- * switch, independent of `supersedeMode`: it runs inside a different stage's write and reads
- * the same way supersession does, `off` or the mode it routes into.
- */
-function laneMode(acting: boolean): 'acting' | 'off' {
-  return acting ? 'acting' : 'off';
-}
-
-function renderLanes(config: Config, write: Writer): void {
-  write('');
-  write('lanes');
-  write(
-    `  ${'merge_auto'.padEnd(LANE_NAME_WIDTH)} MODE: ${laneMode(config.maintenance.autoMerge)}`,
-  );
-
-  const { entityMergeMode } = config.reflection;
-  const entityMergeActing = entityMergeMode !== 'propose';
-  const entityMergeDetail = entityMergeActing ? ` (${entityMergeMode})` : '';
-  write(
-    `  ${'entity_dedup'.padEnd(LANE_NAME_WIDTH)} MODE: ${laneMode(entityMergeActing)}${entityMergeDetail}`,
-  );
-
-  const supersessionMode = config.reflection.supersedeMode;
-  const supersessionActing = supersessionMode !== 'propose';
-  const supersessionDetail = supersessionActing ? ` (${supersessionMode})` : '';
-  write(
-    `  ${'supersession'.padEnd(LANE_NAME_WIDTH)} MODE: ${laneMode(supersessionActing)}${supersessionDetail}`,
-  );
-
-  const { keyedCloseMode } = config.reflection;
-  const keyedCloseActing = keyedCloseMode !== 'off';
-  const keyedCloseDetail = keyedCloseActing ? ` (${keyedCloseMode})` : '';
-  write(
-    `  ${'keyed_close'.padEnd(LANE_NAME_WIDTH)} MODE: ${laneMode(keyedCloseActing)}${keyedCloseDetail}`,
-  );
-
-  write(
-    `  ${'proposal_resolution'.padEnd(LANE_NAME_WIDTH)} MODE: ${laneMode(config.maintenance.proposalResolution)}`,
-  );
-
-  write(
-    `  ${'proposal_hygiene'.padEnd(LANE_NAME_WIDTH)} MODE: ${laneMode(config.maintenance.proposalHygiene)}`,
-  );
-
-  write(
-    `  ${'claim_dedup'.padEnd(LANE_NAME_WIDTH)} MODE: ${laneMode(config.maintenance.claimDedup)}`,
-  );
-
-  const tier3Acting = config.maintenance.tier3 && config.maintenance.tier3Mode === 'act';
-  write(`  ${'tier3'.padEnd(LANE_NAME_WIDTH)} MODE: ${laneMode(tier3Acting)}`);
-}
-
 /** Skipped while Neo4j is down: the base `graph` line above already reported that. */
 function renderLabelCounts(
   reachable: boolean,
@@ -422,7 +260,12 @@ export function renderSnapshot(
     queue.cueDegradedRate === undefined
       ? 'no recalls yet'
       : `${(queue.cueDegradedRate * 100).toFixed(1)}% of recent recalls degraded on cues`;
-  const spent = `${String(queue.exhausted)} exhausted, ${String(queue.indexDepth)} index pending`;
+  // `source-index`, the same name `aion doctor` and `/health` give this population. It said
+  // `index` while this file sat one line under the 500-line cap, and an operator comparing two
+  // surfaces had to guess the two numbers were the same thing.
+  const spent =
+    `${String(queue.exhausted)} exhausted, ` +
+    `${String(queue.indexDepth)} source-index rows pending`;
   write(`queue    ${depth}, oldest unclaimed ${oldest}, ${spent}`);
   write(
     `lag      p95 intake-to-enriched ${p95}, ${String(queue.reinforcementDropped)} reinforcement rows dropped`,
