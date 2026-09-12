@@ -96,7 +96,7 @@ describe('no code path hard-deletes a node', () => {
     }
   });
 
-  it('finds no Cypher delete anywhere outside the two skipped files', () => {
+  it('finds no Cypher delete anywhere outside the three skipped files', () => {
     const offenders: string[] = [];
     for (const file of files) {
       const source = stripComments(readFileSync(file, 'utf8'));

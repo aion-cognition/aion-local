@@ -116,10 +116,11 @@ every command). Use it to exercise the actual binary, not as a test runner.
 - `packages/core/src/infrastructure/graph/no-hard-delete.test.ts`: scans every `.ts` file
   under `packages/` for a Cypher `DETACH DELETE` or bare `DELETE` clause (SQL's `DELETE
   FROM` and JavaScript's `delete` operator are excluded by the pattern), and fails if it
-  finds one outside the two files it skips. Those two are itself, which has to name the
-  patterns it forbids, and `test-support/neo4j-harness.fixture.ts`, which clears the test
-  database between files. A test in the same file pins the skip list at exactly those two,
-  so widening it takes a deliberate edit. It and the prompt scan below are the two conventions
+  finds one outside the three files it skips. Those three are itself, which has to name the
+  patterns it forbids, `test-support/neo4j-harness.fixture.ts`, which clears the test
+  database between files, and `infrastructure/graph/episode-eviction.ts`, C9's reviewed
+  exception and the only production module allowed to remove a node. A test in the same file
+  pins the skip list at exactly those three, so widening it takes a deliberate edit. It and the prompt scan below are the two conventions
   enforced by a repo-wide scan rather than by lint: the three lint-backed conventions are
   marked above, and everything else in that list is a review-time rule.
   A grep guard modeled on this one would be the cheap way to enforce Cypher confinement to

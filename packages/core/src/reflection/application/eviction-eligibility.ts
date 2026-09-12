@@ -129,6 +129,17 @@ function qualificationAnchor(
  * legacy-coverage write, `retired` by a merge and by that same write's closing half. One reason
  * covering all three would name the wrong cause for two of them; the operation that prepared the
  * version is what names which of a class's two writers is owed.
+ *
+ * The harm above is a FROM-SIDE argument, and the read is keyed on `from_id` deliberately. A source
+ * can land on the to side — a stated link whose target turns out to be a source is written that way,
+ * and a legacy relation whose far endpoint carries the Episode label is classified rather than
+ * excluded. Keying on either endpoint would pin that source on an obligation only the other
+ * endpoint's operation can discharge: a pin with no repair path, against condition 5's rule that a
+ * remaining obligation is acknowledged or transferred, and it would report a settlement owed for a
+ * statement this source never made. The to side is covered instead, and more strongly: an incoming
+ * preserved-evidence edge demands a committed incidence row for its role, no writer records a stated
+ * role, so the census pins the source whether or not any version settled. Nothing durable is deleted
+ * on the eviction path either, so a link's address survives the eviction of what it points at.
  */
 const SETTLEMENT_PINS: Readonly<Record<string, string>> = {
   stated: 'reference_settlement_owed',
