@@ -206,6 +206,53 @@ export function discardSurvivorWork(db: SqliteHandle, operationId: string): numb
     .run(SURVIVOR_DISCARDED_REASON, operationId, SURVIVOR_WORK_KIND).changes;
 }
 
+/**
+ * The reason a parked obligation carries once its generation is past and re-adoption is closed.
+ */
+export const SURVIVOR_LAPSED_REASON = 'eviction_generation_advanced';
+
+/**
+ * Ages parked survivor obligations whose generation has moved on, in bounded batches.
+ *
+ * `prepareSurvivorWork` re-adopts a parked row only when a later attempt names the same source,
+ * the same generation AND the same node, so a replaced generation closes that door: the row can
+ * no longer be adopted, no runnable read returns it — those filter to `pending`/`retryable` — and
+ * the only production delete over this table retires duplicates during a replacement, which never
+ * meets a parked row because the carry set excludes `obsolete`. What is left is a durable record
+ * that reads as waiting when it is finished waiting.
+ *
+ * It is re-reasoned rather than deleted, and it stays `obsolete` rather than becoming `completed`.
+ * The row carries the neighbourhood revision the eviction saw and the operation that intended the
+ * work, which is provenance worth keeping, and nothing about it ever ran, so a state a reader
+ * counts as work done would be a false completion. What changes is the one thing that was wrong:
+ * the reason said re-adoptable, and it is not.
+ *
+ * Only a generation with no `active` or `allocated` record ages, so a row still under the pass
+ * that could adopt it is left alone. Bounded by the caller's batch, and the reason predicate makes
+ * a second run over the same rows a no-op, so it drains across ticks instead of scanning the whole
+ * table on each one. Returns how many rows aged.
+ */
+export function ageObsoleteSurvivorWork(db: SqliteHandle, limit: number): number {
+  if (limit <= 0) {
+    return 0;
+  }
+  return db
+    .prepare(
+      `UPDATE source_work SET reason = ?
+       WHERE work_id IN (
+         SELECT w.work_id FROM source_work w
+         WHERE w.kind = ? AND w.state = 'obsolete' AND w.reason = ?
+           AND NOT EXISTS (
+             SELECT 1 FROM source_processing_generations g
+             WHERE g.source_id = w.source_id
+               AND g.processing_generation = w.processing_generation
+               AND g.state IN ('active','allocated'))
+         ORDER BY w.work_id
+         LIMIT ?)`,
+    )
+    .run(SURVIVOR_LAPSED_REASON, SURVIVOR_WORK_KIND, SURVIVOR_DISCARDED_REASON, limit).changes;
+}
+
 /** How many survivor obligations one operation currently owns, whatever state they are in. */
 export function countSurvivorWorkOf(db: SqliteHandle, operationId: string): number {
   const row = db

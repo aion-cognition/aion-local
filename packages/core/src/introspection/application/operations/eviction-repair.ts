@@ -9,6 +9,7 @@ import {
 import { readNeighborhoodRevisionsOf } from '../../../infrastructure/graph/episode-eviction.js';
 import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import {
+  ageObsoleteSurvivorWork,
   deferSurvivorWork,
   listRunnableSurvivorWork,
   type SurvivorTask,
@@ -40,6 +41,10 @@ import { computeContextVectors } from '../../../reflection/domain/context-vector
  * revision recorded on the task at eviction is not that comparison and cannot be — the removal
  * itself moved the neighbourhood, so it would differ every time. It is provenance: what the
  * eviction saw when it decided this node was affected.
+ *
+ * The pass also ages the obligations a discarded attempt parked. Those are the other end of the
+ * same life: prepared, never released, adoptable only by an attempt naming the same generation, so
+ * once the generation is replaced they are finished without ever having said so.
  */
 
 export type SurvivorRepairDeps = {
@@ -55,6 +60,8 @@ export type SurvivorRepairReport = {
   /** Settled without a recomputation because the survivor carries no context vector at all. */
   readonly classified: number;
   readonly deferred: number;
+  /** Parked obligations aged out of re-adoptable because their generation is past. */
+  readonly lapsed: number;
 };
 
 /** A moved neighbourhood comes back on the ordinary cadence, not immediately and not never. */
@@ -66,6 +73,7 @@ const NOTHING: SurvivorRepairReport = {
   cleared: 0,
   classified: 0,
   deferred: 0,
+  lapsed: 0,
 };
 
 function acknowledge(
@@ -89,9 +97,13 @@ export async function repairSurvivors(
   if (limit <= 0) {
     return NOTHING;
   }
+  // Ahead of the runnable read, and outside the empty-backlog return below it: a parked
+  // obligation is inert exactly when nothing is runnable, so a sweep that only ran on a busy
+  // tick would never meet the rows it exists for.
+  const lapsed = ageObsoleteSurvivorWork(deps.db, limit);
   const tasks = listRunnableSurvivorWork(deps.db, deps.now, limit);
   if (tasks.length === 0) {
-    return NOTHING;
+    return { ...NOTHING, lapsed };
   }
   const ids = tasks.map((task) => task.nodeId);
   const before = await readNeighborhoodRevisionsOf(deps.driver, ids);
@@ -166,5 +178,6 @@ export async function repairSurvivors(
     cleared: emptied.size,
     classified,
     deferred,
+    lapsed,
   };
 }

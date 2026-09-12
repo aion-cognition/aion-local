@@ -159,7 +159,8 @@ function detailOf(
     `${String(repaired.recomputed)} survivor vector(s) recomputed, ` +
     `${String(repaired.cleared)} cleared, ${String(repaired.classified)} carrying none, ` +
     `${String(repaired.deferred)} left owed ` +
-    `of ${String(repaired.attempted)} attempted; ` +
+    `of ${String(repaired.attempted)} attempted, ` +
+    `${String(repaired.lapsed)} parked obligation(s) aged out; ` +
     `${String(recovered)} pending publication(s) recovered`
   );
 }
