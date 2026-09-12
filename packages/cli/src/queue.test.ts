@@ -201,10 +201,11 @@ describe('aion queue against a seeded substrate', () => {
     const output = lines.join('\n');
     expect(output).toContain('1 unclaimed source_index rows are excluded');
     expect(output).toContain('dropped 2 unclaimed jobs matching session=flood job-type=integrate');
-    expect(listReflectionJobs(store.db).map((job) => job.jobType).sort()).toEqual([
-      'integrate',
-      SOURCE_INDEX_JOB_TYPE,
-    ]);
+    expect(
+      listReflectionJobs(store.db)
+        .map((job) => job.jobType)
+        .sort(),
+    ).toEqual(['integrate', SOURCE_INDEX_JOB_TYPE]);
   });
 
   it('drops index rows only when asked for them by name', async () => {
