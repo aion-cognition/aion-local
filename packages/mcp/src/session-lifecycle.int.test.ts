@@ -2,7 +2,6 @@ import {
   bootstrapBackbone,
   CueCache,
   DEFAULTS,
-  findSessionNarratives,
   getLastPack,
   handleRecall,
   handleReflection,
@@ -24,6 +23,7 @@ import {
 import {
   countNodesWithId,
   edgeTargetId,
+  narrativeIdsInSession,
 } from '@aion/core/infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   startNeo4jHarness,
@@ -110,6 +110,22 @@ beforeAll(async () => {
     workspaceId: backbone.workspace.id,
   });
 
+  // The idle-close trigger narrates, and narration publishes. The service composes both halves
+  // for itself; this fixture stands in for the service, so it owes the same composition. With
+  // them missing the trigger fired, returned 'failed' and wrote nothing, and the only symptom
+  // was an empty narrative query.
+  //
+  // Initialized before the direct intake publisher below, which stands a pairing row up by hand
+  // to skip the protocol: a pairing already marked initialized makes the coordinator report a
+  // guard node nothing ever minted.
+  const publications = new PublicationCoordinator({
+    driver: harness.driver,
+    db,
+    logger,
+    handlers: [...INSTALLED_PUBLICATION_HANDLERS],
+  });
+  await publications.initialize();
+
   const intake: ReflectionIntakeDeps = {
     driver: harness.driver,
     db,
@@ -131,18 +147,6 @@ beforeAll(async () => {
     cueCache: new CueCache(),
     logger,
   };
-
-  // The idle-close trigger narrates, and narration publishes. The service composes both halves
-  // for itself; this fixture stands in for the service, so it owes the same composition. With
-  // them missing the trigger fired, returned 'failed' and wrote nothing, and the only symptom
-  // was an empty narrative query.
-  const publications = new PublicationCoordinator({
-    driver: harness.driver,
-    db,
-    logger,
-    handlers: [...INSTALLED_PUBLICATION_HANDLERS],
-  });
-  await publications.initialize();
 
   narratives = new SessionNarrativeCloser(
     { driver: harness.driver, db, provider, logger, publications },
@@ -278,7 +282,10 @@ describe('reliable close', () => {
     expect(closed).toContain(sessionId);
 
     await narratives.whenIdle();
-    const written = await findSessionNarratives(harness.driver, sessionId);
+    // Read across families. What this case is about is that the trigger wrote something at all,
+    // and the session-overview reader answers for one family only: once the session is on the
+    // chunk family the narrative is there and that reader returns none of it.
+    const written = await narrativeIdsInSession(harness.driver, sessionId);
     expect(written.length).toBeGreaterThan(0);
   }, 60_000);
 

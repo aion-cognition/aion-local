@@ -166,6 +166,26 @@ export async function episodeIdsInSession(driver: Driver, sessionId: string): Pr
   );
 }
 
+/**
+ * Every narrative a session holds, whatever family wrote it.
+ *
+ * `findSessionNarratives` selects the legacy session overview by predicate, so a test asking
+ * only whether a close narrated at all reads nothing once the session is on the chunk family.
+ * The session is matched the way the family reader matches it: by the property or by the edge,
+ * because the two families do not agree on which one they write.
+ */
+export async function narrativeIdsInSession(driver: Driver, sessionId: string): Promise<string[]> {
+  return runRead(
+    driver,
+    `MATCH (n:Narrative)
+     WHERE (n.session_id = $sessionId OR EXISTS { (n)-[:DERIVES_FROM]->(:Session { id: $sessionId }) })
+       AND n.forgotten_at IS NULL
+     RETURN n.id AS id`,
+    { sessionId },
+    (row) => row.id as string,
+  );
+}
+
 /** An episode's turns in sequence order, whole, so a test asserts over stored shape rather than a projection. */
 export async function turnsOfEpisode(
   driver: Driver,
