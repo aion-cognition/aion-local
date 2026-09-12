@@ -1,16 +1,16 @@
 import { z } from 'zod';
 
 import {
+  type ReferenceAcceptance,
   acceptedTargetsHash,
   acknowledgeReferenceAcceptance,
-  discardReferenceAcceptance,
   classifyStatedReferences,
+  discardReferenceAcceptance,
   prepareReferenceAcceptance,
-  projectAcceptedReferences,
   referenceScopeNames,
   statedReferenceIds,
-  type ReferenceAcceptance,
 } from './reference-acceptance.js';
+import { projectAcceptedReferences } from './reference-projection.js';
 import { presentNodeIds } from '../../infrastructure/graph/projection-presence.js';
 import { PublicationOperation } from '../../infrastructure/publication/operation.js';
 import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';

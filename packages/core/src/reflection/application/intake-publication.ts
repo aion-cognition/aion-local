@@ -10,16 +10,16 @@ import {
 import { projectEpisodeInTransaction } from './experience-store.js';
 import { enqueueSourceWork } from './intake-queue.js';
 import {
+  type ReferenceAcceptance,
   acceptedTargetsHash,
   acknowledgeReferenceAcceptance,
   classifyStatedReferences,
   discardReferenceAcceptance,
   prepareReferenceAcceptance,
-  projectAcceptedReferences,
   statedInput,
   statedReferenceIds,
-  type ReferenceAcceptance,
 } from './reference-acceptance.js';
+import { projectAcceptedReferences } from './reference-projection.js';
 import { activateSourceManifest, writeSourceManifest } from './source-manifest.js';
 import { presentNodeIds } from '../../infrastructure/graph/projection-presence.js';
 import { PublicationOperation } from '../../infrastructure/publication/operation.js';

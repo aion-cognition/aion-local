@@ -22,7 +22,7 @@ import {
   type LegacyStatementPass,
 } from './legacy-statements.js';
 import { applySourceVerification, VerificationSchema } from './legacy-verification.js';
-import { projectAcceptedReferences } from './reference-acceptance.js';
+import { projectAcceptedReferences } from './reference-projection.js';
 import { ownershipCensusEstablished } from '../../evidence/application/ownership.js';
 import { PublicationOperation } from '../../infrastructure/publication/operation.js';
 import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
