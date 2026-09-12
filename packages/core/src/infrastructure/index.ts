@@ -17,7 +17,7 @@ export type { SqliteHandle } from './sqlite/database.js';
 
 export { PublicationCoordinator } from './publication/coordinator.js';
 export { PUBLICATION_KINDS } from './publication/types.js';
-export type { PublicationKind, PublicationOutcome } from './publication/types.js';
+export type { PublicationOutcome } from './publication/types.js';
 /** The contract in force, which the arming command names so a coverage change refuses the act. */
 export { readCurrentCoverageContract } from './sqlite/coverage-contract.js';
 /** The startup step that lifts a prepared coverage contract to active, and says what it reached. */
@@ -139,7 +139,11 @@ export type { NodeEdge, NodeEdgePage, NodeProvenance } from './graph/node-proven
 
 export { upsertEdge } from './graph/edges.js';
 
-export { forgetNode, supersede, writeStampedNode } from './graph/bitemporal.js';
+/**
+ * `forgetNode` is gone from this barrel. The suppression it wrote now publishes, so the command
+ * that used to reach the driver reaches the coordinator instead and nothing outside core calls it.
+ */
+export { supersede, writeStampedNode } from './graph/bitemporal.js';
 
 export { findPendingVectorNodes } from './graph/pending-vectors.js';
 
