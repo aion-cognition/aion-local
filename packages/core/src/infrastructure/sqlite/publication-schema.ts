@@ -30,6 +30,13 @@ export const PUBLICATION_SCHEMA_STATEMENTS: readonly string[] = [
    * capability nobody had established yet, and it would lose the record that this substrate was
    * armed once. So the revision only ever goes up, the stop is a stamp beside it, and eviction
    * refuses on the stamp before it looks at the number.
+   *
+   * `eviction_stop_requested_by` is that stop asked for and not yet recorded. The guard settles
+   * whatever is already pending before it takes a new request, so a stop that only became durable
+   * at its own acknowledgment would arrive after the removal it was run to prevent. This column is
+   * written before anything is settled, it names the operation that asked, and eviction reads it
+   * as a stop. A request whose operation ends refused stops nothing; one whose operation nobody
+   * can account for stops everything, which is the direction a stop should fail in.
    */
   `CREATE TABLE IF NOT EXISTS publication_control (
     substrate_id TEXT PRIMARY KEY,
@@ -40,7 +47,8 @@ export const PUBLICATION_SCHEMA_STATEMENTS: readonly string[] = [
     last_known_from TEXT,
     activation_capability_revision INTEGER NOT NULL DEFAULT 0,
     eviction_compatibility_revision INTEGER NOT NULL DEFAULT 0,
-    eviction_disarmed_at TEXT
+    eviction_disarmed_at TEXT,
+    eviction_stop_requested_by TEXT
   )`,
   /**
    * One immutable row per publication, holding both the prepared input and the outcome.

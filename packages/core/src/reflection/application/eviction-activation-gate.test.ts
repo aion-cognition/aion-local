@@ -194,8 +194,10 @@ describe('the eviction compatibility capability is not armed by any production w
       'eviction-eligibility.ts',
     );
     const source = readFileSync(fence, 'utf8');
-    expect(source.indexOf('evictionDisarmedAt !== null')).toBeGreaterThan(0);
-    expect(source.indexOf('evictionDisarmedAt !== null')).toBeLessThan(
+    // The stop resolves through one shared reader; what this pins is that the fence asks it, and
+    // asks it before it looks at the number.
+    expect(source.indexOf('evictionStopStands(db, pairing)')).toBeGreaterThan(0);
+    expect(source.indexOf('evictionStopStands(db, pairing)')).toBeLessThan(
       source.indexOf('evictionCompatibilityRevision <= 0'),
     );
   });
@@ -228,5 +230,82 @@ describe('the eviction compatibility capability is not armed by any production w
     expect(producers.map((file) => relative(REPO_ROOT, file))).toEqual([
       'packages/core/src/infrastructure/sqlite/publication-control.ts',
     ]);
+  });
+});
+
+/**
+ * The stop column carries the same one-writer pin as the fence it stops, and for a stronger
+ * reason: clearing the stamp re-arms a substrate somebody deliberately closed, which is the
+ * dangerous direction. Two writers are legitimate and both are named.
+ */
+describe('the stop on the same row has one writer set and no other', () => {
+  const files = productionFiles(PACKAGES_DIR);
+  const STOP_COLUMN = 'eviction_disarmed_at';
+  const CLAIM_COLUMN = 'eviction_stop_requested_by';
+
+  it('finds the stop written from one file, which holds both legitimate writers', () => {
+    // `recordEvictionDisarm` stamps it; `establishEvictionCompatibility` clears it in the same
+    // transaction that raises the revision, because arming is what reverses a stop.
+    const offenders = files.filter((file) => writesColumn(readFileSync(file, 'utf8'), STOP_COLUMN));
+    expect(offenders.map((file) => relative(REPO_ROOT, file))).toEqual([
+      join('packages', 'core', 'src', 'infrastructure', 'sqlite', 'publication-control.ts'),
+    ]);
+  });
+
+  it('finds the claim written from the same one file and nowhere else', () => {
+    const offenders = files.filter((file) =>
+      writesColumn(readFileSync(file, 'utf8'), CLAIM_COLUMN),
+    );
+    expect(offenders.map((file) => relative(REPO_ROOT, file))).toEqual([
+      join('packages', 'core', 'src', 'infrastructure', 'sqlite', 'publication-control.ts'),
+    ]);
+  });
+
+  it('names both legitimate writers of the stop, and finds no third', () => {
+    const control = readFileSync(
+      join(PACKAGES_DIR, 'core', 'src', 'infrastructure', 'sqlite', 'publication-control.ts'),
+      'utf8',
+    );
+    const statements = [...control.matchAll(/UPDATE\s+publication_control/gi)].filter((match) =>
+      control.slice(match.index, match.index + WINDOW).includes(STOP_COLUMN),
+    );
+    // The stamp, the clear-on-arm, and the clear of a spent claim beside the stamp.
+    expect(statements.length).toBe(3);
+    expect(control.indexOf(STOP_COLUMN)).toBeGreaterThan(0);
+  });
+
+  it('catches a rogue clear of the stop wherever it is written', () => {
+    const rogue = [
+      'db.prepare(`UPDATE publication_control',
+      `  SET ${STOP_COLUMN} = NULL`,
+      '`);',
+    ].join('\n');
+    expect(writesColumn(rogue, STOP_COLUMN)).toBe(true);
+    expect(writesColumn(`SELECT ${STOP_COLUMN} FROM publication_control`, STOP_COLUMN)).toBe(false);
+  });
+
+  it('finds one production caller of each act, and both are the arming operation', () => {
+    const definition = join(
+      PACKAGES_DIR,
+      'core',
+      'src',
+      'infrastructure',
+      'sqlite',
+      'publication-control.ts',
+    );
+    const arming = join(
+      'packages',
+      'core',
+      'src',
+      'reflection',
+      'application',
+      'eviction-arming.ts',
+    );
+    for (const writer of ['recordEvictionDisarm', 'claimEvictionStop']) {
+      const callers = files.filter(
+        (file) => file !== definition && readFileSync(file, 'utf8').includes(`${writer}(`),
+      );
+      expect.soft(callers.map((file) => relative(REPO_ROOT, file))).toEqual([arming]);
+    }
   });
 });

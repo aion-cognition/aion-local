@@ -27,12 +27,9 @@ import {
 } from '../sqlite/publication-intents.js';
 import { listReflectionJobs } from '../sqlite/reflection-queue.js';
 import { listReferenceBatches } from '../sqlite/source-identity.js';
-import {
-  readSessionRemainder,
-  recordSourceStateVersion,
-  transitionSourceResidency,
-} from '../sqlite/source-lifecycle.js';
+import { readSessionRemainder, transitionSourceResidency } from '../sqlite/source-lifecycle.js';
 import { occurrenceCandidates } from '../sqlite/source-occurrence.js';
+import { recordSourceStateVersion } from '../sqlite/source-state-versions.js';
 
 const NOW = new Date('2026-09-08T06:00:00.000Z');
 const EMBED_DIMENSION = 3;

@@ -14,8 +14,8 @@ import {
 } from './processing-generations.js';
 import { publishReadinessPolicy } from './readiness-policies.js';
 import { recordSourceRecord } from './source-identity.js';
-import { recordSourceStateVersion } from './source-lifecycle.js';
 import { sessionObligationCensus } from './source-readiness.js';
+import { recordSourceStateVersion } from './source-state-versions.js';
 
 const NOW = new Date('2026-09-08T02:00:00.000Z');
 const SESSION = 'session-1';

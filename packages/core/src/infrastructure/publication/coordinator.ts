@@ -146,6 +146,19 @@ export class PublicationCoordinator {
             return publicationOutcome(previous);
           }
         }
+        // Before anything already pending is settled, because settling it is exactly what a
+        // request of this shape exists to prevent. Idempotent: the second pass re-enters here
+        // with the same identity and the claim is already its own.
+        if (handler.claimBeforeRecovery !== undefined) {
+          publicationWrite(this.#options.db, () => {
+            this.#sync(
+              handler.claimBeforeRecovery?.(
+                { db: this.#options.db, operationId: request.operationId },
+                parseJson(payloadJson),
+              ),
+            );
+          });
+        }
         if (state.pending !== undefined) {
           const recovered = await this.#recoverLocked(lock, state.pending, state.committed);
           return state.pending.operationId === request.operationId ? recovered : undefined;

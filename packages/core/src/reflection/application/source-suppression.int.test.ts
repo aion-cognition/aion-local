@@ -20,7 +20,7 @@ import {
   hasPendingSourceState,
   isSourceForgotten,
   listSourceStateVersions,
-} from '../../infrastructure/sqlite/source-lifecycle.js';
+} from '../../infrastructure/sqlite/source-state-versions.js';
 
 /**
  * `aion forget` and `aion unforget` end to end, through the coordinator that now owns them.

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { reopenWorkAWithdrawnForgetClosed } from './forget-disposition.js';
 import { GRAPH_NODE_SCOPE } from '../../evidence/domain/scopes.js';
 import {
   forgetNodeInTransaction,
@@ -15,7 +16,7 @@ import {
   acknowledgeSourceStateVersions,
   releasePreparedSourceStateVersions,
   recordSourceStateVersion,
-} from '../../infrastructure/sqlite/source-lifecycle.js';
+} from '../../infrastructure/sqlite/source-state-versions.js';
 
 /**
  * Forgetting a node, and taking that back, under the guard.
@@ -136,6 +137,14 @@ export const sourceSuppressionPublication = new PublicationOperation({
       return undefined;
     }
     acknowledgeSourceStateVersions(context.db, context.operationId, context.knownFrom);
+    if (data.act === 'unforget') {
+      // The statement is withdrawn here, so what rested on it is re-owed here. Leaving that to
+      // whichever run happens over this source next leaves a window where the rows read completed,
+      // nothing reports an obligation, and an unforgotten source can be evicted with the passes
+      // its forget closed never performed. The promotion above runs first: the disposition asks
+      // whether a forget still stands, and it does until this operation's statement is committed.
+      reopenWorkAWithdrawnForgetClosed(context.db, data.nodeId, new Date(context.knownFrom));
+    }
     // The node's own semantic state moved, so evidence somebody is holding about that state
     // stops being current here, in the operation that moved it. Left alone, a judgment fenced on
     // the reading this act invalidated would still verify as current.

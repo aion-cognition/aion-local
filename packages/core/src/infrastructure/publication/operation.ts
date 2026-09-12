@@ -4,6 +4,7 @@ import { GRAPH_COMPLETION_EFFECT } from './types.js';
 import type {
   JsonValue,
   PublicationAckContext,
+  PublicationClaimContext,
   PublicationCheck,
   PublicationContext,
   PublicationHandler,
@@ -30,6 +31,7 @@ export type PublicationDefinition<P extends JsonValue, D extends JsonValue, R ex
   prepareSqlite(context: PublicationSqliteContext, data: D): undefined;
   acknowledgeSqlite(context: PublicationAckContext, data: D, result: R): undefined;
   discardSqlite(context: PublicationSqliteContext, data: D, reason: string): undefined;
+  claimBeforeRecovery?(context: PublicationClaimContext, payload: P): undefined;
   finishGraph?(context: PublicationContext, data: D, result: R): Promise<void>;
 };
 
@@ -43,11 +45,18 @@ export class PublicationOperation<
   readonly effectKinds: readonly string[];
   readonly #definition: PublicationDefinition<P, D, R>;
   readonly finishGraph?: PublicationHandler['finishGraph'];
+  readonly claimBeforeRecovery?: PublicationHandler['claimBeforeRecovery'];
 
   constructor(definition: PublicationDefinition<P, D, R>) {
     this.kind = definition.kind;
     this.effectKinds = Object.freeze([...definition.effectKinds]);
     this.#definition = definition;
+    if (definition.claimBeforeRecovery !== undefined) {
+      const claim = definition.claimBeforeRecovery.bind(definition);
+      this.claimBeforeRecovery = (context, payload) => {
+        claim(context, this.decodePayload(payload));
+      };
+    }
     if (definition.finishGraph !== undefined) {
       const finish = definition.finishGraph.bind(definition);
       this.finishGraph = async (context, plan, result) => {

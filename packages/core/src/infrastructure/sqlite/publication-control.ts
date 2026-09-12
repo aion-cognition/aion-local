@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { SqliteHandle } from './database.js';
+import { publicationIntentState } from './publication-intents.js';
 import { decimalSequence } from '../publication/json.js';
 
 /**
@@ -23,6 +24,10 @@ import { decimalSequence } from '../publication/json.js';
  * `evictionDisarmedAt` is the stop beside that fence, and it wins over the number. A stamp here
  * means somebody armed this substrate and then took it back, which is a different fact from
  * never having armed it and has to stay readable as one.
+ *
+ * `evictionStopRequestedBy` is the same stop before it is recorded: the operation that asked, held
+ * from before the guard settles anything until that operation's own outcome is known. It reads as
+ * a stop while it stands.
  */
 export type SubstratePairing = {
   readonly substrateId: string;
@@ -34,6 +39,7 @@ export type SubstratePairing = {
   readonly activationCapabilityRevision: number;
   readonly evictionCompatibilityRevision: number;
   readonly evictionDisarmedAt: string | null;
+  readonly evictionStopRequestedBy: string | null;
 };
 
 type PairingRowData = {
@@ -46,11 +52,12 @@ type PairingRowData = {
   activation_capability_revision: number;
   eviction_compatibility_revision: number;
   eviction_disarmed_at: string | null;
+  eviction_stop_requested_by: string | null;
 };
 
 const SELECT_PAIRING = `SELECT substrate_id, bootstrap_state, protocol_version, CAST(last_ack_sequence AS TEXT) AS last_ack_sequence,
     pending_operation_id, last_known_from, activation_capability_revision,
-    eviction_compatibility_revision, eviction_disarmed_at
+    eviction_compatibility_revision, eviction_disarmed_at, eviction_stop_requested_by
   FROM publication_control LIMIT 1`;
 
 function toPairing(row: PairingRowData): SubstratePairing {
@@ -64,6 +71,7 @@ function toPairing(row: PairingRowData): SubstratePairing {
     activationCapabilityRevision: row.activation_capability_revision,
     evictionCompatibilityRevision: row.eviction_compatibility_revision,
     evictionDisarmedAt: row.eviction_disarmed_at,
+    evictionStopRequestedBy: row.eviction_stop_requested_by,
   };
 }
 
@@ -98,6 +106,7 @@ export function beginSubstratePairing(db: SqliteHandle, protocolVersion: number)
         activationCapabilityRevision: 0,
         evictionCompatibilityRevision: 0,
         evictionDisarmedAt: null,
+        evictionStopRequestedBy: null,
       };
     })
     .immediate();
@@ -179,8 +188,11 @@ export function establishEvictionCompatibility(db: SqliteHandle, revision: numbe
       ).run(revision, revision);
       // Arming is what un-stops a stopped substrate, in the same act and the same transaction.
       // A substrate left armed by the number and stopped by the stamp would refuse every
-      // eviction while reporting itself armed, which is the worst of both readings.
-      db.prepare('UPDATE publication_control SET eviction_disarmed_at = NULL').run();
+      // eviction while reporting itself armed, which is the worst of both readings. The request
+      // column goes with it: a stop nobody finished is not a reason to refuse an explicit arm.
+      db.prepare(
+        'UPDATE publication_control SET eviction_disarmed_at = NULL, eviction_stop_requested_by = NULL',
+      ).run();
       const pairing = readSubstratePairing(db);
       if (pairing === undefined) {
         throw new Error('no publication control record to arm');
@@ -204,8 +216,12 @@ export function recordEvictionDisarm(db: SqliteHandle, disarmedAt: string): stri
   return db
     .transaction((): string | null => {
       db.prepare(
-        'UPDATE publication_control SET eviction_disarmed_at = ? WHERE eviction_disarmed_at IS NULL',
+        `UPDATE publication_control SET eviction_disarmed_at = ?, eviction_stop_requested_by = NULL
+         WHERE eviction_disarmed_at IS NULL`,
       ).run(disarmedAt);
+      // A request that lost the race to an earlier stop is still spent: the stop it asked for
+      // stands, and leaving its name here would hold a second one open forever.
+      db.prepare('UPDATE publication_control SET eviction_stop_requested_by = NULL').run();
       const pairing = readSubstratePairing(db);
       if (pairing === undefined) {
         throw new Error('no publication control record to disarm');
@@ -213,6 +229,50 @@ export function recordEvictionDisarm(db: SqliteHandle, disarmedAt: string): stri
       return pairing.evictionDisarmedAt;
     })
     .immediate();
+}
+
+/**
+ * Whether a claimed stop still stands, resolved from the asking operation's own record.
+ *
+ * A request stops eviction until its operation says otherwise. Refused or rejected, it stopped
+ * nothing. Acknowledged, the stamp is down and the claim was cleared with it. Anything else —
+ * prepared, or an operation nobody can account for — reads as standing, because the one thing
+ * worse than an unfinished stop is a removal taken while somebody was asking for one.
+ *
+ * One rule, one place: the fence and every operator surface ask it here.
+ */
+export function evictionStopStands(
+  db: SqliteHandle,
+  pairing: SubstratePairing | undefined,
+): boolean {
+  if (pairing === undefined) {
+    return false;
+  }
+  if (pairing.evictionDisarmedAt !== null) {
+    return true;
+  }
+  if (pairing.evictionStopRequestedBy === null) {
+    return false;
+  }
+  const state = publicationIntentState(db, pairing.evictionStopRequestedBy);
+  return state !== 'deferred' && state !== 'rejected';
+}
+
+/**
+ * Names the operation that has asked eviction to stop, before anything it would stop can settle.
+ *
+ * The guard settles whatever is already pending before it takes a new request, so a stop recorded
+ * only at its own acknowledgment lands after the removal it was run to prevent. This is written
+ * first, under the same lock, and eviction reads it as a stop from that moment.
+ *
+ * First claim wins and a second is a no-op: one publisher holds the guard at a time, so a name
+ * already here belongs to a request whose answer is still coming.
+ */
+export function claimEvictionStop(db: SqliteHandle, operationId: string): void {
+  db.prepare(
+    `UPDATE publication_control SET eviction_stop_requested_by = ?
+     WHERE eviction_stop_requested_by IS NULL AND eviction_disarmed_at IS NULL`,
+  ).run(operationId);
 }
 
 export function establishActivationCapability(db: SqliteHandle, revision: number): number {

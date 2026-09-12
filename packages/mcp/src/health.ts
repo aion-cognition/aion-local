@@ -89,6 +89,7 @@ function coverageFields(
     eviction_gate: report.evictionGate,
     eviction_compatibility_revision: report.evictionCompatibilityRevision,
     eviction_disarmed_at: report.evictionDisarmedAt,
+    eviction_stop_requested_by: report.evictionStopRequestedBy,
   };
 }
 

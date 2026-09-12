@@ -8,7 +8,7 @@ import {
   acknowledgePublicationIntent,
   preparePublicationIntent,
 } from '../../infrastructure/sqlite/publication-intents.js';
-import { isSourceForgotten } from '../../infrastructure/sqlite/source-lifecycle.js';
+import { isSourceForgotten } from '../../infrastructure/sqlite/source-state-versions.js';
 
 let store: SqliteStore;
 const NOW = new Date('2026-01-01T00:00:00.000Z');

@@ -105,6 +105,11 @@ export type PublicationSqliteContext = {
   readonly sequence: string;
   readonly db: SqliteHandle;
 };
+/** No sequence: a claim is taken before this request has a record, let alone a place in the order. */
+export type PublicationClaimContext = {
+  readonly operationId: string;
+  readonly db: SqliteHandle;
+};
 export type PublicationAckContext = PublicationSqliteContext & PublicationStamp;
 
 export type PublicationHandler = {
@@ -131,6 +136,17 @@ export type PublicationHandler = {
   ): unknown;
   /** Preserve accepted input and transfer or retain its outstanding obligations. */
   discardSqlite(context: PublicationSqliteContext, plan: PublicationPlan, reason: string): unknown;
+  /**
+   * A durable fact this request establishes before the guard settles anything already pending.
+   *
+   * Almost nothing needs one. A writer's own decision belongs in `prepareSqlite`, which runs once
+   * the slot is free and the plan is checked. The exception is a request whose whole purpose is to
+   * STOP another kind of operation: the guard finishes what is already there before it takes a new
+   * request, so a stop that only becomes durable at its own acknowledgment arrives after the thing
+   * it was run to prevent. What is written here is a claim, not an outcome. It is read fail-closed
+   * while it stands, and the operation's own outcome is what resolves it.
+   */
+  claimBeforeRecovery?(context: PublicationClaimContext, payload: JsonValue): unknown;
   /** Optional idempotent materialization; no model work and no receipt replacement. */
   finishGraph?(
     context: PublicationContext,

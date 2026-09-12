@@ -15,7 +15,10 @@ import { projectionRebuildPublication } from './rebuild-publication.js';
 import { statedReferencesPublication } from './reference-publication.js';
 import { sourceSuppressionPublication } from './source-suppression.js';
 import { PUBLICATION_HANDLERS } from '../../infrastructure/publication/handlers.js';
-import type { PublicationHandler } from '../../infrastructure/publication/types.js';
+import type {
+  PublicationHandler,
+  PublicationKind,
+} from '../../infrastructure/publication/types.js';
 import { orphanSuppressionPublication } from '../../introspection/application/operations/orphan-suppression.js';
 
 /**
@@ -53,3 +56,12 @@ export const INSTALLED_PUBLICATION_HANDLERS: readonly PublicationHandler[] = [
   // in the one shared set is for; nothing here starts it.
   evictionArmingPublication,
 ];
+
+/**
+ * The kinds the installed set covers, which is what every command in this repo composes.
+ *
+ * A surface asking whether the writer audit is complete has to ask it of the set it will publish
+ * through. Asking it of the declared list answers itself.
+ */
+export const INSTALLED_PUBLICATION_KINDS: readonly PublicationKind[] =
+  INSTALLED_PUBLICATION_HANDLERS.map((handler) => handler.kind);

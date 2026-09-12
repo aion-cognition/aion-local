@@ -25,7 +25,7 @@ import {
   hasPendingSourceState,
   isSourceForgotten,
   listSourceStateVersions,
-} from '../../infrastructure/sqlite/source-lifecycle.js';
+} from '../../infrastructure/sqlite/source-state-versions.js';
 
 /**
  * The suppression writer's durable half, driven without a graph.

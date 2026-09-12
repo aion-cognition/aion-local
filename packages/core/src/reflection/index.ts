@@ -13,7 +13,10 @@ export type { ReflectionIntakeDeps } from './application/intake.js';
  * DRIVER is a separate owner's, so the freeze/walk/seal entry points stay inside core until that
  * driver exists to import them.
  */
-export { INSTALLED_PUBLICATION_HANDLERS } from './application/installed-publications.js';
+export {
+  INSTALLED_PUBLICATION_HANDLERS,
+  INSTALLED_PUBLICATION_KINDS,
+} from './application/installed-publications.js';
 
 /**
  * The suppression writer's identity, exported because `aion forget` and `aion unforget` are the

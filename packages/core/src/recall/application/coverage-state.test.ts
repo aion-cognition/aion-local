@@ -36,6 +36,7 @@ describe('the coverage state the operator surfaces read', () => {
       evictionGate: 'unarmed',
       evictionCompatibilityRevision: 0,
       evictionDisarmedAt: null,
+      evictionStopRequestedBy: null,
     });
   });
 

@@ -32,7 +32,8 @@ import {
   preparePublicationIntent,
 } from '../sqlite/publication-intents.js';
 import { readSourceRecord } from '../sqlite/source-identity.js';
-import { recordSourceStateVersion, transitionSourceResidency } from '../sqlite/source-lifecycle.js';
+import { transitionSourceResidency } from '../sqlite/source-lifecycle.js';
+import { recordSourceStateVersion } from '../sqlite/source-state-versions.js';
 
 const NOW = new Date('2026-09-08T06:00:00.000Z');
 const logger = { warn: () => undefined, error: () => undefined };

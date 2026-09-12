@@ -7,16 +7,18 @@ import { SqliteStore } from './database.js';
 import { acknowledgePublicationIntent, preparePublicationIntent } from './publication-intents.js';
 import { recordSourceRecord } from './source-identity.js';
 import {
-  acknowledgeSourceStateVersions,
-  hasPendingSourceState,
-  isSourceForgotten,
-  listSourceStateVersions,
   readSourceResidency,
-  recordSourceStateVersion,
   sourceResidencyState,
   transitionSourceResidency,
 } from './source-lifecycle.js';
 import { occurrenceCandidates, resolveSourceOccurrence } from './source-occurrence.js';
+import {
+  acknowledgeSourceStateVersions,
+  hasPendingSourceState,
+  isSourceForgotten,
+  listSourceStateVersions,
+  recordSourceStateVersion,
+} from './source-state-versions.js';
 
 const NOW = new Date('2026-09-08T06:00:00.000Z');
 const KEY = { identityHash: 'identity-hash-1', sessionId: 'session-a' };

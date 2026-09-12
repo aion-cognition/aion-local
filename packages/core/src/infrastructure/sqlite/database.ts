@@ -348,6 +348,9 @@ const COLUMN_ADDITIONS: readonly ColumnAddition[] = [
   // eviction whatever the revision says, so the absent value is the permissive one and the
   // column cannot make an older substrate stricter than it was.
   { table: 'publication_control', column: 'eviction_disarmed_at', definition: 'TEXT' },
+  // The stop asked for and not yet recorded. Null on a substrate that predates it, which is the
+  // permissive reading: a column added later cannot stop a substrate nobody asked to stop.
+  { table: 'publication_control', column: 'eviction_stop_requested_by', definition: 'TEXT' },
   { table: 'migration_cohorts', column: 'partition_policy_json', definition: 'TEXT' },
   { table: 'migration_progress', column: 'capture_order_value', definition: 'TEXT' },
   { table: 'migration_progress', column: 'capture_order_basis', definition: 'TEXT' },

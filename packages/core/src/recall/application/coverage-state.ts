@@ -1,6 +1,9 @@
 import { readCoverageStanding } from './coverage-checker.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { readSubstratePairing } from '../../infrastructure/sqlite/publication-control.js';
+import {
+  evictionStopStands,
+  readSubstratePairing,
+} from '../../infrastructure/sqlite/publication-control.js';
 
 /**
  * What the operator surfaces say about coverage, read and never taken.
@@ -19,6 +22,10 @@ import { readSubstratePairing } from '../../infrastructure/sqlite/publication-co
  * The fence has three readings and not two. `unarmed` is a substrate nobody ever opened;
  * `disarmed` is one somebody opened and then stopped, which is a different fact with a different
  * history and is reported as one. Both refuse every eviction.
+ *
+ * A stop asked for and not yet recorded reads `disarmed` too, with the asking operation named and
+ * no moment, because that is what eviction does with it. A surface that reported armed there would
+ * disagree with the fence.
  */
 export type CoverageStateReport = {
   readonly coverageState: 'preparing' | 'active' | 'failed';
@@ -26,29 +33,32 @@ export type CoverageStateReport = {
   readonly coverageEpoch: string | null;
   readonly evictionGate: 'armed' | 'unarmed' | 'disarmed';
   readonly evictionCompatibilityRevision: number;
-  /** When somebody stopped it, null when nobody has. */
+  /** When somebody stopped it, null when nobody has and null while a stop is still being asked. */
   readonly evictionDisarmedAt: string | null;
+  /** The operation asking for a stop that is not recorded yet. It refuses evictions meanwhile. */
+  readonly evictionStopRequestedBy: string | null;
 };
 
 /** The stop is read first, because it refuses whatever the number says. */
-function evictionGateOf(
-  revision: number,
-  disarmedAt: string | null,
-): 'armed' | 'unarmed' | 'disarmed' {
-  if (disarmedAt === null) {
-    return revision > 0 ? 'armed' : 'unarmed';
+function evictionGateOf(revision: number, stopped: boolean): 'armed' | 'unarmed' | 'disarmed' {
+  if (stopped) {
+    return 'disarmed';
   }
-  return 'disarmed';
+  return revision > 0 ? 'armed' : 'unarmed';
 }
 
 export function readCoverageState(db: SqliteHandle): CoverageStateReport {
   const pairing = readSubstratePairing(db);
   const revision = pairing?.evictionCompatibilityRevision ?? 0;
   const disarmedAt = pairing?.evictionDisarmedAt ?? null;
+  // The same rule the fence reads, so a surface can never report armed while eviction refuses.
+  const stopped = evictionStopStands(db, pairing);
   const eviction = {
-    evictionGate: evictionGateOf(revision, disarmedAt),
+    evictionGate: evictionGateOf(revision, stopped),
     evictionCompatibilityRevision: revision,
     evictionDisarmedAt: disarmedAt,
+    evictionStopRequestedBy:
+      stopped && disarmedAt === null ? (pairing?.evictionStopRequestedBy ?? null) : null,
   };
   const standing = readCoverageStanding(db);
   if (standing === undefined) {

@@ -280,6 +280,22 @@ export function isOperationAcknowledged(db: SqliteHandle, operationId: string): 
   return row !== undefined;
 }
 
+/**
+ * The state one operation's intent records, or undefined when nothing here accounts for it.
+ *
+ * Absent and refused are different answers and a caller that turns on one has to be able to tell
+ * them apart: an operation nobody can account for is not an operation that was answered.
+ */
+export function publicationIntentState(
+  db: SqliteHandle,
+  operationId: string,
+): PublicationIntentReceipt['state'] | undefined {
+  const row = db
+    .prepare('SELECT state FROM publication_intents WHERE operation_id = ?')
+    .get(operationId) as { state: PublicationIntentReceipt['state'] } | undefined;
+  return row?.state;
+}
+
 /** Acknowledged operations in visibility order, which is the clock first and the sequence after it. */
 export function listAcknowledgedOperations(db: SqliteHandle): readonly PublicationIntentReceipt[] {
   const rows = db

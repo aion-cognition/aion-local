@@ -67,6 +67,7 @@ describe('health, the coverage fields', () => {
       evictionGate: 'unarmed',
       evictionCompatibilityRevision: 0,
       evictionDisarmedAt: null,
+      evictionStopRequestedBy: null,
     }));
 
     expect(await body(url)).toMatchObject({
@@ -85,6 +86,7 @@ describe('health, the coverage fields', () => {
       evictionGate: 'unarmed',
       evictionCompatibilityRevision: 0,
       evictionDisarmedAt: null,
+      evictionStopRequestedBy: null,
     }));
 
     expect(await body(url)).toMatchObject({
@@ -102,6 +104,7 @@ describe('health, the coverage fields', () => {
       evictionGate: 'armed',
       evictionCompatibilityRevision: 4,
       evictionDisarmedAt: null,
+      evictionStopRequestedBy: null,
     }));
 
     expect(await body(url)).toMatchObject({

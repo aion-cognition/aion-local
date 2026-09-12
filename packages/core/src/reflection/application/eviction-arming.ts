@@ -10,6 +10,7 @@ import {
 import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
+  claimEvictionStop,
   establishEvictionCompatibility,
   readSubstratePairing,
   recordEvictionDisarm,
@@ -260,12 +261,26 @@ export const evictionArmingPublication = new PublicationOperation({
     // the graph is what the permission is about.
     return Promise.resolve({ act: data.act, revision: data.revision });
   },
+  claimBeforeRecovery(context, payload) {
+    if (payload.act !== 'disarm') {
+      return undefined;
+    }
+    // The guard settles whatever is already pending before it takes this request, and settling a
+    // pending eviction means re-applying its plan. A stop that first became durable at its own
+    // acknowledgment would be recorded on a substrate the removal had already left. So the claim
+    // goes down here, under the same lock, before anything is settled.
+    claimEvictionStop(context.db, context.operationId);
+    return undefined;
+  },
   prepareSqlite() {
     return undefined;
   },
   acknowledgeSqlite(context, data) {
     if (data.act === 'disarm') {
-      recordEvictionDisarm(context.db, data.observedAt);
+      // The acknowledgment clock, which is the one every surface reports and the one the receipt
+      // carries. The moment the operator asked is in the payload and is not the moment this
+      // substrate stopped.
+      recordEvictionDisarm(context.db, context.knownFrom);
       return undefined;
     }
     establishEvictionCompatibility(context.db, data.revision);

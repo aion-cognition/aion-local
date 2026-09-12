@@ -21,6 +21,7 @@ const report = (over: Partial<CoverageStateReport>): CoverageStateReport => ({
   evictionGate: 'unarmed',
   evictionCompatibilityRevision: 0,
   evictionDisarmedAt: null,
+  evictionStopRequestedBy: null,
   ...over,
 });
 

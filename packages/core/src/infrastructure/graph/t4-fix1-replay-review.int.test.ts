@@ -25,7 +25,7 @@ import {
   acknowledgePublicationIntent,
   preparePublicationIntent,
 } from '../sqlite/publication-intents.js';
-import { recordSourceStateVersion } from '../sqlite/source-lifecycle.js';
+import { recordSourceStateVersion } from '../sqlite/source-state-versions.js';
 
 const NOW = new Date('2026-09-08T06:00:00.000Z');
 const logger = { warn: () => undefined, error: () => undefined };

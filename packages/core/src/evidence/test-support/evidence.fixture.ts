@@ -12,7 +12,7 @@ import {
 import {
   recordSourceStateVersion,
   type SourceStateKind,
-} from '../../infrastructure/sqlite/source-lifecycle.js';
+} from '../../infrastructure/sqlite/source-state-versions.js';
 import type { CheckedReadContext } from '../../recall/application/coverage-checker.js';
 import {
   writeSourceManifest,

@@ -172,3 +172,20 @@ it('refuses a stop on a substrate nobody ever armed', async () => {
     store2.close();
   }
 });
+
+it('stamps the stop with the acknowledgment clock, which is the clock every surface reports', async () => {
+  // One act, one moment. The payload carries when the operator asked; the record and the printout
+  // both have to carry when the substrate stopped, or an incident timeline built from the command
+  // output will not match the substrate it was built from.
+  expect(disarmedAt()).toBeNull();
+
+  const stopped = await act('disarm', 'arming:clock');
+
+  expect(stopped.status).toBe('acknowledged');
+  if (stopped.status !== 'acknowledged') {
+    return;
+  }
+  expect(disarmedAt()).toBe(stopped.knownFrom);
+  expect(readCoverageState(store.db).evictionDisarmedAt).toBe(stopped.knownFrom);
+  await arm('arming:clock-restore');
+});

@@ -27,11 +27,10 @@ import {
 import { readActiveGeneration } from '../sqlite/processing-generations.js';
 import { listReferenceBatches, readSourceRecord } from '../sqlite/source-identity.js';
 import {
-  isSourceForgotten,
   listEvidenceAcknowledgments,
-  recordSourceStateVersion,
   transitionSourceResidency,
 } from '../sqlite/source-lifecycle.js';
+import { isSourceForgotten, recordSourceStateVersion } from '../sqlite/source-state-versions.js';
 
 const NOW = new Date('2026-09-08T06:00:00.000Z');
 const logger = { warn: () => undefined, error: () => undefined };

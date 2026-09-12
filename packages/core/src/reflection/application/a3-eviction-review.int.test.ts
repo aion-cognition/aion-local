@@ -20,6 +20,7 @@ import {
   sealAndPublish,
   sessionOf,
   store,
+  unforgetSource,
   type EvictionNomination,
 } from './test-support/a3-eviction.fixture.js';
 import {
@@ -52,6 +53,7 @@ import {
   completeSourceWork,
   createSourceWork,
   readActiveGeneration,
+  stageWorkId,
 } from '../../infrastructure/sqlite/processing-generations.js';
 import { readSubstratePairing } from '../../infrastructure/sqlite/publication-control.js';
 import {
@@ -628,4 +630,45 @@ it('refuses a prepared attempt whose substrate was stopped under it', async () =
 
   // Stopping was never about this source: armed again, it is exactly where it was.
   expect(durableEligibility(store.db, sourceId, POLICY).status).toBe('eligible');
+});
+
+it('re-owes what a forget closed the moment the forget is withdrawn', async () => {
+  const sourceId = await eligibleSource('evict-unforgotten', 'S1');
+  const generation = readActiveGeneration(store.db, sourceId);
+  // A stage this fixture's policy does not run, so the row is this case's own and the pipeline
+  // the fixture already finished is left exactly as it was.
+  const workId = stageWorkId(sourceId, generation?.processingGeneration ?? 0, 'cognitive');
+  createSourceWork(store.db, {
+    workId,
+    sourceId,
+    processingGeneration: generation?.processingGeneration ?? 0,
+    kind: 'stage',
+    stageName: 'cognitive',
+    workKey: 'cognitive',
+    dueAt: NOW,
+  });
+  // What a run that settled while the source was forgotten leaves behind: the pass closed as not
+  // applicable, on the strength of a statement that is about to be withdrawn.
+  completeSourceWork(
+    store.db,
+    workId,
+    { outcome: 'not_applicable', reason: 'source_forgotten' },
+    NOW,
+  );
+  await forgetSource(sourceId);
+  expect(durableEligibility(store.db, sourceId, POLICY)).toMatchObject({
+    status: 'pinned',
+    reason: 'source_state_unsettled',
+  });
+
+  await unforgetSource(sourceId);
+
+  // Immediately, not when some later run happens over this source. Between the two, the row reads
+  // completed, nothing reports an obligation, and the projection can be removed with the pass
+  // never performed.
+  expect(durableEligibility(store.db, sourceId, POLICY)).toEqual({
+    status: 'pinned',
+    reason: 'source_work_outstanding',
+  });
+  expect(await nodeExists(driver, sourceId)).toBe(true);
 });

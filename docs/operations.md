@@ -527,8 +527,13 @@ like any other decision.
 ### Stopping it again
 
 `disarm` stamps a stop that eviction reads before it reads the revision. Every source answers
-`compatibility_disarmed` from there, and an attempt already nominated is refused when the guard
-re-derives eligibility.
+`compatibility_disarmed` from there.
+
+It also stops an eviction that is halfway. The guard settles whatever is already pending before it
+takes a new request, so the stop is claimed durably before anything is settled and the pending
+attempt meets it at its own recovery re-check. A writer killed at `prepared`, with a durable
+pending eviction and nothing removed, ends refused with `compatibility_disarmed` on its receipt and
+its source still resident.
 
 It is not the inverse of arming. The compatibility revision is left where it is, so the
 capability this substrate established stays on the record and a later `arm` cannot be mistaken
@@ -536,9 +541,14 @@ for a first one. A stopped substrate is re-armable at the same revision: arming 
 stop, in the same act.
 
 **It stops future evictions and cannot undo one that already happened.** An eviction that reached
-its acknowledgment removed a projection under a receipt, and nothing puts it back. An operation
-already holding the guard finishes under it, because the removal happened and the acknowledgment
-is what records it; the next one is refused.
+its acknowledgment removed a projection under a receipt, and nothing puts it back.
+
+The line runs through the graph write, not through the guard:
+
+- an attempt that had not written yet is refused and discarded, whether the stop finds it pending
+  or a later one arrives to it
+- an attempt whose graph write already committed finishes. The removal happened, and the
+  acknowledgment is what records that it did
 
 `aion doctor` and `GET /health` report the three readings apart: `unarmed` is a substrate nobody
 ever opened, `disarmed` is one somebody opened and then stopped, and both remove nothing.

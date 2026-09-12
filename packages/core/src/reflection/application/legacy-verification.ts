@@ -20,7 +20,7 @@ import {
   type SourcePartInput,
   type SourceRecordInput,
 } from '../../infrastructure/sqlite/source-identity.js';
-import { recordSourceStateVersion } from '../../infrastructure/sqlite/source-lifecycle.js';
+import { recordSourceStateVersion } from '../../infrastructure/sqlite/source-state-versions.js';
 import { committedSourceStates } from '../../infrastructure/sqlite/source-states.js';
 import { prepareEpisode, type PreparedEpisode, type ReflectionContent } from '../domain/content.js';
 

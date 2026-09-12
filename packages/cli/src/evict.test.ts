@@ -1,10 +1,15 @@
-import type { CoverageStateReport } from '@aion/core';
-import { describe, expect, it } from 'vitest';
+import { SqliteStore, type CoverageStateReport } from '@aion/core';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { evictionFence } from './doctor-checks.js';
 import {
   ARM_CONFIRMATION,
   parseEvictFlags,
+  runEvict,
+  runEvictAct,
   writeNotVerified,
   writePreconditions,
 } from './evict.js';
@@ -75,6 +80,7 @@ describe('evictionFence', () => {
     evictionGate: 'unarmed',
     evictionCompatibilityRevision: 0,
     evictionDisarmedAt: null,
+    evictionStopRequestedBy: null,
     ...over,
   });
 
@@ -93,5 +99,112 @@ describe('evictionFence', () => {
     expect(stopped).toContain('DISARMED at 2026-09-12T10:00:00.000Z');
     // The revision it established is still on the line: a stop is not the loss of a capability.
     expect(stopped).toContain('compatibility revision 1 stands');
+  });
+});
+
+/**
+ * The command's own output, not the helper's.
+ *
+ * Both call sites are the substance: a status read or a pre-arm table printed without the gaps
+ * beside it is exactly the reading the section exists to prevent, and a helper asserted in
+ * isolation says nothing about whether anybody calls it.
+ */
+describe('what `aion evict` actually prints', () => {
+  let dir: string;
+  let saved: Record<string, string | undefined>;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'aion-evict-surface-'));
+    saved = { ...process.env };
+    process.env.AION_SQLITE_PATH = join(dir, 'aion.sqlite');
+    process.env.AION_LOG_FILE = join(dir, 'aion.jsonl');
+    process.env.AION_LOG_LEVEL = 'fatal';
+  });
+
+  afterEach(() => {
+    // Replace the object rather than edit it: these roots run in a forked worker and a key this
+    // case added has to go, not just be overwritten.
+    process.env = { ...saved };
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function output(argv: readonly string[]): Promise<string[]> {
+    const said: string[] = [];
+    await runEvict(argv, (line) => said.push(line));
+    return said;
+  }
+
+  it('carries the gaps on a status read, under the table', async () => {
+    const said = await output(['status']);
+
+    const heading = said.indexOf('not verified here, and nothing below can be:');
+    expect(heading).toBeGreaterThan(0);
+    expect(said.some((line) => line.startsWith('  ['))).toBe(true);
+    // Under the table it qualifies, never above it.
+    expect(said.findIndex((line) => line.startsWith('  ['))).toBeLessThan(heading);
+    expect(said.join('\n')).toContain('writer audit');
+  });
+
+  async function armTable(): Promise<{ said: string[]; prompts: string[] }> {
+    const said: string[] = [];
+    const prompts: string[] = [];
+    const store = new SqliteStore({ filePath: join(dir, 'act.sqlite') });
+    try {
+      // The end state a bootstrapped, coverage-active substrate is in, written directly: what is
+      // under test here is what the command prints and asks, and the fence's own semantics have
+      // their own batteries in core.
+      store.db
+        .prepare(
+          `INSERT INTO publication_control
+             (substrate_id, bootstrap_state, protocol_version, activation_capability_revision)
+           VALUES ('s1', 'initialized', 1, 1)`,
+        )
+        .run();
+      store.db
+        .prepare(
+          `INSERT INTO coverage_contract
+             (epoch, history_since, activated_at, field_policy_version, state)
+           VALUES ('epoch-1', '2026-09-12T00:00:00.000Z', '2026-09-12T00:00:00.000Z', 1, 'active')`,
+        )
+        .run();
+      await runEvictAct(
+        'arm',
+        store.db,
+        () =>
+          Promise.resolve({
+            status: 'deferred',
+            operationId: 'op-1',
+            sequence: '1',
+            reason: 'substrate_not_initialized',
+          }),
+        (prompt) => {
+          prompts.push(prompt);
+          return Promise.resolve(true);
+        },
+        (line) => said.push(line),
+      );
+    } finally {
+      store.close();
+    }
+    return { said, prompts };
+  }
+
+  it('carries the gaps before the question on the pre-arm table', async () => {
+    const { said } = await armTable();
+
+    const heading = said.indexOf('not verified here, and nothing below can be:');
+    expect(heading).toBeGreaterThan(0);
+    expect(said.findIndex((line) => line.startsWith('  ['))).toBeLessThan(heading);
+    expect(said.join('\n')).toContain('writer audit');
+  });
+
+  it('asks with the unverified half in the question, and only after printing it', async () => {
+    const { said, prompts } = await armTable();
+
+    // The question the operator answers is the question the command assembled, and it names the
+    // half no check covered.
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain('unverified');
+    expect(said.indexOf('not verified here, and nothing below can be:')).toBeGreaterThan(-1);
   });
 });

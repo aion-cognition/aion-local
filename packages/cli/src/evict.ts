@@ -5,7 +5,7 @@ import {
   EVICTION_COMPATIBILITY_REVISION,
   evictionArmingOperationId,
   evictionArmingPublication,
-  PUBLICATION_KINDS,
+  INSTALLED_PUBLICATION_KINDS,
   readCoverageState,
   readCurrentCoverageContract,
   type ArmingPrecondition,
@@ -29,6 +29,11 @@ import { withSubstrate } from './substrate.js';
  * `disarm` is the way back, and it is not the inverse of arming. It stamps a stop that eviction
  * reads before it reads the revision, so the capability this substrate established stays on the
  * record. It stops future evictions and it cannot undo one that already happened.
+ *
+ * It also stops one that is halfway. The guard settles whatever is already pending before it takes
+ * a new request, so a stop that only became durable at its own acknowledgment would be recorded on
+ * a substrate the removal had already left. The claim goes down before anything is settled, and
+ * the pending attempt meets it at its own recovery re-check.
  *
  * Both acts print what was checked AND what was not. A list of passing checks with nothing beside
  * it reads as full assurance, and the checks are the small half of what arming rests on.
@@ -86,11 +91,18 @@ export const ARM_CONFIRMATION =
 
 type Act = 'arm' | 'disarm';
 
-async function act(
+/**
+ * One act, from the announcement to the answer.
+ *
+ * The confirmation is a parameter rather than a call so the question this prints is the question
+ * that gets asked. A prompt assembled here and answered somewhere else can drift apart, and the
+ * whole point of the wording is that it is what the operator agrees to.
+ */
+export async function runEvictAct(
   action: Act,
   db: SqliteHandle,
   publish: () => Promise<PublicationOutcome>,
-  flags: EvictFlags,
+  confirm: (prompt: string) => Promise<boolean>,
   write: Writer,
 ): Promise<number> {
   if (action === 'arm') {
@@ -98,10 +110,13 @@ async function act(
   } else {
     write('disarming stops future evictions. It does not undo an eviction that already happened.');
   }
+  // The set this command composes, not the declared list. Asking the declared list whether every
+  // declared kind is installed answers itself, and the one line the fence calls non-spoofable
+  // would print `[ok]` on a substrate the operation then refuses.
   // The whole table, not the first failure. Somebody deciding this wants the list.
   const ready = writePreconditions(
     action === 'arm'
-      ? armingPreconditions(db, PUBLICATION_KINDS, EVICTION_COMPATIBILITY_REVISION)
+      ? armingPreconditions(db, INSTALLED_PUBLICATION_KINDS, EVICTION_COMPATIBILITY_REVISION)
       : disarmPreconditions(db),
     write,
   );
@@ -113,7 +128,7 @@ async function act(
     return 1;
   }
   const prompt = action === 'arm' ? ARM_CONFIRMATION : 'stop eviction on this substrate? [y/N] ';
-  if (!(await confirmOrExit(prompt, flags.yes, write))) {
+  if (!(await confirm(prompt))) {
     write('cancelled');
     return 1;
   }
@@ -128,7 +143,12 @@ async function act(
   }
   write(`disarmed at ${outcome.knownFrom}; every source reads compatibility_disarmed from here`);
   write('an eviction already acknowledged stays done. Nothing puts a removed projection back.');
-  write('an operation already holding the guard finishes under it; the next one is refused.');
+  write(
+    'an attempt that had not written yet is refused, including one this command found pending.',
+  );
+  write(
+    'an attempt whose graph write already committed finishes: the removal happened either way.',
+  );
   return 0;
 }
 
@@ -146,7 +166,7 @@ export function runEvict(
       if (flags.action === 'status') {
         writeGateState(db, write);
         writePreconditions(
-          armingPreconditions(db, PUBLICATION_KINDS, EVICTION_COMPATIBILITY_REVISION),
+          armingPreconditions(db, INSTALLED_PUBLICATION_KINDS, EVICTION_COMPATIBILITY_REVISION),
           write,
         );
         writeNotVerified(write);
@@ -166,7 +186,7 @@ export function runEvict(
       const logger = substrate.logger();
       const publications = await lifecyclePublications({ connection, db, logger });
       const now = new Date();
-      return await act(
+      return await runEvictAct(
         flags.action,
         db,
         async () =>
@@ -185,7 +205,7 @@ export function runEvict(
               observedAt: now.toISOString(),
             },
           }),
-        flags,
+        async (prompt) => await confirmOrExit(prompt, flags.yes, write),
         write,
       );
     },

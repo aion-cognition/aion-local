@@ -16,8 +16,8 @@ import {
   preparePublicationIntent,
 } from '../../infrastructure/sqlite/publication-intents.js';
 import { publishReadinessPolicy } from '../../infrastructure/sqlite/readiness-policies.js';
-import { recordSourceStateVersion } from '../../infrastructure/sqlite/source-lifecycle.js';
 import { readGenerationWork } from '../../infrastructure/sqlite/source-readiness.js';
+import { recordSourceStateVersion } from '../../infrastructure/sqlite/source-state-versions.js';
 import {
   STAGE_ALREADY_APPLIED_SUMMARY,
   type ReflectionSummary,

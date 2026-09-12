@@ -17,20 +17,23 @@ import {
   readPublishedRevision,
 } from '../../infrastructure/sqlite/narrative-revisions.js';
 import { readActiveGeneration } from '../../infrastructure/sqlite/processing-generations.js';
-import { readSubstratePairing } from '../../infrastructure/sqlite/publication-control.js';
+import {
+  evictionStopStands,
+  readSubstratePairing,
+} from '../../infrastructure/sqlite/publication-control.js';
 import {
   listReferenceBatches,
   readSourceParts,
   readSourcePartTurnIds,
   readSourceRecord,
 } from '../../infrastructure/sqlite/source-identity.js';
+import { readSourceResidency } from '../../infrastructure/sqlite/source-lifecycle.js';
+import { readGenerationWork } from '../../infrastructure/sqlite/source-readiness.js';
+import { searchIndexPin } from '../../infrastructure/sqlite/source-search-store.js';
 import {
   hasPendingSourceState,
   isSourceForgotten,
-  readSourceResidency,
-} from '../../infrastructure/sqlite/source-lifecycle.js';
-import { readGenerationWork } from '../../infrastructure/sqlite/source-readiness.js';
-import { searchIndexPin } from '../../infrastructure/sqlite/source-search-store.js';
+} from '../../infrastructure/sqlite/source-state-versions.js';
 import type { CoverageGap } from '../domain/chunk-revision.js';
 import { EVICTION_ROLES } from '../domain/episode-eviction.js';
 
@@ -208,13 +211,18 @@ function owesWork(db: SqliteHandle, sourceId: string, generation: number): boole
  * remove nothing from here, and a fence that weighed that against a number could answer yes to
  * one because the other said so. The revision is left where it is on purpose: it records the
  * capability this substrate established, and a stop is not the loss of that capability.
+ *
+ * A stop asked for and not yet recorded reads the same way. The request is claimed before the
+ * guard settles anything, so it is exactly what stands between a pending removal and the operator
+ * who ran the command to prevent it. It stops being a stop when its own operation ends refused,
+ * which `evictionStopStands` resolves from that operation's record rather than from a timer.
  */
 function pairingHolds(db: SqliteHandle): string | undefined {
   const pairing = readSubstratePairing(db);
   if (pairing?.bootstrapState !== 'initialized') {
     return 'substrate_pairing_unproved';
   }
-  if (pairing.evictionDisarmedAt !== null) {
+  if (evictionStopStands(db, pairing)) {
     return 'compatibility_disarmed';
   }
   if (pairing.evictionCompatibilityRevision <= 0) {

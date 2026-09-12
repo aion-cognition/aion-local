@@ -343,6 +343,16 @@ export async function armEviction(): Promise<void> {
   expect(outcome.status).toBe('acknowledged');
 }
 
+/** The withdrawal, through the same writer, so what it re-owes is what production re-owes. */
+export async function unforgetSource(sourceId: string): Promise<void> {
+  const outcome = await publications.publish({
+    kind: sourceSuppressionPublication.kind,
+    operationId: sourceSuppressionOperationId('unforget', sourceId, NOW),
+    payload: { act: 'unforget', nodeId: sourceId, observedAt: NOW.toISOString() },
+  });
+  expect(outcome.status).toBe('acknowledged');
+}
+
 /** The operator's stop, through the same operation, so the battery can hold the fence shut. */
 export async function disarmEviction(): Promise<void> {
   const epoch = readCurrentCoverageContract(store.db)?.epoch ?? '';

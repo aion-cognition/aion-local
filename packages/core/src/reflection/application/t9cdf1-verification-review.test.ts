@@ -10,7 +10,7 @@ import {
   acknowledgePublicationIntent,
   preparePublicationIntent,
 } from '../../infrastructure/sqlite/publication-intents.js';
-import { isSourceForgotten } from '../../infrastructure/sqlite/source-lifecycle.js';
+import { isSourceForgotten } from '../../infrastructure/sqlite/source-state-versions.js';
 import { prepareEpisode, type ReflectionContent } from '../domain/content.js';
 
 const NOW = new Date('2026-09-09T00:00:00.000Z');

@@ -96,6 +96,14 @@ export async function readingHorizonCheck(driver: Driver): Promise<CheckResult> 
  * when rather than read it as a capability nobody ever established.
  */
 export function evictionFence(report: CoverageStateReport): string {
+  if (report.evictionStopRequestedBy !== null) {
+    // Asked for and not recorded. It refuses evictions exactly as a recorded stop does, and the
+    // operation is named because re-running the command is what finishes it.
+    return (
+      `eviction fence DISARMED: a stop is owed by ${report.evictionStopRequestedBy} and is not ` +
+      'recorded yet. Nothing is removed. Re-run `aion evict disarm` to finish it'
+    );
+  }
   if (report.evictionGate === 'disarmed') {
     return (
       `eviction fence DISARMED at ${report.evictionDisarmedAt ?? 'an unrecorded moment'} ` +

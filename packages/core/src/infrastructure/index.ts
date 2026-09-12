@@ -16,7 +16,6 @@ export { DEFAULT_SQLITE_PATH, SqliteStore, openSqliteHandle } from './sqlite/dat
 export type { SqliteHandle } from './sqlite/database.js';
 
 export { PublicationCoordinator } from './publication/coordinator.js';
-export { PUBLICATION_KINDS } from './publication/types.js';
 export type { PublicationOutcome } from './publication/types.js';
 /** The contract in force, which the arming command names so a coverage change refuses the act. */
 export { readCurrentCoverageContract } from './sqlite/coverage-contract.js';

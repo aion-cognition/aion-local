@@ -1,9 +1,6 @@
 import type { SqliteHandle } from './database.js';
-import {
-  hasPendingSourceState,
-  isSourceForgotten,
-  sourceResidencyState,
-} from './source-lifecycle.js';
+import { sourceResidencyState } from './source-lifecycle.js';
+import { hasPendingSourceState, isSourceForgotten } from './source-state-versions.js';
 
 /**
  * Which source an accepted payload belongs to, decided from the durable records rather than
