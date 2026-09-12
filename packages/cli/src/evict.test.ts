@@ -1,7 +1,8 @@
-import { SqliteStore, type CoverageStateReport } from '@aion/core';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { INSTALLED_PUBLICATION_KINDS, SqliteStore, type CoverageStateReport } from '@aion/core';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { evictionFence } from './doctor-checks.js';
@@ -44,6 +45,24 @@ describe('writePreconditions', () => {
 
   it('reports an empty list as ready, which only a build with no checks could produce', () => {
     expect(writePreconditions([], () => undefined)).toBe(true);
+  });
+});
+
+describe('which set the tables are measured against', () => {
+  /**
+   * The one line the fence calls non-spoofable, and the one a surface can most easily make
+   * meaningless. Asking the declared list whether every declared kind is installed answers itself:
+   * the line prints `[ok]` on a substrate the operation then refuses. There is no behavioural
+   * difference to assert while the two sets agree, which is exactly why the argument is pinned
+   * where a later edit would change it.
+   */
+  it('hands the precondition table the set the command composes', () => {
+    const source = readFileSync(fileURLToPath(new URL('./evict.ts', import.meta.url)), 'utf8');
+    const calls = [...source.matchAll(/armingPreconditions\(\s*db,\s*([A-Za-z_]+)/g)];
+    expect(calls.length).toBeGreaterThan(1);
+    expect(calls.map((match) => match[1])).toEqual(calls.map(() => 'INSTALLED_PUBLICATION_KINDS'));
+    // And the set is a real answer about this build rather than the declared list renamed.
+    expect(INSTALLED_PUBLICATION_KINDS.length).toBeGreaterThan(0);
   });
 });
 
