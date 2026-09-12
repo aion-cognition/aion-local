@@ -5,6 +5,7 @@ import { durableEligibility } from './eviction-eligibility.js';
 import { planRemoval } from './eviction-plan.js';
 import {
   activateCoverage,
+  armEviction,
   atBoundary,
   driver,
   eligibleSource,
@@ -125,6 +126,7 @@ async function sourceWithSurvivor(
 
 beforeAll(async () => {
   await activateCoverage();
+  armEviction();
 });
 
 it('finishes an eviction interrupted after its commit exactly once', async () => {

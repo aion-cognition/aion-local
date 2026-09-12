@@ -20,11 +20,11 @@ import {
 } from '@aion/core';
 import { describe, expect, it } from 'vitest';
 
+import { warmEmbedModel } from './boot-models.js';
 import {
   narrativeOptions,
   narrativeSweepOptions,
   reflectionStages,
-  warmEmbedModel,
   workerOptions,
 } from './bootstrap.js';
 

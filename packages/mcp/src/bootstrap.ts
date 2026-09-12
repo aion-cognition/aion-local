@@ -1,5 +1,6 @@
 import {
   acceptsHookCapture,
+  activateCoverageOnStart,
   ApiUsageRecorder,
   bootstrapBackbone,
   checkedRecallDeps,
@@ -31,7 +32,6 @@ import {
   recallResultFor,
   readMemberName,
   RecallSideEffects,
-  reconcileResidentModels,
   recordGenerationOutcome,
   recordLifecycleEvent,
   ReflectionOrchestrator,
@@ -46,14 +46,13 @@ import {
   workerOptions,
   type Config,
   type Logger,
-  type Provider,
   type RecallDeps,
-  type ReconciliationReport,
   type ReflectionIntakeDeps,
 } from '@aion/core';
 import { userInfo } from 'node:os';
 
 import { archiveToolBackend } from './archive-tools.js';
+import { reconcileModels, warmEmbedModel } from './boot-models.js';
 import { bindHost, runningInContainer } from './http.js';
 import { AionMcpService } from './service.js';
 import { SessionIdleSweeper } from './session-idle-sweeper.js';
@@ -88,48 +87,6 @@ export type AionService = {
   readonly logger: Logger;
   close(): Promise<void>;
 };
-
-/**
- * Boot's half of model reconciliation: a local model no role still routes to leaves memory,
- * so a key-covered install does not hold instruct weights it will never call. `aion init` runs
- * the other half. Failures are logged and nothing else: the service does not depend on this,
- * and a machine with Ollama down has nothing resident to unload.
- */
-async function reconcileModels(
-  config: Config,
-  router: ProviderRouter,
-  logger: Logger,
-): Promise<ReconciliationReport | undefined> {
-  try {
-    const report = await reconcileResidentModels({
-      baseUrl: config.ollama.url,
-      routing: router.routing,
-    });
-    if (report.checked) {
-      logger.info({ reconciliation: report }, `model reconciliation: ${report.detail}`);
-    }
-    return report;
-  } catch (err) {
-    logger.warn({ err }, 'model reconciliation failed');
-    return undefined;
-  }
-}
-
-/**
- * One probe embed at boot, so a cold Ollama pays its model load here rather than inside the
- * first recall, whose callers sit in synchronous harness hooks with a 10s budget. The logged
- * duration is the cold/warm tell: seconds is a load, milliseconds is a model already resident.
- * Fail-open like reconciliation: the service never depends on the warm having happened.
- */
-export async function warmEmbedModel(embedder: Provider, logger: Logger): Promise<void> {
-  const started = Date.now();
-  try {
-    await embedder.embed(['embed warm-up probe']);
-    logger.info({ ms: Date.now() - started }, 'embed model warmed');
-  } catch (err) {
-    logger.warn({ err, ms: Date.now() - started }, 'embed warm-up failed');
-  }
-}
 
 /**
  * Only used when the substrate has no Member yet, which the schema check above makes nearly
@@ -224,6 +181,11 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       },
     });
     await publications.initialize();
+    // Initialization opens the coverage contract preparing, and a preparing contract answers
+    // every temporal read as partial for good. Ahead of the recovery loop so one actor is
+    // asking for the guard at boot, and a no-op on every start after the first.
+    const coverage = await activateCoverageOnStart(publications, store.db);
+    logger.info({ coverage }, `coverage contract ${coverage.state}`);
     publicationRecovery = new PublicationRecoveryLoop(publications, logger, {
       retryBaseMs: config.operational.workerRetryBaseMs,
       retryCapMs: config.operational.workerRetryCapMs,

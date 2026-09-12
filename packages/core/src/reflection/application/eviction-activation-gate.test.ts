@@ -10,18 +10,24 @@ import { describe, expect, it } from 'vitest';
  * and the audit still carries a large owed body: the reflection stage writers, plasticity, merge
  * and unmerge, forget and unsupersede, and the introspection operations all mutate the graph
  * outside the publication protocol today. Eviction is therefore built and fenced rather than
- * built and live, and the fence is one positively verified fact: the capability revision on the
- * publication control record.
+ * built and live, and the fence is one positively verified fact: the eviction compatibility
+ * revision on the publication control record.
  *
  * Nothing in production sets that revision. The compatibility audit owns it, and no audit has
  * run, so `durableEligibility` answers `compatibility_not_established` for every source on every
  * deployed substrate and the operation removes nothing. This test is what keeps that true: a
  * writer that set the revision would quietly arm every destructive path behind it, and the
  * change that adds one has to change this list and be reviewed for doing so.
+ *
+ * Coverage activation is a different gate on the same row and has its own producer, because a
+ * substrate that cannot state what it covers is unusable while a substrate that cannot evict is
+ * merely full. The last two cases hold the two apart: the arming column has no production
+ * writer, and the coverage column does.
  */
 const REPO_ROOT = fileURLToPath(new URL('../../../../../', import.meta.url));
 const PACKAGES_DIR = join(REPO_ROOT, 'packages');
-const CAPABILITY_COLUMN = 'activation_capability_revision';
+const CAPABILITY_COLUMN = 'eviction_compatibility_revision';
+const COVERAGE_COLUMN = 'activation_capability_revision';
 
 /**
  * A write is an UPDATE or an INSERT reaching this column; a read of it is not one.
@@ -34,18 +40,22 @@ const CAPABILITY_COLUMN = 'activation_capability_revision';
 const WINDOW = 600;
 const MUTATIONS = [/UPDATE\s+publication_control/gi, /INSERT\s+INTO\s+publication_control/gi];
 
-function writesTheCapability(source: string): boolean {
+function writesColumn(source: string, column: string): boolean {
   for (const pattern of MUTATIONS) {
     pattern.lastIndex = 0;
     let match = pattern.exec(source);
     while (match !== null) {
-      if (source.slice(match.index, match.index + WINDOW).includes(CAPABILITY_COLUMN)) {
+      if (source.slice(match.index, match.index + WINDOW).includes(column)) {
         return true;
       }
       match = pattern.exec(source);
     }
   }
   return false;
+}
+
+function writesTheCapability(source: string): boolean {
+  return writesColumn(source, CAPABILITY_COLUMN);
 }
 
 function productionFiles(dir: string): string[] {
@@ -67,7 +77,7 @@ function productionFiles(dir: string): string[] {
   return found;
 }
 
-describe('the compatibility capability is not armed by any production writer', () => {
+describe('the eviction compatibility capability is not armed by any production writer', () => {
   const files = productionFiles(PACKAGES_DIR);
 
   it('scans every production TypeScript source under packages', () => {
@@ -86,20 +96,38 @@ describe('the compatibility capability is not armed by any production writer', (
     expect(writesTheCapability(`SELECT ${CAPABILITY_COLUMN} FROM publication_control`)).toBe(false);
   });
 
-  it('finds no production path that sets the activation capability revision', () => {
+  it('finds no production path that sets the eviction compatibility revision', () => {
     const offenders = files.filter((file) => writesTheCapability(readFileSync(file, 'utf8')));
     expect(offenders.map((file) => relative(REPO_ROOT, file))).toEqual([]);
   });
 
-  it('still finds the reader the coverage activation fences on', () => {
-    const handler = join(
+  it('still finds the column read and the fence that acts on what it says', () => {
+    const control = join(
       PACKAGES_DIR,
       'core',
       'src',
       'infrastructure',
-      'publication',
-      'handlers.ts',
+      'sqlite',
+      'publication-control.ts',
     );
-    expect(readFileSync(handler, 'utf8')).toContain(CAPABILITY_COLUMN);
+    const fence = join(
+      PACKAGES_DIR,
+      'core',
+      'src',
+      'reflection',
+      'application',
+      'eviction-eligibility.ts',
+    );
+    expect(readFileSync(control, 'utf8')).toContain(CAPABILITY_COLUMN);
+    expect(readFileSync(fence, 'utf8')).toContain('evictionCompatibilityRevision <= 0');
+  });
+
+  it('finds one production writer of the coverage column, which is the gate the fence is not', () => {
+    const producers = files.filter((file) =>
+      writesColumn(readFileSync(file, 'utf8'), COVERAGE_COLUMN),
+    );
+    expect(producers.map((file) => relative(REPO_ROOT, file))).toEqual([
+      'packages/core/src/infrastructure/sqlite/publication-control.ts',
+    ]);
   });
 });

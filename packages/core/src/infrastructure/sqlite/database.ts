@@ -337,6 +337,13 @@ const COLUMN_ADDITIONS: readonly ColumnAddition[] = [
   },
   { table: 'reflection_queue', column: 'episode_id', definition: 'TEXT' },
   { table: 'migration_progress', column: 'walked_by', definition: 'TEXT' },
+  // Zero on a substrate that predates the column, which is the fence closed. Eviction arms on
+  // a positive value and nothing in production writes one.
+  {
+    table: 'publication_control',
+    column: 'eviction_compatibility_revision',
+    definition: 'INTEGER NOT NULL DEFAULT 0',
+  },
   { table: 'migration_cohorts', column: 'partition_policy_json', definition: 'TEXT' },
   { table: 'migration_progress', column: 'capture_order_value', definition: 'TEXT' },
   { table: 'migration_progress', column: 'capture_order_basis', definition: 'TEXT' },

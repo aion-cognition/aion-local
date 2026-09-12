@@ -14,6 +14,11 @@ import { decimalSequence } from '../publication/json.js';
  * initial bootstrap is provably unfinished and the guard may be created. Once it reads
  * 'initialized' a missing guard is an inconsistency to report, and a migration runner that
  * replays its statements on every open must not mint a second guard over the top of it.
+ *
+ * The two revisions answer two different gates. `activationCapabilityRevision` is the coverage
+ * capability the substrate has established and is what the coverage activation publication
+ * names. `evictionCompatibilityRevision` is the destructive capability's arming fence, and a
+ * substrate whose coverage is active still reads zero here.
  */
 export type SubstratePairing = {
   readonly substrateId: string;
@@ -23,6 +28,7 @@ export type SubstratePairing = {
   readonly pendingOperationId: string | null;
   readonly lastKnownFrom: string | null;
   readonly activationCapabilityRevision: number;
+  readonly evictionCompatibilityRevision: number;
 };
 
 type PairingRowData = {
@@ -33,10 +39,12 @@ type PairingRowData = {
   pending_operation_id: string | null;
   last_known_from: string | null;
   activation_capability_revision: number;
+  eviction_compatibility_revision: number;
 };
 
 const SELECT_PAIRING = `SELECT substrate_id, bootstrap_state, protocol_version, CAST(last_ack_sequence AS TEXT) AS last_ack_sequence,
-    pending_operation_id, last_known_from, activation_capability_revision
+    pending_operation_id, last_known_from, activation_capability_revision,
+    eviction_compatibility_revision
   FROM publication_control LIMIT 1`;
 
 function toPairing(row: PairingRowData): SubstratePairing {
@@ -48,6 +56,7 @@ function toPairing(row: PairingRowData): SubstratePairing {
     pendingOperationId: row.pending_operation_id,
     lastKnownFrom: row.last_known_from,
     activationCapabilityRevision: row.activation_capability_revision,
+    evictionCompatibilityRevision: row.eviction_compatibility_revision,
   };
 }
 
@@ -80,6 +89,7 @@ export function beginSubstratePairing(db: SqliteHandle, protocolVersion: number)
         pendingOperationId: null,
         lastKnownFrom: null,
         activationCapabilityRevision: 0,
+        evictionCompatibilityRevision: 0,
       };
     })
     .immediate();
@@ -119,4 +129,37 @@ export function advanceAckCursor(db: SqliteHandle, sequence: string, knownFrom: 
 /** Names the operation whose acknowledgment this substrate is waiting on, or clears it. */
 export function setPendingOperation(db: SqliteHandle, operationId: string | undefined): void {
   db.prepare('UPDATE publication_control SET pending_operation_id = ?').run(operationId ?? null);
+}
+
+/**
+ * Records the coverage capability this build establishes, and answers with the revision in
+ * force. The activation publication reads the recorded revision back and refuses a request that
+ * names a different one, so the number has to be durable before the request is made rather than
+ * carried in it.
+ *
+ * It only ever moves upward, and the answer is whatever the row holds afterwards. A build that
+ * meets a higher recorded revision is meeting a capability a later build established, and
+ * writing its own number over the top would let it activate against a contract it does not
+ * implement.
+ *
+ * This is the coverage gate and nothing else. The eviction fence on the same row is a separate
+ * column with its own owner, and no production path writes that one.
+ */
+export function establishActivationCapability(db: SqliteHandle, revision: number): number {
+  if (!Number.isSafeInteger(revision) || revision <= 0) {
+    throw new Error('coverage activation capability must be a positive safe integer');
+  }
+  return db
+    .transaction((): number => {
+      db.prepare(
+        `UPDATE publication_control SET activation_capability_revision = ?
+         WHERE activation_capability_revision < ?`,
+      ).run(revision, revision);
+      const pairing = readSubstratePairing(db);
+      if (pairing === undefined) {
+        throw new Error('no publication control record to establish a capability on');
+      }
+      return pairing.activationCapabilityRevision;
+    })
+    .immediate();
 }

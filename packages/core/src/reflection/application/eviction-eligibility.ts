@@ -186,12 +186,19 @@ function owesWork(db: SqliteHandle, sourceId: string, generation: number): boole
   );
 }
 
+/**
+ * The arming fence, and the one place it is read.
+ *
+ * It answers to the eviction compatibility revision alone. An active coverage contract is a
+ * different gate with a different owner, and a substrate whose coverage the ordinary startup
+ * activated is still refused here until the compatibility audit arms this one.
+ */
 function pairingHolds(db: SqliteHandle): string | undefined {
   const pairing = readSubstratePairing(db);
   if (pairing?.bootstrapState !== 'initialized') {
     return 'substrate_pairing_unproved';
   }
-  if (pairing.activationCapabilityRevision <= 0) {
+  if (pairing.evictionCompatibilityRevision <= 0) {
     return 'compatibility_not_established';
   }
   return undefined;

@@ -270,6 +270,15 @@ export async function activateCoverage(): Promise<void> {
   expect(outcome.status).toBe('acknowledged');
 }
 
+/**
+ * What the compatibility audit would do, done here so the battery can exercise the paths behind
+ * the fence. It is deliberately a second call: activating coverage arms nothing, and a battery
+ * that got eviction for free from `activateCoverage` would not notice if the two gates merged.
+ */
+export function armEviction(): void {
+  store.db.prepare('UPDATE publication_control SET eviction_compatibility_revision = 1').run();
+}
+
 /** One source carried all the way to eligible through the production paths. */
 export async function eligibleSource(
   identity: string,

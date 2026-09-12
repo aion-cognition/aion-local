@@ -16,6 +16,8 @@ export { DEFAULT_SQLITE_PATH, SqliteStore, openSqliteHandle } from './sqlite/dat
 export type { SqliteHandle } from './sqlite/database.js';
 
 export { PublicationCoordinator } from './publication/coordinator.js';
+/** The startup step that lifts a prepared coverage contract to active, and says what it reached. */
+export { activateCoverageOnStart } from './publication/coverage-activation.js';
 
 /** The publication history one source's own records name, for the timeline hydration. */
 export { listSourcePublications } from './sqlite/publication-intents.js';

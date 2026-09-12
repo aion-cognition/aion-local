@@ -8,6 +8,7 @@ import {
   advanceAckCursor,
   beginSubstratePairing,
   completeSubstratePairing,
+  establishActivationCapability,
   readSubstratePairing,
   setPendingOperation,
 } from './publication-control.js';
@@ -101,6 +102,45 @@ describe('substrate pairing', () => {
 
     setPendingOperation(store.db, undefined);
     expect(readSubstratePairing(store.db)?.pendingOperationId).toBeNull();
+  });
+
+  it('opens both revision gates at zero', () => {
+    beginSubstratePairing(store.db, 1);
+
+    expect(readSubstratePairing(store.db)).toMatchObject({
+      activationCapabilityRevision: 0,
+      evictionCompatibilityRevision: 0,
+    });
+  });
+
+  it('establishes the coverage capability and answers with the revision in force', () => {
+    beginSubstratePairing(store.db, 1);
+
+    expect(establishActivationCapability(store.db, 1)).toBe(1);
+    expect(readSubstratePairing(store.db)?.activationCapabilityRevision).toBe(1);
+  });
+
+  it('moves the coverage capability up only, and reports what it met', () => {
+    beginSubstratePairing(store.db, 1);
+    establishActivationCapability(store.db, 4);
+
+    expect(establishActivationCapability(store.db, 2)).toBe(4);
+    expect(readSubstratePairing(store.db)?.activationCapabilityRevision).toBe(4);
+  });
+
+  it('leaves the eviction fence alone when the coverage capability is established', () => {
+    beginSubstratePairing(store.db, 1);
+
+    establishActivationCapability(store.db, 1);
+
+    expect(readSubstratePairing(store.db)?.evictionCompatibilityRevision).toBe(0);
+  });
+
+  it('refuses a capability revision that is not a positive integer', () => {
+    beginSubstratePairing(store.db, 1);
+
+    expect(() => establishActivationCapability(store.db, 0)).toThrow(/positive safe integer/);
+    expect(() => establishActivationCapability(store.db, 1.5)).toThrow(/positive safe integer/);
   });
 
   it('refuses a bootstrap state the machine does not have', () => {

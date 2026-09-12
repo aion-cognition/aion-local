@@ -131,6 +131,12 @@ vi.mock('@aion/core', async (importOriginal) => {
     }),
     readMemberName: async () => 'member-1',
     latestAppliedGraphMigration: () => 'migration-1',
+    // Boot's own step, faked for the same reason the coordinator is: the stores here are
+    // shells, and what this file asserts is the order components start and stop in.
+    activateCoverageOnStart: async () => {
+      calls.push('coverage.activate');
+      return { state: 'active', historySince: '2026-09-11T06:00:00.000Z' };
+    },
     // The shape the real report returns when routing has nothing to unload, `evicted` included:
     // boot reads that list to decide whether the run is worth recording.
     reconcileResidentModels: async () => ({ checked: false, evicted: [] }),
@@ -162,6 +168,7 @@ describe('bootstrapService failing partway through construction', () => {
     // idle); `worker.stop` still runs in teardown, since the worker was still constructed.
     expect(calls).toEqual([
       'publications.initialize',
+      'coverage.activate',
       'publicationRecovery.start',
       'idleNarratives.start',
       'introspector.start',

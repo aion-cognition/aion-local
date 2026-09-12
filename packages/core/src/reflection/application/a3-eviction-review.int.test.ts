@@ -6,6 +6,7 @@ import { planRemoval, type PlannedRemoval } from './eviction-plan.js';
 import {
   acceptEpisode,
   activateCoverage,
+  armEviction,
   driver,
   eligibleSource,
   finishReadiness,
@@ -26,6 +27,7 @@ import {
   setNodeLabel,
 } from '../../infrastructure/graph/test-support/a3-eviction-graph.fixture.js';
 import { countNodesWithId } from '../../infrastructure/graph/test-support/graph-queries.fixture.js';
+import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
 import { readEvictionManifest } from '../../infrastructure/sqlite/eviction-manifests.js';
 import {
   prepareMaterializedLinkVersion,
@@ -42,6 +44,7 @@ import {
   createSourceWork,
   readActiveGeneration,
 } from '../../infrastructure/sqlite/processing-generations.js';
+import { readSubstratePairing } from '../../infrastructure/sqlite/publication-control.js';
 import {
   acceptReferenceBatch,
   readSourceParts,
@@ -114,6 +117,7 @@ async function publishEviction(nomination: Nomination, operationId = randomUUID(
 
 beforeAll(async () => {
   await activateCoverage();
+  armEviction();
 });
 
 it('removes one source projection exactly and leaves everything it stood beside', async () => {
@@ -252,15 +256,32 @@ it('holds a qualified source inside its maturation window', async () => {
 
 it('refuses every source while the compatibility capability is unestablished', async () => {
   const sourceId = await eligibleSource('evict-capability', 'S1');
-  store.db.prepare('UPDATE publication_control SET activation_capability_revision = 0').run();
+  store.db.prepare('UPDATE publication_control SET eviction_compatibility_revision = 0').run();
 
   expect(durableEligibility(store.db, sourceId, POLICY)).toEqual({
     status: 'pinned',
     reason: 'compatibility_not_established',
   });
 
-  store.db.prepare('UPDATE publication_control SET activation_capability_revision = 1').run();
+  armEviction();
   expect(durableEligibility(store.db, sourceId, POLICY).status).toBe('eligible');
+  expect(await nodeExists(driver, sourceId)).toBe(true);
+});
+
+it('keeps refusing with the coverage contract active and its capability established', async () => {
+  const sourceId = await eligibleSource('evict-coverage-only', 'S1');
+  store.db.prepare('UPDATE publication_control SET eviction_compatibility_revision = 0').run();
+  try {
+    expect(readCurrentCoverageContract(store.db)?.state).toBe('active');
+    expect(readSubstratePairing(store.db)?.activationCapabilityRevision).toBe(1);
+
+    expect(durableEligibility(store.db, sourceId, POLICY)).toEqual({
+      status: 'pinned',
+      reason: 'compatibility_not_established',
+    });
+  } finally {
+    armEviction();
+  }
   expect(await nodeExists(driver, sourceId)).toBe(true);
 });
 

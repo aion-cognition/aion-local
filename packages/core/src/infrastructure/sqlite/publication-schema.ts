@@ -16,6 +16,14 @@ export const PUBLICATION_SCHEMA_STATEMENTS: readonly string[] = [
    * Two processes opening a fresh substrate at the same instant serialize on this row: the
    * singleton comes from reading and inserting inside one immediate transaction, not from the
    * id being random.
+   *
+   * The two revision columns are two different gates and never one. Coverage activation reads
+   * `activation_capability_revision`: it is the coverage capability the substrate has
+   * established, and the activation publication names it so a request cannot claim a capability
+   * nothing recorded. Eviction reads `eviction_compatibility_revision`: it is the destructive
+   * capability's arming fence, owned by the compatibility audit, and nothing in production
+   * writes it. An active coverage contract therefore says nothing about whether eviction may
+   * remove anything.
    */
   `CREATE TABLE IF NOT EXISTS publication_control (
     substrate_id TEXT PRIMARY KEY,
@@ -24,7 +32,8 @@ export const PUBLICATION_SCHEMA_STATEMENTS: readonly string[] = [
     last_ack_sequence INTEGER NOT NULL DEFAULT 0,
     pending_operation_id TEXT,
     last_known_from TEXT,
-    activation_capability_revision INTEGER NOT NULL DEFAULT 0
+    activation_capability_revision INTEGER NOT NULL DEFAULT 0,
+    eviction_compatibility_revision INTEGER NOT NULL DEFAULT 0
   )`,
   /**
    * One immutable row per publication, holding both the prepared input and the outcome.
