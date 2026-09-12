@@ -167,27 +167,23 @@ function decodeCursor(encoded: string): InspectCursor {
   } catch {
     throw new SourceQueryError('cursor', 'the continuation is not one this substrate issued');
   }
-  const value = parsed as Partial<InspectCursor> | null;
+  const value = (parsed ?? {}) as Partial<InspectCursor>;
+  const { address, coverageEpoch, projectionGeneration, index, offset } = value;
   if (
-    value === null ||
-    typeof value !== 'object' ||
-    typeof value.address !== 'string' ||
-    typeof value.coverageEpoch !== 'string' ||
-    !Number.isInteger(value.projectionGeneration) ||
-    !Number.isInteger(value.index) ||
-    !Number.isInteger(value.offset) ||
-    (value.index ?? -1) < 0 ||
-    (value.offset ?? -1) < 0
+    typeof address !== 'string' ||
+    typeof coverageEpoch !== 'string' ||
+    typeof projectionGeneration !== 'number' ||
+    typeof index !== 'number' ||
+    typeof offset !== 'number' ||
+    !Number.isInteger(projectionGeneration) ||
+    !Number.isInteger(index) ||
+    !Number.isInteger(offset) ||
+    index < 0 ||
+    offset < 0
   ) {
     throw new SourceQueryError('cursor', 'the continuation is not one this substrate issued');
   }
-  return {
-    address: value.address,
-    coverageEpoch: value.coverageEpoch,
-    projectionGeneration: value.projectionGeneration as number,
-    index: value.index as number,
-    offset: value.offset as number,
-  };
+  return { address, coverageEpoch, projectionGeneration, index, offset };
 }
 
 /**

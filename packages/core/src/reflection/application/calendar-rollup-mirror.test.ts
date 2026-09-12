@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it } from 'vitest';
 
 import { calendarRollupPublication } from './calendar-rollup-publication.js';
 import { GRAPH_NODE_SCOPE } from '../../evidence/domain/scopes.js';
+import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
 import type {
   PublicationAckContext,
   PublicationPlan,
@@ -73,7 +74,12 @@ function plan(closes: readonly string[]): PublicationPlan {
       closedMembership: [],
       closureBounded: false,
     },
-    expected: { coverageEpoch: 'epoch-1', evidence: [], sources: [], heads: [] },
+    expected: {
+      coverageEpoch: 'epoch-1',
+      evidence: buildEvidenceRevision([]),
+      sources: [],
+      heads: [],
+    },
     scopes: [],
     effects: [],
   };
