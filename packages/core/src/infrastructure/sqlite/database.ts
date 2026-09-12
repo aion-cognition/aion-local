@@ -337,13 +337,17 @@ const COLUMN_ADDITIONS: readonly ColumnAddition[] = [
   },
   { table: 'reflection_queue', column: 'episode_id', definition: 'TEXT' },
   { table: 'migration_progress', column: 'walked_by', definition: 'TEXT' },
-  // Zero on a substrate that predates the column, which is the fence closed. Eviction arms on
-  // a positive value and nothing in production writes one.
+  // Zero on a substrate that predates the column, which is the fence closed. Eviction arms on a
+  // positive value, and one audited operation an operator publishes is what writes one.
   {
     table: 'publication_control',
     column: 'eviction_compatibility_revision',
     definition: 'INTEGER NOT NULL DEFAULT 0',
   },
+  // Null on a substrate that predates the column, which is never-disarmed. A stamp here refuses
+  // eviction whatever the revision says, so the absent value is the permissive one and the
+  // column cannot make an older substrate stricter than it was.
+  { table: 'publication_control', column: 'eviction_disarmed_at', definition: 'TEXT' },
   { table: 'migration_cohorts', column: 'partition_policy_json', definition: 'TEXT' },
   { table: 'migration_progress', column: 'capture_order_value', definition: 'TEXT' },
   { table: 'migration_progress', column: 'capture_order_basis', definition: 'TEXT' },

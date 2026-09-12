@@ -15,20 +15,40 @@ import { readSubstratePairing } from '../../infrastructure/sqlite/publication-co
  * The eviction fence travels beside it because the two are read off one row and mean opposite
  * things. Reporting coverage alone invites the reading that an active contract is a substrate
  * eviction may remove from; it is not, and this is where the difference is visible.
+ *
+ * The fence has three readings and not two. `unarmed` is a substrate nobody ever opened;
+ * `disarmed` is one somebody opened and then stopped, which is a different fact with a different
+ * history and is reported as one. Both refuse every eviction.
  */
 export type CoverageStateReport = {
   readonly coverageState: 'preparing' | 'active' | 'failed';
   readonly historySince: string | null;
   readonly coverageEpoch: string | null;
-  readonly evictionGate: 'armed' | 'unarmed';
+  readonly evictionGate: 'armed' | 'unarmed' | 'disarmed';
   readonly evictionCompatibilityRevision: number;
+  /** When somebody stopped it, null when nobody has. */
+  readonly evictionDisarmedAt: string | null;
 };
 
+/** The stop is read first, because it refuses whatever the number says. */
+function evictionGateOf(
+  revision: number,
+  disarmedAt: string | null,
+): 'armed' | 'unarmed' | 'disarmed' {
+  if (disarmedAt === null) {
+    return revision > 0 ? 'armed' : 'unarmed';
+  }
+  return 'disarmed';
+}
+
 export function readCoverageState(db: SqliteHandle): CoverageStateReport {
-  const revision = readSubstratePairing(db)?.evictionCompatibilityRevision ?? 0;
+  const pairing = readSubstratePairing(db);
+  const revision = pairing?.evictionCompatibilityRevision ?? 0;
+  const disarmedAt = pairing?.evictionDisarmedAt ?? null;
   const eviction = {
-    evictionGate: revision > 0 ? ('armed' as const) : ('unarmed' as const),
+    evictionGate: evictionGateOf(revision, disarmedAt),
     evictionCompatibilityRevision: revision,
+    evictionDisarmedAt: disarmedAt,
   };
   const standing = readCoverageStanding(db);
   if (standing === undefined) {

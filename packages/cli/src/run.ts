@@ -106,7 +106,7 @@ const commands: Record<string, Command> = {
     run: (argv) => runForget(argv),
   },
   evict: {
-    summary: 'the destructive fence: what it reads, and the one act that lowers it: status | arm',
+    summary: 'the destructive fence and the two acts that move it: status | arm | disarm',
     run: (argv) => runEvict(argv),
   },
   unforget: {

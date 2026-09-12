@@ -1,12 +1,15 @@
 import { expect, it } from 'vitest';
 
 import {
+  disarmPreconditions,
   EVICTION_COMPATIBILITY_REVISION,
   evictionArmingOperationId,
   evictionArmingPublication,
 } from './eviction-arming.js';
+import { durableEligibility } from './eviction-eligibility.js';
 import { INSTALLED_PUBLICATION_HANDLERS } from './installed-publications.js';
 import {
+  acceptSource,
   activateCoverage,
   driver,
   NOW,
@@ -15,6 +18,7 @@ import {
 } from './test-support/t10b-review.fixture.js';
 import { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
 import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
+import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import { readSubstratePairing } from '../../infrastructure/sqlite/publication-control.js';
 import { readCoverageState } from '../../recall/application/coverage-state.js';
 
@@ -37,12 +41,25 @@ function armedRevision(): number {
   return readSubstratePairing(store.db)?.evictionCompatibilityRevision ?? 0;
 }
 
-async function arm(operationId: string) {
+function disarmedAt(): string | null {
+  return readSubstratePairing(store.db)?.evictionDisarmedAt ?? null;
+}
+
+async function act(kind: 'arm' | 'disarm', operationId: string) {
   return await publications.publish({
     kind: evictionArmingPublication.kind,
     operationId,
-    payload: { revision: EVICTION_COMPATIBILITY_REVISION, coverageEpoch: epoch() },
+    payload: {
+      act: kind,
+      revision: EVICTION_COMPATIBILITY_REVISION,
+      coverageEpoch: epoch(),
+      observedAt: NOW.toISOString(),
+    },
   });
+}
+
+async function arm(operationId: string) {
+  return await act('arm', operationId);
 }
 
 it('refuses while the coverage contract has not been activated', async () => {
@@ -74,7 +91,12 @@ it('refuses a composition that did not install every declared kind', async () =>
     await partial.publish({
       kind: evictionArmingPublication.kind,
       operationId: 'arming:partial-composition',
-      payload: { revision: EVICTION_COMPATIBILITY_REVISION, coverageEpoch: epoch() },
+      payload: {
+        act: 'arm',
+        revision: EVICTION_COMPATIBILITY_REVISION,
+        coverageEpoch: epoch(),
+        observedAt: NOW.toISOString(),
+      },
     }),
   ).toMatchObject({ status: 'deferred', reason: 'writer_audit_incomplete' });
   expect(armedRevision()).toBe(0);
@@ -83,7 +105,9 @@ it('refuses a composition that did not install every declared kind', async () =>
 it('arms the fence once, and refuses a later attempt that finds it already armed', async () => {
   await activateCoverage();
 
-  const armed = await arm(evictionArmingOperationId(EVICTION_COMPATIBILITY_REVISION, epoch()));
+  const armed = await arm(
+    evictionArmingOperationId('arm', EVICTION_COMPATIBILITY_REVISION, epoch(), NOW),
+  );
   expect(armed).toMatchObject({ status: 'acknowledged' });
   expect(armedRevision()).toBe(EVICTION_COMPATIBILITY_REVISION);
   expect(readCoverageState(store.db)).toMatchObject({
@@ -98,4 +122,53 @@ it('arms the fence once, and refuses a later attempt that finds it already armed
     reason: 'already_armed',
   });
   expect(armedRevision()).toBe(EVICTION_COMPATIBILITY_REVISION);
+});
+
+it('stops eviction with a stamp of its own, leaving the revision where it stands', async () => {
+  expect(armedRevision()).toBe(EVICTION_COMPATIBILITY_REVISION);
+  const source = await acceptSource('arming:disarm-subject', 'a source to leave alone');
+
+  const stopped = await act(
+    'disarm',
+    evictionArmingOperationId('disarm', EVICTION_COMPATIBILITY_REVISION, epoch(), NOW),
+  );
+
+  expect(stopped).toMatchObject({ status: 'acknowledged' });
+  // The revision is not lowered. What this substrate established stays readable, and the stop is
+  // a separate fact beside it.
+  expect(armedRevision()).toBe(EVICTION_COMPATIBILITY_REVISION);
+  expect(disarmedAt()).not.toBeNull();
+  expect(readCoverageState(store.db)).toMatchObject({
+    evictionGate: 'disarmed',
+    evictionCompatibilityRevision: EVICTION_COMPATIBILITY_REVISION,
+  });
+  // The stamp beats the revision, so eligibility refuses on it rather than on the number.
+  expect(durableEligibility(store.db, source, { now: NOW, minAgeMs: 0 })).toMatchObject({
+    status: 'pinned',
+    reason: 'compatibility_disarmed',
+  });
+});
+
+it('refuses a second stop, and lets a deliberate re-arm clear the one that stands', async () => {
+  expect(disarmedAt()).not.toBeNull();
+
+  expect(await act('disarm', 'arming:disarm-again')).toMatchObject({
+    status: 'deferred',
+    reason: 'already_disarmed',
+  });
+
+  // Re-arming at the same revision is allowed precisely because the stop is what is being
+  // reversed. Refusing it as `already_armed` would leave a stopped substrate with no way back.
+  expect(await arm('arming:re-arm')).toMatchObject({ status: 'acknowledged' });
+  expect(disarmedAt()).toBeNull();
+  expect(readCoverageState(store.db).evictionGate).toBe('armed');
+});
+
+it('refuses a stop on a substrate nobody ever armed', async () => {
+  const store2 = new SqliteStore({ filePath: ':memory:' });
+  try {
+    expect(disarmPreconditions(store2.db).map((check) => check.reason)).toContain('not_armed');
+  } finally {
+    store2.close();
+  }
 });

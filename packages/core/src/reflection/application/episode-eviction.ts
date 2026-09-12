@@ -163,6 +163,14 @@ function candidateMatches(data: EvictionData, candidate: EvictionCandidate): str
   return undefined;
 }
 
+/**
+ * Everything the intent bound, derived again under the guard.
+ *
+ * The arming fence is part of it, so an operator stopping eviction reaches an attempt already
+ * prepared: the recheck refuses it `compatibility_disarmed` and nothing is removed. What a stop
+ * cannot reach is an attempt whose graph write already committed. That one finishes under the
+ * guard it holds, because the removal happened and the acknowledgment is what records it.
+ */
 async function recheck(
   context: PublicationContext,
   data: EvictionData,

@@ -72,7 +72,8 @@ function plasticityFields(
  * reads the top-level status cannot tell a substrate serving full history from one serving none.
  *
  * The eviction keys are here for the same reason they are in `aion doctor`: the two gates sit on
- * one row, and an active contract arms nothing.
+ * one row, and an active contract arms nothing. `eviction_gate` carries three readings, because a
+ * substrate somebody stopped is not one nobody ever opened and a probe has to tell them apart.
  */
 function coverageFields(
   coverage: (() => CoverageStateReport) | undefined,
@@ -87,6 +88,7 @@ function coverageFields(
     coverage_epoch: report.coverageEpoch,
     eviction_gate: report.evictionGate,
     eviction_compatibility_revision: report.evictionCompatibilityRevision,
+    eviction_disarmed_at: report.evictionDisarmedAt,
   };
 }
 

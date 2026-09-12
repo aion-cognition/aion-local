@@ -89,6 +89,26 @@ export async function readingHorizonCheck(driver: Driver): Promise<CheckResult> 
 }
 
 /**
+ * The fence in one line, with the three readings kept apart.
+ *
+ * `disarmed` is not `unarmed`. One substrate was never opened and the other was opened and then
+ * stopped, and an operator looking at a stopped substrate needs to see that somebody did it and
+ * when rather than read it as a capability nobody ever established.
+ */
+export function evictionFence(report: CoverageStateReport): string {
+  if (report.evictionGate === 'disarmed') {
+    return (
+      `eviction fence DISARMED at ${report.evictionDisarmedAt ?? 'an unrecorded moment'} ` +
+      `(compatibility revision ${String(report.evictionCompatibilityRevision)} stands; nothing is removed)`
+    );
+  }
+  if (report.evictionGate === 'unarmed') {
+    return 'eviction fence closed (no compatibility revision)';
+  }
+  return `eviction fence ARMED at compatibility revision ${String(report.evictionCompatibilityRevision)}`;
+}
+
+/**
  * What the substrate says it covers, and the fence it says nothing about.
  *
  * A preparing contract is the state a substrate is in between initialization and the activation
@@ -100,10 +120,7 @@ export async function readingHorizonCheck(driver: Driver): Promise<CheckResult> 
  * row and an active contract arms nothing.
  */
 export function coverageStateCheck(report: CoverageStateReport): CheckResult {
-  const fence =
-    report.evictionGate === 'unarmed'
-      ? 'eviction fence closed (no compatibility revision)'
-      : `eviction fence ARMED at compatibility revision ${String(report.evictionCompatibilityRevision)}`;
+  const fence = evictionFence(report);
   if (report.coverageState === 'failed') {
     return {
       ok: false,

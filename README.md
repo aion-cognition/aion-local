@@ -145,7 +145,7 @@ does not work and says so: the CLI orchestrates the repo it lives in.
 - `search`: direct hybrid search through the seed layer, bypassing pack assembly
 - `forget`: bitemporal close of a node, by id or by query
 - `unforget`: take back a forget; the statement chain keeps both and the node serves again
-- `evict`: the destructive fence, what it reads, and the one act that lowers it
+- `evict`: the destructive fence, what it reads, and the two acts that move it
 - `unsupersede`: reopen a claim a supersession closed, whatever made the close
 - `queue`: inspect and triage the reflection queue
 - `replay`: put archived experiences back through the pipeline, and the usage stream back on top
@@ -155,7 +155,8 @@ does not work and says so: the CLI orchestrates the repo it lives in.
 - `timeline`: one episode across the archive, the graph, the queue, and the ledger
 
 The commands with teeth make you say so: `queue drop`, `queue reconcile --re-enqueue`,
-`forget`, `unforget`, and `unsupersede` preview what they would do and stop without `--yes`, and
+`forget`, `unforget`, `unsupersede`, and `evict arm`/`evict disarm` preview what they would do
+and stop without `--yes`, and
 `proposals`, `maintain`, and `unmerge` act only through an explicit `apply` or `run`
 subcommand. `replay run` guards harder: it refuses to write to the shipped substrate at all
 unless both `--live` and `--yes` are passed, since a replay re-entering the pipeline inflates

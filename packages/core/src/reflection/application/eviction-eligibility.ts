@@ -200,14 +200,22 @@ function owesWork(db: SqliteHandle, sourceId: string, generation: number): boole
 /**
  * The arming fence, and the one place it is read.
  *
- * It answers to the eviction compatibility revision alone. An active coverage contract is a
- * different gate with a different owner, and a substrate whose coverage the ordinary startup
- * activated is still refused here until the compatibility audit arms this one.
+ * It answers to the eviction compatibility revision and the stop beside it. An active coverage
+ * contract is a different gate with a different owner, and a substrate whose coverage the
+ * ordinary startup activated is still refused here until somebody arms this one.
+ *
+ * The stop is read FIRST and beats any revision value. An operator stopping eviction is saying
+ * remove nothing from here, and a fence that weighed that against a number could answer yes to
+ * one because the other said so. The revision is left where it is on purpose: it records the
+ * capability this substrate established, and a stop is not the loss of that capability.
  */
 function pairingHolds(db: SqliteHandle): string | undefined {
   const pairing = readSubstratePairing(db);
   if (pairing?.bootstrapState !== 'initialized') {
     return 'substrate_pairing_unproved';
+  }
+  if (pairing.evictionDisarmedAt !== null) {
+    return 'compatibility_disarmed';
   }
   if (pairing.evictionCompatibilityRevision <= 0) {
     return 'compatibility_not_established';

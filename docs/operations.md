@@ -481,22 +481,26 @@ Activation writes the horizon at the moment it happens and never earlier. A subs
 for a while before activating gets a horizon at the activation, so reads into the time before it
 are refused as `before_horizon` rather than answered from history nobody promised.
 
-Both surfaces also carry `eviction_gate` and `eviction_compatibility_revision`. That is a
-different gate. Eviction stays closed until an operator arms it, and an active coverage contract
-does not arm it.
+Both surfaces also carry `eviction_gate` (`unarmed`, `armed` or `disarmed`),
+`eviction_compatibility_revision` and `eviction_disarmed_at`. That is a different gate. Eviction
+stays closed until an operator arms it, an active coverage contract does not arm it, and a
+substrate somebody stopped reads apart from one nobody ever opened.
 
 ## The eviction fence
 
 ```
-aion evict [status | arm] [--yes]
+aion evict [status | arm | disarm] [--yes]
 ```
 
 Eviction is built and fenced on every substrate. While the fence is closed, eligibility answers
 `compatibility_not_established` for every source and the `episode_evict` operation removes
-nothing. Nothing lowers the fence on its own: not `aion init`, not the service start, not the
+nothing. Nothing opens the fence on its own: not `aion init`, not the service start, not the
 maintenance catalog. A person runs `arm`.
 
-`status` prints the fence, the coverage contract behind it, and each precondition arming checks:
+`status` prints the fence, the coverage contract behind it, each precondition arming checks, and
+each thing arming does not check.
+
+What it checks:
 
 - every declared publication kind has an installed handler
 - the substrate finished its bootstrap
@@ -505,13 +509,39 @@ maintenance catalog. A person runs `arm`.
 - the requested revision is the one this build implements
 - the fence is not already at that revision
 
-`arm` prints the same list, refuses if any of it fails, asks, and then publishes the act through
-the coordinator, so it leaves a receipt like any other decision. The checks are not the whole
-reason the fence exists. A large body of writers still mutates the graph outside the publication
-protocol, and no code can look at a substrate and tell whether that work is done; the command
-says which conditions it verified and leaves the rest of the judgment with whoever types it.
+What it does not check, and no check can:
 
-Arming moves upward only and there is no disarm. A substrate that has been armed stays armed.
+- the writer audit itself. The reflection stage writers, plasticity, entity merge and unmerge,
+  proposals, claim consolidation, supersession apply, backbone repair, structural discovery and
+  the registered introspection operations all still write the graph outside the publication
+  protocol, and nothing here can tell whether that has been converted
+- the context-vector runner, which recomputes a served property outside the guard
+- the deletion, reclassification and counter-reset constraints, which only a person can say a new
+  writer respects
+- whether anything on this substrate is worth keeping that eviction would be allowed to remove
+
+`arm` prints both lists, refuses if any checked precondition fails, asks a question that repeats
+the unverified half, and then publishes the act through the coordinator, so it leaves a receipt
+like any other decision.
+
+### Stopping it again
+
+`disarm` stamps a stop that eviction reads before it reads the revision. Every source answers
+`compatibility_disarmed` from there, and an attempt already nominated is refused when the guard
+re-derives eligibility.
+
+It is not the inverse of arming. The compatibility revision is left where it is, so the
+capability this substrate established stays on the record and a later `arm` cannot be mistaken
+for a first one. A stopped substrate is re-armable at the same revision: arming is what clears the
+stop, in the same act.
+
+**It stops future evictions and cannot undo one that already happened.** An eviction that reached
+its acknowledgment removed a projection under a receipt, and nothing puts it back. An operation
+already holding the guard finishes under it, because the removal happened and the acknowledgment
+is what records it; the next one is refused.
+
+`aion doctor` and `GET /health` report the three readings apart: `unarmed` is a substrate nobody
+ever opened, `disarmed` is one somebody opened and then stopped, and both remove nothing.
 
 ## Logs
 

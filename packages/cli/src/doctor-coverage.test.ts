@@ -20,6 +20,7 @@ const report = (over: Partial<CoverageStateReport>): CoverageStateReport => ({
   coverageEpoch: 'epoch-1',
   evictionGate: 'unarmed',
   evictionCompatibilityRevision: 0,
+  evictionDisarmedAt: null,
   ...over,
 });
 

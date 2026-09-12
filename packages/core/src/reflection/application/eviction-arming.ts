@@ -12,10 +12,11 @@ import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   establishEvictionCompatibility,
   readSubstratePairing,
+  recordEvictionDisarm,
 } from '../../infrastructure/sqlite/publication-control.js';
 
 /**
- * Arming the destructive capability: the one act that lets eviction remove anything.
+ * Arming the destructive capability, and stopping it again.
  *
  * Every substrate is built with eviction fenced rather than absent. `durableEligibility` answers
  * `compatibility_not_established` for every source while the compatibility revision reads zero,
@@ -30,19 +31,54 @@ import {
  * What the check can verify is not the whole of what the fence exists for. The fence was raised
  * because a large body of writers still mutates the graph outside the publication protocol, and
  * no code can look at a substrate and tell whether that body has been converted. So the check
- * takes the conditions that ARE derivable and refuses on any of them, and the rest of the
- * judgment stays with whoever types the command.
+ * takes the conditions that ARE derivable and refuses on any of them, `ARMING_NOT_VERIFIED` names
+ * the rest, and the command prints both so the passing checks are never read alone.
+ *
+ * Stopping goes through the same operation and the same receipt, because a decision to stop
+ * removing memory deserves the record a decision to start does. It is not the inverse of arming:
+ * the revision is untouched and a separate stamp is written, so the capability this substrate
+ * established stays readable and eviction refuses on the stamp before it reads the number. It
+ * stops future evictions and it cannot undo one that already happened.
  */
 
 /** The destructive capability this build implements. A different build carries a different one. */
 export const EVICTION_COMPATIBILITY_REVISION = 1;
 
 const Payload = z.strictObject({
+  /** Arming opens the capability; disarming stops it and leaves the record that it was open. */
+  act: z.enum(['arm', 'disarm']),
   revision: z.number().int().positive(),
   /** The contract in force when the operator asked, so a coverage change refuses the act. */
   coverageEpoch: z.string().min(1),
+  /** When the operator asked. The stop is a stamp, and this is the moment it records. */
+  observedAt: z.string().min(1),
 });
-const Result = z.strictObject({ revision: z.number().int().positive() });
+const Result = z.strictObject({
+  act: z.enum(['arm', 'disarm']),
+  revision: z.number().int().positive(),
+});
+
+/**
+ * What arming does NOT verify, in the operator's words.
+ *
+ * The fence exists because a large body of writers still mutates the graph outside the
+ * publication protocol, and no code can look at a substrate and tell whether that work has been
+ * done. Everything the check CAN derive is in the table below; everything it cannot is here, and
+ * the command prints both, because six passing checks in a row read as full assurance unless the
+ * gaps are printed beside them in the same breath.
+ */
+export const ARMING_NOT_VERIFIED: readonly string[] = [
+  'the writer audit itself: the reflection stage writers, plasticity flush and decay, entity ' +
+    'merge and unmerge, proposals, claim consolidation, supersession apply, backbone repair, ' +
+    'structural discovery and the registered introspection operations all still write the graph ' +
+    'outside the publication protocol. Nothing here checks whether that has been converted',
+  'the context-vector runner: survivor repair recomputes a served property outside the guard',
+  'the deletion, reclassification and counter-reset constraints: a counted row that can be ' +
+    'deleted, replaced, reclassified, retargeted or counter-reset without its qualifications ' +
+    'being invalidated makes the tokens eviction compares incomparable, and only a person can ' +
+    'say whether a writer added since does that',
+  'whether anything on this substrate is worth keeping that eviction would be allowed to remove',
+];
 
 export type ArmingPrecondition = {
   readonly name: string;
@@ -57,6 +93,14 @@ export type ArmingPrecondition = {
  * rather than one per attempt. The operation refuses on the first that fails; the command prints
  * the whole table, because an operator deciding whether to arm wants the list, not a bisection.
  */
+/** How the fence reads now, in the one place both tables say it. */
+function armedDetail(armed: number, disarmed: string | null): string {
+  if (disarmed !== null) {
+    return `disarmed at ${disarmed}`;
+  }
+  return armed === 0 ? 'unarmed' : `armed at ${String(armed)}`;
+}
+
 export function armingPreconditions(
   db: SqliteHandle,
   installedKinds: readonly PublicationKind[],
@@ -67,6 +111,7 @@ export function armingPreconditions(
   const pairing = readSubstratePairing(db);
   const contract = readCurrentCoverageContract(db);
   const armed = pairing?.evictionCompatibilityRevision ?? 0;
+  const disarmed = pairing?.evictionDisarmedAt ?? null;
   return [
     {
       name: 'every declared publication kind has an installed handler',
@@ -104,23 +149,74 @@ export function armingPreconditions(
       detail: `build implements ${String(EVICTION_COMPATIBILITY_REVISION)}`,
     },
     {
+      // A stopped substrate is re-armable at the same revision: the stop is what is being
+      // reversed, and refusing it as `already_armed` would leave no way back.
       name: 'the fence is not already at this revision',
       reason: 'already_armed',
-      holds: armed < revision,
-      detail: armed === 0 ? 'unarmed' : `armed at ${String(armed)}`,
+      holds: armed < revision || disarmed !== null,
+      detail: armedDetail(armed, disarmed),
     },
   ];
 }
 
-function firstFailure(context: PublicationContext, revision: number): string | undefined {
-  return armingPreconditions(context.db, context.installedKinds, revision).find(
-    (precondition) => !precondition.holds,
-  )?.reason;
+/**
+ * What stopping asks, which is much less than starting.
+ *
+ * Disarming is the safe direction. It refuses only what would be a no-op, because a precondition
+ * that could block a stop is a precondition that holds a destructive capability open.
+ */
+export function disarmPreconditions(db: SqliteHandle): readonly ArmingPrecondition[] {
+  const pairing = readSubstratePairing(db);
+  const armed = pairing?.evictionCompatibilityRevision ?? 0;
+  const disarmed = pairing?.evictionDisarmedAt ?? null;
+  return [
+    {
+      name: 'the substrate has a control record to stamp',
+      reason: 'substrate_not_initialized',
+      holds: pairing !== undefined,
+      detail: pairing === undefined ? 'no pairing record' : pairing.bootstrapState,
+    },
+    {
+      name: 'the fence is open',
+      reason: 'not_armed',
+      holds: armed > 0,
+      detail: armed === 0 ? 'never armed' : `armed at ${String(armed)}`,
+    },
+    {
+      name: 'the fence has not already been stopped',
+      reason: 'already_disarmed',
+      holds: disarmed === null,
+      detail: disarmed === null ? 'not disarmed' : `disarmed at ${disarmed}`,
+    },
+  ];
 }
 
-/** One arming act, one identity, so a retry lands on the receipt the first attempt took. */
-export function evictionArmingOperationId(revision: number, coverageEpoch: string): string {
-  return `eviction-arming:${String(revision)}:${coverageEpoch}`;
+function firstFailure(
+  context: PublicationContext,
+  act: 'arm' | 'disarm',
+  revision: number,
+): string | undefined {
+  const checks =
+    act === 'disarm'
+      ? disarmPreconditions(context.db)
+      : armingPreconditions(context.db, context.installedKinds, revision);
+  return checks.find((precondition) => !precondition.holds)?.reason;
+}
+
+/**
+ * One act, one identity, so a retry lands on the receipt the first attempt took.
+ *
+ * The moment is in the identity because arming and stopping can each happen more than once on one
+ * substrate under one revision and one contract, and each of those is its own decision with its
+ * own receipt rather than a replay of the last one.
+ */
+export function evictionArmingOperationId(
+  act: 'arm' | 'disarm',
+  revision: number,
+  coverageEpoch: string,
+  at: Date,
+): string {
+  return `eviction-${act}:${String(revision)}:${coverageEpoch}:${at.toISOString()}`;
 }
 
 export const evictionArmingPublication = new PublicationOperation({
@@ -146,11 +242,13 @@ export const evictionArmingPublication = new PublicationOperation({
         heads: [],
       },
       scopes: [],
-      effects: [{ kind: 'eviction_control', detail: { revision: payload.revision } }],
+      effects: [
+        { kind: 'eviction_control', detail: { act: payload.act, revision: payload.revision } },
+      ],
     });
   },
   check(context, data) {
-    const failed = firstFailure(context, data.revision);
+    const failed = firstFailure(context, data.act, data.revision);
     return Promise.resolve(
       failed === undefined
         ? ({ status: 'valid' } as const)
@@ -158,19 +256,23 @@ export const evictionArmingPublication = new PublicationOperation({
     );
   },
   applyGraph(_context, data) {
-    // Nothing in the graph changes. What this operation writes is a permission, and the graph is
-    // what the permission is about.
-    return Promise.resolve({ revision: data.revision });
+    // Nothing in the graph changes either way. What this operation writes is a permission, and
+    // the graph is what the permission is about.
+    return Promise.resolve({ act: data.act, revision: data.revision });
   },
   prepareSqlite() {
     return undefined;
   },
   acknowledgeSqlite(context, data) {
+    if (data.act === 'disarm') {
+      recordEvictionDisarm(context.db, data.observedAt);
+      return undefined;
+    }
     establishEvictionCompatibility(context.db, data.revision);
     return undefined;
   },
   discardSqlite() {
-    // Nothing was prepared. A refused arming leaves a substrate exactly as fenced as it was.
+    // Nothing was prepared. A refused act leaves a substrate exactly as fenced as it was.
     return undefined;
   },
 });

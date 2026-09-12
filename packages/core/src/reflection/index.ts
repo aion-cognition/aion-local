@@ -29,7 +29,9 @@ export {
  * nothing in initialization, the service or the maintenance catalog reaches this.
  */
 export {
+  ARMING_NOT_VERIFIED,
   armingPreconditions,
+  disarmPreconditions,
   EVICTION_COMPATIBILITY_REVISION,
   evictionArmingOperationId,
   evictionArmingPublication,

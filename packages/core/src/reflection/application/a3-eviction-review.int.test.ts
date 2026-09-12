@@ -6,6 +6,7 @@ import {
   acceptEpisode,
   activateCoverage,
   armEviction,
+  disarmEviction,
   driver,
   eligibleSource,
   evictionPayload,
@@ -602,4 +603,29 @@ it('pins a member whose neighbour carries a gap for a reason the rider does not 
     restore.run(original, chunkId, head?.revisionNo ?? 0);
   }
   expect(durableEligibility(store.db, healthy, POLICY).status).toBe('eligible');
+});
+
+it('refuses a prepared attempt whose substrate was stopped under it', async () => {
+  const sourceId = await eligibleSource('evict-disarmed', 'S1');
+  const nomination = await nominate(sourceId);
+
+  await disarmEviction();
+  try {
+    // The guard re-derives eligibility, and the stop is part of it, so honouring a disarm inside
+    // the guard costs nothing extra: an attempt nominated before the stop refuses after it.
+    expect(await publishEviction(nomination)).toMatchObject({
+      status: 'deferred',
+      reason: 'compatibility_disarmed',
+    });
+    expect(await nodeExists(driver, sourceId)).toBe(true);
+    expect(durableEligibility(store.db, sourceId, POLICY)).toEqual({
+      status: 'pinned',
+      reason: 'compatibility_disarmed',
+    });
+  } finally {
+    await armEviction();
+  }
+
+  // Stopping was never about this source: armed again, it is exactly where it was.
+  expect(durableEligibility(store.db, sourceId, POLICY).status).toBe('eligible');
 });

@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, expect, it } from 'vitest';
 
 import {
+  ARMING_NOT_VERIFIED,
   armingPreconditions,
+  disarmPreconditions,
   EVICTION_COMPATIBILITY_REVISION,
   evictionArmingPublication,
 } from './eviction-arming.js';
@@ -72,9 +74,13 @@ function failing(kinds: readonly PublicationKind[], revision: number): readonly 
     .map((precondition) => precondition.reason);
 }
 
-function plan(revision: number, coverageEpoch: string): PublicationPlan {
+function plan(
+  revision: number,
+  coverageEpoch: string,
+  act: 'arm' | 'disarm' = 'arm',
+): PublicationPlan {
   return {
-    data: { revision, coverageEpoch },
+    data: { act, revision, coverageEpoch, observedAt: NOW },
     expected: {
       coverageEpoch,
       evidence: buildEvidenceRevision([]),
@@ -82,7 +88,7 @@ function plan(revision: number, coverageEpoch: string): PublicationPlan {
       heads: [],
     },
     scopes: [],
-    effects: [{ kind: 'eviction_control', detail: { revision } }],
+    effects: [{ kind: 'eviction_control', detail: { act, revision } }],
   };
 }
 
@@ -146,7 +152,7 @@ it('refuses to arm a fence that already reads at that revision', () => {
   evictionArmingPublication.acknowledgeSqlite(
     ackContext(),
     plan(EVICTION_COMPATIBILITY_REVISION, readCurrentCoverageContract(store.db)!.epoch),
-    { revision: EVICTION_COMPATIBILITY_REVISION },
+    { act: 'arm', revision: EVICTION_COMPATIBILITY_REVISION },
   );
   expect(failing(PUBLICATION_KINDS, EVICTION_COMPATIBILITY_REVISION)).toEqual(['already_armed']);
 });
@@ -167,8 +173,10 @@ it('answers the check with the first precondition that fails, and writes nothing
 it('binds the epoch the operator asked under, which is what the coverage fence compares', async () => {
   seedReadySubstrate();
   const prepared = await evictionArmingPublication.prepare(context(PUBLICATION_KINDS), {
+    act: 'arm',
     revision: EVICTION_COMPATIBILITY_REVISION,
     coverageEpoch: 'an-older-epoch',
+    observedAt: NOW,
   });
   // The coordinator refuses `coverage_epoch_changed` on this field before the handler is asked,
   // so the request carries its own epoch rather than picking up whichever is current here.
@@ -187,6 +195,7 @@ it('admits the act and arms the fence in the acknowledgment', async () => {
   expect(armedRevision()).toBe(0);
 
   evictionArmingPublication.acknowledgeSqlite(ackContext(), armed, {
+    act: 'arm',
     revision: EVICTION_COMPATIBILITY_REVISION,
   });
   expect(armedRevision()).toBe(EVICTION_COMPATIBILITY_REVISION);
@@ -201,4 +210,85 @@ it('leaves the fence where it was when the act is discarded', () => {
     'writer_audit_incomplete',
   );
   expect(armedRevision()).toBe(0);
+});
+
+it('names what it does not verify, beside every list of what it does', () => {
+  // The table is the small half. An operator reading six passing lines with nothing beside them
+  // takes more assurance out of them than anybody put in, so the gaps ship with the checks.
+  expect(ARMING_NOT_VERIFIED.length).toBeGreaterThan(0);
+  expect(ARMING_NOT_VERIFIED.join(' ')).toContain('writer audit');
+  expect(ARMING_NOT_VERIFIED.join(' ')).toContain('outside the publication protocol');
+});
+
+it('stops the fence with a stamp and leaves the revision where it stands', () => {
+  seedReadySubstrate();
+  const { epoch } = readCurrentCoverageContract(store.db)!;
+  evictionArmingPublication.acknowledgeSqlite(
+    ackContext(),
+    plan(EVICTION_COMPATIBILITY_REVISION, epoch),
+    { act: 'arm', revision: EVICTION_COMPATIBILITY_REVISION },
+  );
+
+  evictionArmingPublication.acknowledgeSqlite(
+    ackContext(),
+    plan(EVICTION_COMPATIBILITY_REVISION, epoch, 'disarm'),
+    { act: 'disarm', revision: EVICTION_COMPATIBILITY_REVISION },
+  );
+
+  expect(armedRevision()).toBe(EVICTION_COMPATIBILITY_REVISION);
+  expect(readSubstratePairing(store.db)?.evictionDisarmedAt).toBe(NOW);
+});
+
+it('refuses a stop that is not one: never armed, or already stopped', () => {
+  expect(disarmPreconditions(store.db).map((check) => check.reason)).toEqual([
+    'substrate_not_initialized',
+    'not_armed',
+    'already_disarmed',
+  ]);
+
+  seedReadySubstrate();
+  const { epoch } = readCurrentCoverageContract(store.db)!;
+  const armed = plan(EVICTION_COMPATIBILITY_REVISION, epoch);
+  evictionArmingPublication.acknowledgeSqlite(ackContext(), armed, {
+    act: 'arm',
+    revision: EVICTION_COMPATIBILITY_REVISION,
+  });
+  expect(disarmPreconditions(store.db).filter((check) => !check.holds)).toEqual([]);
+
+  evictionArmingPublication.acknowledgeSqlite(
+    ackContext(),
+    plan(EVICTION_COMPATIBILITY_REVISION, epoch, 'disarm'),
+    { act: 'disarm', revision: EVICTION_COMPATIBILITY_REVISION },
+  );
+  expect(
+    disarmPreconditions(store.db)
+      .filter((check) => !check.holds)
+      .map((c) => c.reason),
+  ).toEqual(['already_disarmed']);
+});
+
+it('lets a stopped substrate be armed again at the same revision', () => {
+  seedReadySubstrate();
+  const { epoch } = readCurrentCoverageContract(store.db)!;
+  const armed = plan(EVICTION_COMPATIBILITY_REVISION, epoch);
+  evictionArmingPublication.acknowledgeSqlite(ackContext(), armed, {
+    act: 'arm',
+    revision: EVICTION_COMPATIBILITY_REVISION,
+  });
+  // Armed and not stopped: arming again is the no-op the fence refuses.
+  expect(failing(PUBLICATION_KINDS, EVICTION_COMPATIBILITY_REVISION)).toEqual(['already_armed']);
+
+  evictionArmingPublication.acknowledgeSqlite(
+    ackContext(),
+    plan(EVICTION_COMPATIBILITY_REVISION, epoch, 'disarm'),
+    { act: 'disarm', revision: EVICTION_COMPATIBILITY_REVISION },
+  );
+
+  // Stopped: arming is what reverses the stop, so it is admitted and it clears the stamp.
+  expect(failing(PUBLICATION_KINDS, EVICTION_COMPATIBILITY_REVISION)).toEqual([]);
+  evictionArmingPublication.acknowledgeSqlite(ackContext(), armed, {
+    act: 'arm',
+    revision: EVICTION_COMPATIBILITY_REVISION,
+  });
+  expect(readSubstratePairing(store.db)?.evictionDisarmedAt).toBeNull();
 });

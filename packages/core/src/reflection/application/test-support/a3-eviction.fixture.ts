@@ -332,8 +332,30 @@ export async function armEviction(): Promise<void> {
     // epoch alone. The battery clears the fence to show a source pinned without it and arms again
     // to show it is not, and a replay of the first act's identity would hand back that act's
     // recorded result without writing anything.
-    operationId: `${evictionArmingOperationId(EVICTION_COMPATIBILITY_REVISION, epoch)}:${String(armAttempt)}`,
-    payload: { revision: EVICTION_COMPATIBILITY_REVISION, coverageEpoch: epoch },
+    operationId: `${evictionArmingOperationId('arm', EVICTION_COMPATIBILITY_REVISION, epoch, NOW)}:${String(armAttempt)}`,
+    payload: {
+      act: 'arm',
+      revision: EVICTION_COMPATIBILITY_REVISION,
+      coverageEpoch: epoch,
+      observedAt: NOW.toISOString(),
+    },
+  });
+  expect(outcome.status).toBe('acknowledged');
+}
+
+/** The operator's stop, through the same operation, so the battery can hold the fence shut. */
+export async function disarmEviction(): Promise<void> {
+  const epoch = readCurrentCoverageContract(store.db)?.epoch ?? '';
+  armAttempt += 1;
+  const outcome = await publications.publish({
+    kind: evictionArmingPublication.kind,
+    operationId: `${evictionArmingOperationId('disarm', EVICTION_COMPATIBILITY_REVISION, epoch, NOW)}:${String(armAttempt)}`,
+    payload: {
+      act: 'disarm',
+      revision: EVICTION_COMPATIBILITY_REVISION,
+      coverageEpoch: epoch,
+      observedAt: NOW.toISOString(),
+    },
   });
   expect(outcome.status).toBe('acknowledged');
 }

@@ -28,8 +28,9 @@ const REPO_ROOT = fileURLToPath(new URL('../../../../../', import.meta.url));
 const PACKAGES_DIR = join(REPO_ROOT, 'packages');
 const CAPABILITY_COLUMN = 'eviction_compatibility_revision';
 const COVERAGE_COLUMN = 'activation_capability_revision';
-/** The one function that reaches the column, so the caller scan does not depend on SQL text. */
+/** The two functions that reach the row, so the caller scan does not depend on SQL text. */
 const ARMING_WRITER = 'establishEvictionCompatibility';
+const DISARM_WRITER = 'recordEvictionDisarm';
 
 /**
  * A write is an UPDATE, an INSERT or a REPLACE reaching this column; a read of it is not one.
@@ -153,15 +154,50 @@ describe('the eviction compatibility capability is not armed by any production w
     expect(arming.slice(arming.indexOf('acknowledgeSqlite')).includes(ARMING_WRITER)).toBe(true);
   });
 
-  it('finds no arming call from initialization, the service or the maintenance catalog', () => {
-    // The arming act is an operator's. A caller here would make it a side effect of starting up.
-    const forbidden = ['cli/src/init.ts', 'mcp/src/bootstrap.ts', 'introspection/application'];
-    const reached = files.filter(
-      (file) =>
-        forbidden.some((part) => relative(REPO_ROOT, file).includes(join(...part.split('/')))) &&
-        readFileSync(file, 'utf8').includes(ARMING_WRITER),
+  it('finds one production caller of the stop, and it is the same acknowledgment', () => {
+    const definition = join(
+      PACKAGES_DIR,
+      'core',
+      'src',
+      'infrastructure',
+      'sqlite',
+      'publication-control.ts',
     );
+    const callers = files.filter(
+      (file) => file !== definition && readFileSync(file, 'utf8').includes(`${DISARM_WRITER}(`),
+    );
+    expect(callers.map((file) => relative(REPO_ROOT, file))).toEqual([
+      join('packages', 'core', 'src', 'reflection', 'application', 'eviction-arming.ts'),
+    ]);
+  });
+
+  it('finds neither act called from initialization, the service or the maintenance catalog', () => {
+    // Both acts are an operator's. A caller here would make one a side effect of starting up.
+    const forbidden = ['cli/src/init.ts', 'mcp/src/bootstrap.ts', 'introspection/application'];
+    const reached = files.filter((file) => {
+      const source = readFileSync(file, 'utf8');
+      return (
+        forbidden.some((part) => relative(REPO_ROOT, file).includes(join(...part.split('/')))) &&
+        (source.includes(ARMING_WRITER) || source.includes(DISARM_WRITER))
+      );
+    });
     expect(reached.map((file) => relative(REPO_ROOT, file))).toEqual([]);
+  });
+
+  it('still finds the stop read before the revision, which is what makes it fail-closed', () => {
+    const fence = join(
+      PACKAGES_DIR,
+      'core',
+      'src',
+      'reflection',
+      'application',
+      'eviction-eligibility.ts',
+    );
+    const source = readFileSync(fence, 'utf8');
+    expect(source.indexOf('evictionDisarmedAt !== null')).toBeGreaterThan(0);
+    expect(source.indexOf('evictionDisarmedAt !== null')).toBeLessThan(
+      source.indexOf('evictionCompatibilityRevision <= 0'),
+    );
   });
 
   it('still finds the column read and the fence that acts on what it says', () => {

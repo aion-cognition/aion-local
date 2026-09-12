@@ -21,9 +21,15 @@ export const PUBLICATION_SCHEMA_STATEMENTS: readonly string[] = [
    * `activation_capability_revision`: it is the coverage capability the substrate has
    * established, and the activation publication names it so a request cannot claim a capability
    * nothing recorded. Eviction reads `eviction_compatibility_revision`: it is the destructive
-   * capability's arming fence, owned by the compatibility audit, and nothing in production
-   * writes it. An active coverage contract therefore says nothing about whether eviction may
-   * remove anything.
+   * capability's arming fence, and one audited operation an operator publishes by hand is the
+   * only thing that writes it. An active coverage contract therefore says nothing about whether
+   * eviction may remove anything.
+   *
+   * `eviction_disarmed_at` is the stop, and it is its own fact rather than a lower revision. A
+   * revision that could move down would let a later reader mistake a deliberate stop for a
+   * capability nobody had established yet, and it would lose the record that this substrate was
+   * armed once. So the revision only ever goes up, the stop is a stamp beside it, and eviction
+   * refuses on the stamp before it looks at the number.
    */
   `CREATE TABLE IF NOT EXISTS publication_control (
     substrate_id TEXT PRIMARY KEY,
@@ -33,7 +39,8 @@ export const PUBLICATION_SCHEMA_STATEMENTS: readonly string[] = [
     pending_operation_id TEXT,
     last_known_from TEXT,
     activation_capability_revision INTEGER NOT NULL DEFAULT 0,
-    eviction_compatibility_revision INTEGER NOT NULL DEFAULT 0
+    eviction_compatibility_revision INTEGER NOT NULL DEFAULT 0,
+    eviction_disarmed_at TEXT
   )`,
   /**
    * One immutable row per publication, holding both the prepared input and the outcome.

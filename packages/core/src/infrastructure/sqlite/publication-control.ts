@@ -19,6 +19,10 @@ import { decimalSequence } from '../publication/json.js';
  * capability the substrate has established and is what the coverage activation publication
  * names. `evictionCompatibilityRevision` is the destructive capability's arming fence, and a
  * substrate whose coverage is active still reads zero here.
+ *
+ * `evictionDisarmedAt` is the stop beside that fence, and it wins over the number. A stamp here
+ * means somebody armed this substrate and then took it back, which is a different fact from
+ * never having armed it and has to stay readable as one.
  */
 export type SubstratePairing = {
   readonly substrateId: string;
@@ -29,6 +33,7 @@ export type SubstratePairing = {
   readonly lastKnownFrom: string | null;
   readonly activationCapabilityRevision: number;
   readonly evictionCompatibilityRevision: number;
+  readonly evictionDisarmedAt: string | null;
 };
 
 type PairingRowData = {
@@ -40,11 +45,12 @@ type PairingRowData = {
   last_known_from: string | null;
   activation_capability_revision: number;
   eviction_compatibility_revision: number;
+  eviction_disarmed_at: string | null;
 };
 
 const SELECT_PAIRING = `SELECT substrate_id, bootstrap_state, protocol_version, CAST(last_ack_sequence AS TEXT) AS last_ack_sequence,
     pending_operation_id, last_known_from, activation_capability_revision,
-    eviction_compatibility_revision
+    eviction_compatibility_revision, eviction_disarmed_at
   FROM publication_control LIMIT 1`;
 
 function toPairing(row: PairingRowData): SubstratePairing {
@@ -57,6 +63,7 @@ function toPairing(row: PairingRowData): SubstratePairing {
     lastKnownFrom: row.last_known_from,
     activationCapabilityRevision: row.activation_capability_revision,
     evictionCompatibilityRevision: row.eviction_compatibility_revision,
+    evictionDisarmedAt: row.eviction_disarmed_at,
   };
 }
 
@@ -90,6 +97,7 @@ export function beginSubstratePairing(db: SqliteHandle, protocolVersion: number)
         lastKnownFrom: null,
         activationCapabilityRevision: 0,
         evictionCompatibilityRevision: 0,
+        evictionDisarmedAt: null,
       };
     })
     .immediate();
@@ -169,11 +177,40 @@ export function establishEvictionCompatibility(db: SqliteHandle, revision: numbe
         `UPDATE publication_control SET eviction_compatibility_revision = ?
          WHERE eviction_compatibility_revision < ?`,
       ).run(revision, revision);
+      // Arming is what un-stops a stopped substrate, in the same act and the same transaction.
+      // A substrate left armed by the number and stopped by the stamp would refuse every
+      // eviction while reporting itself armed, which is the worst of both readings.
+      db.prepare('UPDATE publication_control SET eviction_disarmed_at = NULL').run();
       const pairing = readSubstratePairing(db);
       if (pairing === undefined) {
         throw new Error('no publication control record to arm');
       }
       return pairing.evictionCompatibilityRevision;
+    })
+    .immediate();
+}
+
+/**
+ * Stops eviction, and leaves the record that it was armed.
+ *
+ * The counterpart to arming, and deliberately not its inverse: the revision is untouched, so the
+ * capability this substrate established stays readable and a later arming cannot be mistaken for
+ * a first one. What this writes is a separate durable fact that eviction reads first.
+ *
+ * It stops future evictions. It does not and cannot undo one that already happened: an eviction
+ * removed a projection under a receipt, and nothing here puts it back.
+ */
+export function recordEvictionDisarm(db: SqliteHandle, disarmedAt: string): string | null {
+  return db
+    .transaction((): string | null => {
+      db.prepare(
+        'UPDATE publication_control SET eviction_disarmed_at = ? WHERE eviction_disarmed_at IS NULL',
+      ).run(disarmedAt);
+      const pairing = readSubstratePairing(db);
+      if (pairing === undefined) {
+        throw new Error('no publication control record to disarm');
+      }
+      return pairing.evictionDisarmedAt;
     })
     .immediate();
 }
