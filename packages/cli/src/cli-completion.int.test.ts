@@ -1,6 +1,9 @@
 import {
+  activateCoverageOnStart,
   bootstrapBackbone,
+  INSTALLED_PUBLICATION_HANDLERS,
   openSqliteHandle,
+  PublicationCoordinator,
   recordPackMethodCounts,
   recordRecallOutcome,
   recordSupersessionProposal,
@@ -16,6 +19,7 @@ import {
   stopNeo4jHarness,
   type Neo4jHarness,
 } from '@aion/core/infrastructure/graph/test-support/neo4j-harness.fixture.js';
+import type { CoverageEnvelope } from '@aion/protocol';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -45,6 +49,12 @@ const ENV_KEYS = [
   'AION_LOG_FILE',
   'AION_LOG_LEVEL',
 ] as const;
+
+/**
+ * What `--json` emits. The bare result array this replaced could not tell an empty answer from
+ * a refused one, so the version is asserted alongside the ids rather than assumed.
+ */
+type SearchEnvelope = CoverageEnvelope<{ readonly id: string }>;
 
 function collector(): { lines: string[]; write: (line: string) => void } {
   const lines: string[] = [];
@@ -86,6 +96,20 @@ beforeAll(async () => {
   await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
   await bootstrapBackbone(harness.driver, { memberName: 'CLI Completion Test' });
 
+  // `why` and `search` answer only what the coverage record says they cover, and an absent
+  // record is a refusal rather than an empty answer. Seeding through the same coordinator the
+  // service starts with, because these commands are asked what the substrate covers, and a
+  // fixture that wrote the row by hand would be asserting against a contract nothing signed.
+  const publications = new PublicationCoordinator({
+    driver: harness.driver,
+    db,
+    logger: { warn: () => undefined, error: () => undefined },
+    handlers: [...INSTALLED_PUBLICATION_HANDLERS],
+  });
+  await publications.initialize();
+  const coverage = await activateCoverageOnStart(publications, db);
+  expect(coverage.state).toBe('active');
+
   process.env.AION_NEO4J_URI = harness.uri;
   process.env.AION_NEO4J_PASSWORD = harness.password;
   process.env.AION_SQLITE_PATH = sqlitePath;
@@ -100,7 +124,7 @@ beforeAll(async () => {
       properties: { summary: 'a planning conversation about the sync engine' },
     })
   ).id;
-}, 180_000);
+}, 300_000);
 
 afterAll(async () => {
   db.close();
@@ -209,7 +233,9 @@ describe('aion search against a seeded substrate', () => {
       0,
     );
 
-    const results = JSON.parse(lines.join('')) as { id: string }[];
+    const envelope = JSON.parse(lines.join('')) as SearchEnvelope;
+    expect(envelope.schema_version).toBe(1);
+    const { results } = envelope;
     const ids = results.map((row) => row.id);
     expect(ids).toContain(beforeId);
     expect(ids).not.toContain(afterId);
@@ -222,7 +248,9 @@ describe('aion search against a seeded substrate', () => {
       0,
     );
 
-    const results = JSON.parse(lines.join('')) as { id: string }[];
+    const envelope = JSON.parse(lines.join('')) as SearchEnvelope;
+    expect(envelope.schema_version).toBe(1);
+    const { results } = envelope;
     const ids = results.map((row) => row.id);
     expect(ids).toContain(afterId);
     expect(ids).not.toContain(beforeId);
@@ -247,7 +275,9 @@ describe('aion forget against a seeded substrate', () => {
 
     const { lines, write } = collector();
     expect(await runSearch([QUERY, '--json'], write)).toBe(0);
-    const results = JSON.parse(lines.join('')) as { id: string }[];
+    const envelope = JSON.parse(lines.join('')) as SearchEnvelope;
+    expect(envelope.schema_version).toBe(1);
+    const { results } = envelope;
     expect(results.map((row) => row.id)).not.toContain(id);
   });
 
@@ -256,7 +286,9 @@ describe('aion forget against a seeded substrate', () => {
 
     expect(await runSearch([QUERY, '--knew-at', beforeForget, '--json'], write)).toBe(0);
 
-    const results = JSON.parse(lines.join('')) as { id: string }[];
+    const envelope = JSON.parse(lines.join('')) as SearchEnvelope;
+    expect(envelope.schema_version).toBe(1);
+    const { results } = envelope;
     expect(results.map((row) => row.id)).toContain(id);
   });
 });
