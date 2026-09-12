@@ -16,6 +16,7 @@ export { DEFAULT_SQLITE_PATH, SqliteStore, openSqliteHandle } from './sqlite/dat
 export type { SqliteHandle } from './sqlite/database.js';
 
 export { PublicationCoordinator } from './publication/coordinator.js';
+export type { PublicationOutcome } from './publication/types.js';
 /** The startup step that lifts a prepared coverage contract to active, and says what it reached. */
 export { activateCoverageOnStart } from './publication/coverage-activation.js';
 

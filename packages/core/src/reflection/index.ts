@@ -15,6 +15,15 @@ export type { ReflectionIntakeDeps } from './application/intake.js';
  */
 export { INSTALLED_PUBLICATION_HANDLERS } from './application/installed-publications.js';
 
+/**
+ * The suppression writer's identity, exported because `aion forget` and `aion unforget` are the
+ * two callers: a command states the act and the coordinator does the writing.
+ */
+export {
+  sourceSuppressionOperationId,
+  sourceSuppressionPublication,
+} from './application/source-suppression.js';
+
 export { LaneAssigner } from './application/lanes.js';
 
 export { recordLifecycleEvent } from './application/lifecycle-events.js';

@@ -326,10 +326,19 @@ recorded, so the reversal names the evidence that was wrong rather than only the
 
 ```
 aion forget <id | query> [--yes]
+aion unforget <node_id> [--yes]
 ```
 
 `forget` sets `forgotten_at` and deletes nothing. Default recall stops serving the node;
 `aion search --as-of` and `--knew-at` still return it, which is what keeps the act audited.
+
+Both go through the publication coordinator, so each act leaves a receipt and, for a node the
+records hold as a source, a statement in that source's own append-only chain. `unforget` drops
+the stamp and adds the reversal after the forget rather than erasing it: a `knew_at` read from
+before the reversal still finds the substrate believing the node was gone.
+
+It is not `aion unsupersede`. That reopens a close and leaves a forget standing; this drops a
+forget and leaves a supersession standing. Two suppressions, one act each, one undo each.
 
 ## Standing intentions
 

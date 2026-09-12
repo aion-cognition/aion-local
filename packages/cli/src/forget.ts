@@ -1,7 +1,6 @@
 import {
   embedQueryPrefix,
   fetchNodeProvenance,
-  forgetNode,
   OllamaProvider,
   selectSeeds,
   type Config,
@@ -9,19 +8,25 @@ import {
   type Logger,
   type Seed,
   type SeedCue,
+  type SqliteHandle,
 } from '@aion/core';
 
 import { CliUsageError, parseArgs, type ArgSpec } from './args.js';
 import { preview } from './format.js';
 import { confirmOrExit, stderrWriter, stdoutWriter, type Writer } from './output.js';
 import { withSubstrate } from './substrate.js';
+import { publishSuppression, reportSuppression } from './suppression.js';
 
 /**
  * `aion forget <id|query>`: the one true suppression, and the only writing command in this
  * file. By id it asks before it writes; by query it resolves through the same seed layer
- * `aion search` uses and refuses to guess among more than one match. Nothing is deleted:
- * `forgetNode` sets `forgotten_at`, and `as_of`/`knew_at` reads keep seeing the row
- * (`read-modes.ts`) so the audit trail survives.
+ * `aion search` uses and refuses to guess among more than one match. Nothing is deleted: the
+ * stamp is `forgotten_at`, and `as_of`/`knew_at` reads keep seeing the row (`read-modes.ts`) so
+ * the audit trail survives.
+ *
+ * The write goes through the publication coordinator rather than the driver. A forget is a
+ * statement about a node that outlives the content it was about, and a command that stamped the
+ * graph directly left nothing durable saying anybody had said it.
  */
 
 const SPEC: ArgSpec = {
@@ -55,26 +60,17 @@ export function looksLikeNodeId(value: string): boolean {
   return UUID_SHAPE.test(value) || HEX_ID_SHAPE.test(value);
 }
 
-function reportForgotten(
-  write: Writer,
-  logger: Logger,
-  id: string,
-  result: { readonly forgottenAt: Date; readonly justForgotten: boolean },
-): void {
-  logger.warn({ nodeId: id, forgottenAt: result.forgottenAt.toISOString() }, 'node forgotten');
-  write(
-    result.justForgotten
-      ? `forgot ${id} at ${result.forgottenAt.toISOString()}`
-      : `${id} was already forgotten, at ${result.forgottenAt.toISOString()}`,
-  );
-  write('nothing was deleted; --as-of/--knew-at reads on `aion search` still find it');
-}
-
 type ForgetDeps = {
   readonly connection: GraphConnection;
+  readonly db: SqliteHandle;
   readonly config: Config;
   readonly logger: Logger;
 };
+
+async function forget(deps: ForgetDeps, id: string, write: Writer): Promise<number> {
+  const report = await publishSuppression(deps, 'forget', id, new Date());
+  return reportSuppression('forget', id, report, deps.logger, write);
+}
 
 async function forgetById(
   deps: ForgetDeps,
@@ -95,9 +91,7 @@ async function forgetById(
     return 1;
   }
 
-  const result = await forgetNode(deps.connection.driver, { id });
-  reportForgotten(write, deps.logger, id, result);
-  return 0;
+  return await forget(deps, id, write);
 }
 
 function renderMatches(matches: readonly Seed[], write: Writer): void {
@@ -155,9 +149,7 @@ async function forgetByQuery(
     return 0;
   }
 
-  const result = await forgetNode(deps.connection.driver, { id: only.id });
-  reportForgotten(write, deps.logger, only.id, result);
-  return 0;
+  return await forget(deps, only.id, write);
 }
 
 export function runForget(
@@ -173,6 +165,7 @@ export function runForget(
     run: async (substrate, flags) => {
       const deps: ForgetDeps = {
         connection: substrate.connection(),
+        db: substrate.db(),
         config: substrate.config,
         logger: substrate.logger(),
       };

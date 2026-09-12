@@ -370,6 +370,14 @@ const FORGET_NODE = [
   `       n.${BITEMPORAL_PROPERTIES.forgottenAt} = $now AS justForgotten`,
 ].join('\n');
 
+function mapForgetRow(row: Row): ForgetNodeResult {
+  return {
+    id: row.id as string,
+    forgottenAt: row.forgottenAt as Date,
+    justForgotten: row.justForgotten === true,
+  };
+}
+
 /**
  * `aion forget`'s write: the one true suppression, and the only bitemporal close that touches
  * no other node. `coalesce` keeps the first forget's timestamp, so a repeated call is a no-op
@@ -385,15 +393,85 @@ export async function forgetNode(
     driver,
     FORGET_NODE,
     { id: input.id, now: toGraphDateTime(now) },
-    (row) => ({
-      id: row.id as string,
-      forgottenAt: row.forgottenAt as Date,
-      justForgotten: row.justForgotten === true,
-    }),
+    mapForgetRow,
   );
   const row = rows[0];
   if (row === undefined) {
     throw new GraphNodeNotFoundError([input.id], 'forget');
   }
   return row;
+}
+
+/**
+ * The same stamp inside a caller's transaction, which is where the guarded writer runs it. A
+ * suppression and the durable statement recording it have to land under one receipt, and a
+ * second transaction opened underneath the guard would commit outside it.
+ */
+export async function forgetNodeInTransaction(
+  tx: GraphTransaction,
+  input: ForgetNodeInput & { readonly now: Date },
+): Promise<ForgetNodeResult | undefined> {
+  const rows = await tx.run(
+    FORGET_NODE,
+    { id: input.id, now: toGraphDateTime(input.now) },
+    mapForgetRow,
+  );
+  return rows[0];
+}
+
+export type UnforgetNodeResult = {
+  readonly id: string;
+  /** False when the node carried no stamp, which makes a repeated unforget a no-op. */
+  readonly justUnforgotten: boolean;
+};
+
+/**
+ * Dropping the suppression stamp, on `unsupersede`'s pattern rather than by writing a later
+ * interval: an unforget means the node is servable again, and `REMOVE` is what default recall
+ * reads. The supersession stamps are untouched, the mirror image of the rule
+ * `RESTORE_CURRENCY` states — a close and a forget are separate acts, and undoing one is not
+ * consent to undo the other.
+ */
+const UNFORGET_NODE = [
+  `MATCH (n:${BASE_NODE_LABEL} { id: $id })`,
+  `WITH n, n.${BITEMPORAL_PROPERTIES.forgottenAt} IS NOT NULL AS wasForgotten`,
+  `REMOVE n.${BITEMPORAL_PROPERTIES.forgottenAt}`,
+  'RETURN n.id AS id, wasForgotten',
+].join('\n');
+
+export async function unforgetNodeInTransaction(
+  tx: GraphTransaction,
+  input: ForgetNodeInput,
+): Promise<UnforgetNodeResult | undefined> {
+  const rows = await tx.run(UNFORGET_NODE, { id: input.id }, (row) => ({
+    id: row.id as string,
+    justUnforgotten: row.wasForgotten === true,
+  }));
+  return rows[0];
+}
+
+export type NodeSuppressionState = {
+  readonly present: boolean;
+  readonly forgotten: boolean;
+};
+
+const READ_SUPPRESSION_STATE = [
+  `MATCH (n:${BASE_NODE_LABEL} { id: $id })`,
+  `RETURN n.${BITEMPORAL_PROPERTIES.forgottenAt} IS NOT NULL AS forgotten`,
+].join('\n');
+
+/**
+ * What the guard sees about the stamp before it decides. Read inside the operation's own
+ * transaction rather than carried from the command, because a suppression taken on a reading
+ * from before the guard is a decision about a node that may have moved since.
+ */
+export async function suppressionStateInTransaction(
+  tx: GraphTransaction,
+  id: string,
+): Promise<NodeSuppressionState> {
+  const rows = await tx.run(READ_SUPPRESSION_STATE, { id }, (row) => row.forgotten === true);
+  const forgotten = rows[0];
+  return forgotten === undefined
+    ? { present: false, forgotten: false }
+    : { present: true, forgotten };
 }

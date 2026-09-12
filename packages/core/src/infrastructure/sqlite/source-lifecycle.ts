@@ -315,6 +315,20 @@ export function acknowledgeSourceStateVersions(
 }
 
 /**
+ * Drops the statements one rejected operation prepared and nothing can ever adopt.
+ *
+ * A version is keyed on the operation that wrote it, so a retry under a new identity takes a new
+ * row and leaves this one owed by an operation that will never acknowledge. Nothing was in the
+ * committed view, and `hasPendingSourceState` reads an unacknowledged row as a decision about to
+ * move — left behind it would hold every caller that turns on the source's state, permanently.
+ */
+export function releasePreparedSourceStateVersions(db: SqliteHandle, operationId: string): number {
+  return db
+    .prepare('DELETE FROM source_state_versions WHERE operation_id = ? AND known_from IS NULL')
+    .run(operationId).changes;
+}
+
+/**
  * Per-effect acknowledgment for one accepted reference batch. Raw reconstruction and semantic
  * processing are different obligations, so they never share a row and one completing says
  * nothing about the other.

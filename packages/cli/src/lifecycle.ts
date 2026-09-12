@@ -80,6 +80,26 @@ export async function lifecycleIntakeDeps(target: LifecycleTarget): Promise<Refl
 export type NarrativeTarget = Pick<LifecycleTarget, 'connection' | 'db' | 'logger'>;
 
 /**
+ * One initialized coordinator over the whole installed handler set.
+ *
+ * Every command that writes through the protocol builds the same thing, and it is the same for
+ * the same reason each time: a command meeting a pending operation of a kind it did not install
+ * cannot recover it, and there is one receipt, so it must.
+ */
+export async function lifecyclePublications(
+  target: NarrativeTarget,
+): Promise<PublicationCoordinator> {
+  const publications = new PublicationCoordinator({
+    driver: target.connection.driver,
+    db: target.db,
+    logger: target.logger,
+    handlers: [...INSTALLED_PUBLICATION_HANDLERS],
+  });
+  await publications.initialize();
+  return publications;
+}
+
+/**
  * The resolver and coordinator a forced narrative run works through.
  *
  * A forced run is the second driver path, and it has to be the same path. `maintain run
@@ -98,18 +118,11 @@ export async function lifecycleNarrativeDeps(target: NarrativeTarget): Promise<{
   readonly resolver: EvidenceResolver;
   readonly publications: PublicationCoordinator;
 }> {
-  const { driver } = target.connection;
-  const publications = new PublicationCoordinator({
-    driver,
-    db: target.db,
-    logger: target.logger,
-    handlers: [...INSTALLED_PUBLICATION_HANDLERS],
-  });
-  await publications.initialize();
+  const publications = await lifecyclePublications(target);
   return {
     publications,
     resolver: new EvidenceResolver({
-      driver,
+      driver: target.connection.driver,
       db: target.db,
       logger: target.logger,
       publications,
