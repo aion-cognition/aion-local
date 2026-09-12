@@ -63,6 +63,7 @@ let db: SqliteHandle;
 let logger: Logger;
 let dataDir: string;
 let deps: NarrativeDeps;
+let publications: PublicationCoordinator;
 
 function stubProvider(): Provider {
   return {
@@ -117,6 +118,7 @@ function stageContext(sessionId: string, episodeId: string, now: Date): StageCon
   return {
     driver: harness.driver,
     db,
+    publications,
     provider: stubProvider(),
     episodeId,
     episode: { id: episodeId, sessionId, text: `body of ${episodeId}`, turns: [] },
@@ -134,8 +136,9 @@ beforeAll(async () => {
   logger = openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'error' });
   await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
   // Narration publishes; without the coordinator and its SQLite side it fails closed and the
-  // mid-session assertions below read a narrative that was never attempted.
-  const publications = new PublicationCoordinator({
+  // mid-session assertions below read a narrative that was never attempted. The stage cases
+  // reach it through their own context, so it is held for both.
+  publications = new PublicationCoordinator({
     driver: harness.driver,
     db,
     logger,
