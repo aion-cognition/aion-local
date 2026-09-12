@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { coverageCheck, coverageStateCheck } from './doctor-checks.js';
+import { coverageCheck, coverageStateCheck, evictionFence } from './doctor-checks.js';
 import { buildDoctorChecks } from './doctor.js';
 
 /**
@@ -93,5 +93,38 @@ describe('the coverage-state check over a substrate', () => {
     });
 
     expect(checks.map((check) => check.name)).toContain('coverage-state');
+  });
+});
+
+describe('the fence line on a stop nobody finished recording', () => {
+  it('names the operation that owes it and the command that finishes it', () => {
+    const line = evictionFence(
+      report({
+        evictionGate: 'disarmed',
+        evictionCompatibilityRevision: 1,
+        evictionDisarmedAt: null,
+        evictionStopRequestedBy: 'eviction-disarm:1:epoch-1:2026-09-12T10:00:00.000Z',
+      }),
+    );
+
+    // An operator looking at this has to be able to act on it: the claim refuses every eviction
+    // and only finishing the disarm records it, so both facts are on the line.
+    expect(line).toContain('DISARMED');
+    expect(line).toContain('is owed by eviction-disarm:1:epoch-1:2026-09-12T10:00:00.000Z');
+    expect(line).toContain('aion evict disarm');
+    expect(line).toContain('Nothing is removed');
+  });
+
+  it('reads apart from a stop that was recorded', () => {
+    const recorded = evictionFence(
+      report({
+        evictionGate: 'disarmed',
+        evictionCompatibilityRevision: 1,
+        evictionDisarmedAt: '2026-09-12T10:00:00.000Z',
+      }),
+    );
+
+    expect(recorded).toContain('DISARMED at 2026-09-12T10:00:00.000Z');
+    expect(recorded).not.toContain('is owed by');
   });
 });

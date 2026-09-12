@@ -32,6 +32,7 @@ export type PublicationDefinition<P extends JsonValue, D extends JsonValue, R ex
   acknowledgeSqlite(context: PublicationAckContext, data: D, result: R): undefined;
   discardSqlite(context: PublicationSqliteContext, data: D, reason: string): undefined;
   claimBeforeRecovery?(context: PublicationClaimContext, payload: P): undefined;
+  releaseClaim?(context: PublicationClaimContext, payload: P): undefined;
   finishGraph?(context: PublicationContext, data: D, result: R): Promise<void>;
 };
 
@@ -46,6 +47,7 @@ export class PublicationOperation<
   readonly #definition: PublicationDefinition<P, D, R>;
   readonly finishGraph?: PublicationHandler['finishGraph'];
   readonly claimBeforeRecovery?: PublicationHandler['claimBeforeRecovery'];
+  readonly releaseClaim?: PublicationHandler['releaseClaim'];
 
   constructor(definition: PublicationDefinition<P, D, R>) {
     this.kind = definition.kind;
@@ -55,6 +57,12 @@ export class PublicationOperation<
       const claim = definition.claimBeforeRecovery.bind(definition);
       this.claimBeforeRecovery = (context, payload) => {
         claim(context, this.decodePayload(payload));
+      };
+    }
+    if (definition.releaseClaim !== undefined) {
+      const release = definition.releaseClaim.bind(definition);
+      this.releaseClaim = (context, payload) => {
+        release(context, this.decodePayload(payload));
       };
     }
     if (definition.finishGraph !== undefined) {

@@ -1,13 +1,17 @@
 import { expect, it } from 'vitest';
 
 import {
+  armingPreconditions,
   disarmPreconditions,
   EVICTION_COMPATIBILITY_REVISION,
   evictionArmingOperationId,
   evictionArmingPublication,
 } from './eviction-arming.js';
 import { durableEligibility } from './eviction-eligibility.js';
-import { INSTALLED_PUBLICATION_HANDLERS } from './installed-publications.js';
+import {
+  INSTALLED_PUBLICATION_HANDLERS,
+  INSTALLED_PUBLICATION_KINDS,
+} from './installed-publications.js';
 import {
   acceptSource,
   activateCoverage,
@@ -19,7 +23,10 @@ import {
 import { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
 import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
-import { readSubstratePairing } from '../../infrastructure/sqlite/publication-control.js';
+import {
+  claimEvictionStop,
+  readSubstratePairing,
+} from '../../infrastructure/sqlite/publication-control.js';
 import { readCoverageState } from '../../recall/application/coverage-state.js';
 
 /**
@@ -188,4 +195,52 @@ it('stamps the stop with the acknowledgment clock, which is the clock every surf
   expect(disarmedAt()).toBe(stopped.knownFrom);
   expect(readCoverageState(store.db).evictionDisarmedAt).toBe(stopped.knownFrom);
   await arm('arming:clock-restore');
+});
+
+it('releases its claim when the stop itself is refused, so the next one still lands', async () => {
+  // The reviewer's probe, end to end. A refused disarm that strands its name makes every later
+  // claim a first-claim-wins no-op, and the next stop publishes with nothing standing between it
+  // and a pending removal.
+  expect(disarmedAt()).toBeNull();
+  const refused = await act('disarm', 'arming:release-first');
+  expect(refused.status).toBe('acknowledged');
+
+  // A second stop on a stopped substrate is the reachable refusal. Its claim cannot land (the
+  // stamp is down), and what matters is that it leaves nothing behind either.
+  expect(await act('disarm', 'arming:release-second')).toMatchObject({
+    status: 'deferred',
+    reason: 'already_disarmed',
+  });
+  expect(readSubstratePairing(store.db)?.evictionStopRequestedBy).toBeNull();
+
+  await arm('arming:release-restore');
+  expect(disarmedAt()).toBeNull();
+  expect(readSubstratePairing(store.db)?.evictionStopRequestedBy).toBeNull();
+});
+
+it('refuses arming while a stop is owed and nobody has recorded it', async () => {
+  // A claim standing with no operation behind it: what a crashed disarm leaves. Arming must not
+  // clear it silently, because clearing it loses the record that somebody asked to stop.
+  claimEvictionStop(store.db, 'arming:owed-by-nobody');
+  try {
+    const owed = armingPreconditions(
+      store.db,
+      INSTALLED_PUBLICATION_KINDS,
+      EVICTION_COMPATIBILITY_REVISION,
+    ).find((check) => !check.holds);
+    expect(owed?.reason).toBe('eviction_stop_owed');
+    expect(readCoverageState(store.db)).toMatchObject({
+      evictionGate: 'disarmed',
+      evictionStopRequestedBy: 'arming:owed-by-nobody',
+    });
+
+    // And the next disarm adopts it rather than no-opping beside it, which is what lets its own
+    // acknowledgment record the stop and clear the row.
+    const stopped = await act('disarm', 'arming:adopts-the-owed');
+    expect(stopped.status).toBe('acknowledged');
+    expect(readSubstratePairing(store.db)?.evictionStopRequestedBy).toBeNull();
+    expect(disarmedAt()).not.toBeNull();
+  } finally {
+    await arm('arming:owed-restore');
+  }
 });

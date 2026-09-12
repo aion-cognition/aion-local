@@ -12,8 +12,10 @@ import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   claimEvictionStop,
   establishEvictionCompatibility,
+  evictionStopStands,
   readSubstratePairing,
   recordEvictionDisarm,
+  releaseEvictionStopClaim,
 } from '../../infrastructure/sqlite/publication-control.js';
 
 /**
@@ -113,6 +115,11 @@ export function armingPreconditions(
   const contract = readCurrentCoverageContract(db);
   const armed = pairing?.evictionCompatibilityRevision ?? 0;
   const disarmed = pairing?.evictionDisarmedAt ?? null;
+  // The same resolver the fence reads, so this table can never disagree with it.
+  const owing =
+    evictionStopStands(db, pairing) && disarmed === null
+      ? (pairing?.evictionStopRequestedBy ?? 'an unnamed operation')
+      : undefined;
   return [
     {
       name: 'every declared publication kind has an installed handler',
@@ -150,8 +157,20 @@ export function armingPreconditions(
       detail: `build implements ${String(EVICTION_COMPATIBILITY_REVISION)}`,
     },
     {
-      // A stopped substrate is re-armable at the same revision: the stop is what is being
-      // reversed, and refusing it as `already_armed` would leave no way back.
+      // A stop asked for and never recorded is not a stop arming may reverse: clearing it would
+      // lose the record that somebody asked. Finishing the disarm is the way through, and saying
+      // which operation owes it is what makes that actionable.
+      name: 'no stop is owed on this substrate',
+      reason: 'eviction_stop_owed',
+      holds: owing === undefined,
+      detail:
+        owing === undefined
+          ? 'none owed'
+          : `a stop is owed by ${owing}: run \`aion evict disarm\` to finish it`,
+    },
+    {
+      // A RECORDED stop is re-armable at the same revision: the stop is what is being reversed,
+      // and refusing it as `already_armed` would leave no way back.
       name: 'the fence is not already at this revision',
       reason: 'already_armed',
       holds: armed < revision || disarmed !== null,
@@ -270,6 +289,16 @@ export const evictionArmingPublication = new PublicationOperation({
     // acknowledgment would be recorded on a substrate the removal had already left. So the claim
     // goes down here, under the same lock, before anything is settled.
     claimEvictionStop(context.db, context.operationId);
+    return undefined;
+  },
+  releaseClaim(context, payload) {
+    if (payload.act !== 'disarm') {
+      return undefined;
+    }
+    // This request ended without recording a stop, so its name leaves the row with its outcome.
+    // Left behind, the resolver reads it as spent and every later disarm's claim is a no-op
+    // beside it, which puts the removal back in front of the next stop.
+    releaseEvictionStopClaim(context.db, context.operationId);
     return undefined;
   },
   prepareSqlite() {

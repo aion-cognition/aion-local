@@ -537,8 +537,16 @@ its source still resident.
 
 It is not the inverse of arming. The compatibility revision is left where it is, so the
 capability this substrate established stays on the record and a later `arm` cannot be mistaken
-for a first one. A stopped substrate is re-armable at the same revision: arming is what clears the
-stop, in the same act.
+for a first one. A substrate whose stop was **recorded** is re-armable at the same revision:
+arming is what clears the stamp, in the same act.
+
+A stop that was asked for and never recorded is different. `aion evict disarm` claims it durably
+before the guard settles anything, so an attempt that dies after the claim and before its
+acknowledgment leaves the substrate stopped with a claim nobody finished. `aion doctor` and
+`/health` name the operation that owes it. **Running `aion evict disarm` again is what resolves
+it**: the next stop adopts the standing claim and its own acknowledgment records it. `aion evict
+arm` refuses with `eviction_stop_owed` and says so, because clearing an unrecorded stop would lose
+the record that somebody asked for one.
 
 **It stops future evictions and cannot undo one that already happened.** An eviction that reached
 its acknowledgment removed a projection under a receipt, and nothing puts it back.

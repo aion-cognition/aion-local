@@ -269,9 +269,48 @@ export function evictionStopStands(
  * already here belongs to a request whose answer is still coming.
  */
 export function claimEvictionStop(db: SqliteHandle, operationId: string): void {
+  db.transaction((): void => {
+    const pairing = readSubstratePairing(db);
+    if (pairing?.evictionDisarmedAt !== null) {
+      return;
+    }
+    const standing = pairing.evictionStopRequestedBy;
+    if (standing === operationId || (standing !== null && !adoptableClaim(db, standing))) {
+      return;
+    }
+    db.prepare('UPDATE publication_control SET eviction_stop_requested_by = ?').run(operationId);
+  }).immediate();
+}
+
+/**
+ * Whether a standing claim may be taken over by the request asking now.
+ *
+ * A claim whose operation nobody can account for is a crashed attempt: it is holding the substrate
+ * stopped, correctly, and nothing will ever finish it. The next disarm adopts it rather than
+ * no-opping beside it, because a claim it did not take is a claim its own outcome cannot release —
+ * and a stop that cannot be released is the first half of a stop that never lands at all.
+ *
+ * A `prepared` claim is not adoptable: that operation is occupying the receipt and the guard is
+ * about to settle it. An acknowledged one is not either, and cannot be seen here anyway, since the
+ * stamp goes down and clears the claim in the same transaction.
+ */
+function adoptableClaim(db: SqliteHandle, operationId: string): boolean {
+  const state = publicationIntentState(db, operationId);
+  return state === undefined || state === 'deferred' || state === 'rejected';
+}
+
+/**
+ * Releases a claim its own operation is done with, in the step that records it is done.
+ *
+ * A request that ended refused stopped nothing, and its name has to leave the row with its
+ * outcome. Left behind, the resolver reads the claim as spent and every later disarm's claim is a
+ * first-claim-wins no-op beside it, so the next stop publishes with nothing standing between it
+ * and a pending removal.
+ */
+export function releaseEvictionStopClaim(db: SqliteHandle, operationId: string): void {
   db.prepare(
-    `UPDATE publication_control SET eviction_stop_requested_by = ?
-     WHERE eviction_stop_requested_by IS NULL AND eviction_disarmed_at IS NULL`,
+    `UPDATE publication_control SET eviction_stop_requested_by = NULL
+     WHERE eviction_stop_requested_by = ?`,
   ).run(operationId);
 }
 

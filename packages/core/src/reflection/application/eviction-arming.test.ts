@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   ARMING_NOT_VERIFIED,
@@ -27,8 +27,13 @@ import {
   beginSubstratePairing,
   completeSubstratePairing,
   establishActivationCapability,
+  evictionStopStands,
   readSubstratePairing,
 } from '../../infrastructure/sqlite/publication-control.js';
+import {
+  preparePublicationIntent,
+  settleUnacknowledgedIntent,
+} from '../../infrastructure/sqlite/publication-intents.js';
 
 /**
  * The arming act, which is the only thing that lets eviction remove anything.
@@ -291,4 +296,202 @@ it('lets a stopped substrate be armed again at the same revision', () => {
     revision: EVICTION_COMPATIBILITY_REVISION,
   });
   expect(readSubstratePairing(store.db)?.evictionDisarmedAt).toBeNull();
+});
+
+/**
+ * The claim's own lifecycle, which is what keeps the pre-recovery stop a stop.
+ *
+ * A claim its operation cannot release is a claim nothing releases, and a name left standing on
+ * the row makes every later claim a first-claim-wins no-op beside it. The next stop would then
+ * publish with nothing between it and a pending removal, which is the defect the claim exists to
+ * close, reopened one attempt later.
+ */
+describe('the stop claim', () => {
+  function claimed(): string | null {
+    return readSubstratePairing(store.db)?.evictionStopRequestedBy ?? null;
+  }
+
+  function intent(operationId: string, state: 'prepared' | 'deferred'): void {
+    preparePublicationIntent(store.db, {
+      operationId,
+      kind: 'eviction_arming',
+      payloadDigest: `digest:${operationId}`,
+      payloadJson: '{}',
+      affectedScopesJson: '[]',
+      expectedJson: '{}',
+      preparedActionsJson: '[]',
+      createdAt: new Date(NOW),
+    });
+    if (state === 'deferred') {
+      settleUnacknowledgedIntent(store.db, operationId, 'deferred', 'a reason');
+    }
+  }
+
+  beforeEach(() => {
+    seedReadySubstrate();
+    evictionArmingPublication.acknowledgeSqlite(
+      ackContext(),
+      plan(EVICTION_COMPATIBILITY_REVISION, readCurrentCoverageContract(store.db)!.epoch),
+      { act: 'arm', revision: EVICTION_COMPATIBILITY_REVISION },
+    );
+  });
+
+  it('lands on an unclaimed row and refuses eviction from that moment', () => {
+    evictionArmingPublication.claimBeforeRecovery?.(
+      { db: store.db, operationId: 'disarm-1' },
+      {
+        act: 'disarm',
+        revision: EVICTION_COMPATIBILITY_REVISION,
+        coverageEpoch: 'e',
+        observedAt: NOW,
+      },
+    );
+
+    expect(claimed()).toBe('disarm-1');
+    expect(evictionStopStands(store.db, readSubstratePairing(store.db))).toBe(true);
+  });
+
+  it('leaves the row with its own refusal, so the next claim can land', () => {
+    const first = 'disarm-refused';
+    evictionArmingPublication.claimBeforeRecovery?.(
+      { db: store.db, operationId: first },
+      {
+        act: 'disarm',
+        revision: EVICTION_COMPATIBILITY_REVISION,
+        coverageEpoch: 'e',
+        observedAt: NOW,
+      },
+    );
+    intent(first, 'deferred');
+
+    evictionArmingPublication.releaseClaim?.(
+      { db: store.db, operationId: first },
+      {
+        act: 'disarm',
+        revision: EVICTION_COMPATIBILITY_REVISION,
+        coverageEpoch: 'e',
+        observedAt: NOW,
+      },
+    );
+
+    expect(claimed()).toBeNull();
+    expect(evictionStopStands(store.db, readSubstratePairing(store.db))).toBe(false);
+    evictionArmingPublication.claimBeforeRecovery?.(
+      { db: store.db, operationId: 'disarm-2' },
+      {
+        act: 'disarm',
+        revision: EVICTION_COMPATIBILITY_REVISION,
+        coverageEpoch: 'e',
+        observedAt: NOW,
+      },
+    );
+    expect(claimed()).toBe('disarm-2');
+  });
+
+  it('is adopted by the next stop when the attempt that took it crashed', () => {
+    // No intent row at all: the attempt died before its record existed. The claim is holding the
+    // substrate stopped, correctly, and nothing will ever finish it.
+    evictionArmingPublication.claimBeforeRecovery?.(
+      { db: store.db, operationId: 'disarm-crashed' },
+      {
+        act: 'disarm',
+        revision: EVICTION_COMPATIBILITY_REVISION,
+        coverageEpoch: 'e',
+        observedAt: NOW,
+      },
+    );
+    expect(evictionStopStands(store.db, readSubstratePairing(store.db))).toBe(true);
+
+    evictionArmingPublication.claimBeforeRecovery?.(
+      { db: store.db, operationId: 'disarm-next' },
+      {
+        act: 'disarm',
+        revision: EVICTION_COMPATIBILITY_REVISION,
+        coverageEpoch: 'e',
+        observedAt: NOW,
+      },
+    );
+
+    // Repointed, not left alone: a claim this operation did not take is a claim its outcome
+    // cannot release, and the stop stands the whole time either way.
+    expect(claimed()).toBe('disarm-next');
+    expect(evictionStopStands(store.db, readSubstratePairing(store.db))).toBe(true);
+  });
+
+  it('is adopted when a spent claim outlived its refusal', () => {
+    evictionArmingPublication.claimBeforeRecovery?.(
+      { db: store.db, operationId: 'disarm-spent' },
+      {
+        act: 'disarm',
+        revision: EVICTION_COMPATIBILITY_REVISION,
+        coverageEpoch: 'e',
+        observedAt: NOW,
+      },
+    );
+    intent('disarm-spent', 'deferred');
+
+    evictionArmingPublication.claimBeforeRecovery?.(
+      { db: store.db, operationId: 'disarm-after' },
+      {
+        act: 'disarm',
+        revision: EVICTION_COMPATIBILITY_REVISION,
+        coverageEpoch: 'e',
+        observedAt: NOW,
+      },
+    );
+
+    expect(claimed()).toBe('disarm-after');
+    expect(evictionStopStands(store.db, readSubstratePairing(store.db))).toBe(true);
+  });
+
+  it('is left alone while the attempt that took it is still in the receipt', () => {
+    evictionArmingPublication.claimBeforeRecovery?.(
+      { db: store.db, operationId: 'disarm-live' },
+      {
+        act: 'disarm',
+        revision: EVICTION_COMPATIBILITY_REVISION,
+        coverageEpoch: 'e',
+        observedAt: NOW,
+      },
+    );
+    intent('disarm-live', 'prepared');
+
+    evictionArmingPublication.claimBeforeRecovery?.(
+      { db: store.db, operationId: 'disarm-intruder' },
+      {
+        act: 'disarm',
+        revision: EVICTION_COMPATIBILITY_REVISION,
+        coverageEpoch: 'e',
+        observedAt: NOW,
+      },
+    );
+
+    // That operation is occupying the guard and is about to be settled. Taking its claim would
+    // hand its outcome a row it no longer owns.
+    expect(claimed()).toBe('disarm-live');
+  });
+
+  it('refuses arming while a stop is owed, and names who owes it', () => {
+    evictionArmingPublication.claimBeforeRecovery?.(
+      { db: store.db, operationId: 'disarm-owing' },
+      {
+        act: 'disarm',
+        revision: EVICTION_COMPATIBILITY_REVISION,
+        coverageEpoch: 'e',
+        observedAt: NOW,
+      },
+    );
+
+    const owed = armingPreconditions(
+      store.db,
+      PUBLICATION_KINDS,
+      EVICTION_COMPATIBILITY_REVISION,
+    ).find((check) => !check.holds);
+
+    // The table cannot disagree with the fence, and it cannot send the operator at the wrong
+    // command: `arm` does not clear an unrecorded stop, finishing the disarm does.
+    expect(owed?.reason).toBe('eviction_stop_owed');
+    expect(owed?.detail).toContain('disarm-owing');
+    expect(owed?.detail).toContain('aion evict disarm');
+  });
 });

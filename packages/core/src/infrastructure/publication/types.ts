@@ -147,6 +147,12 @@ export type PublicationHandler = {
    * while it stands, and the operation's own outcome is what resolves it.
    */
   claimBeforeRecovery?(context: PublicationClaimContext, payload: JsonValue): unknown;
+  /**
+   * Releases what `claimBeforeRecovery` claimed, in the step that records this operation ended
+   * without acknowledging. A claim its own outcome cannot release is a claim nothing will ever
+   * release, and the fence would then be holding a fact no operation stands behind.
+   */
+  releaseClaim?(context: PublicationClaimContext, payload: JsonValue): unknown;
   /** Optional idempotent materialization; no model work and no receipt replacement. */
   finishGraph?(
     context: PublicationContext,

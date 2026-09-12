@@ -31,6 +31,7 @@ const COVERAGE_COLUMN = 'activation_capability_revision';
 /** The two functions that reach the row, so the caller scan does not depend on SQL text. */
 const ARMING_WRITER = 'establishEvictionCompatibility';
 const DISARM_WRITER = 'recordEvictionDisarm';
+const CLAIM_WRITER = 'claimEvictionStop';
 
 /**
  * A write is an UPDATE, an INSERT or a REPLACE reaching this column; a read of it is not one.
@@ -171,14 +172,16 @@ describe('the eviction compatibility capability is not armed by any production w
     ]);
   });
 
-  it('finds neither act called from initialization, the service or the maintenance catalog', () => {
-    // Both acts are an operator's. A caller here would make one a side effect of starting up.
+  it('finds no act and no claim called from initialization, the service or the catalog', () => {
+    // Every one of these is an operator's. A caller here would make it a side effect of starting
+    // up, and the claim belongs on the list because taking it stops eviction on its own.
     const forbidden = ['cli/src/init.ts', 'mcp/src/bootstrap.ts', 'introspection/application'];
+    const writers = [ARMING_WRITER, DISARM_WRITER, CLAIM_WRITER, 'releaseEvictionStopClaim'];
     const reached = files.filter((file) => {
       const source = readFileSync(file, 'utf8');
       return (
         forbidden.some((part) => relative(REPO_ROOT, file).includes(join(...part.split('/')))) &&
-        (source.includes(ARMING_WRITER) || source.includes(DISARM_WRITER))
+        writers.some((writer) => source.includes(writer))
       );
     });
     expect(reached.map((file) => relative(REPO_ROOT, file))).toEqual([]);
@@ -261,17 +264,36 @@ describe('the stop on the same row has one writer set and no other', () => {
     ]);
   });
 
-  it('names both legitimate writers of the stop, and finds no third', () => {
+  it('keeps every statement touching the stop inside the three functions that own it', () => {
     const control = readFileSync(
       join(PACKAGES_DIR, 'core', 'src', 'infrastructure', 'sqlite', 'publication-control.ts'),
       'utf8',
     );
-    const statements = [...control.matchAll(/UPDATE\s+publication_control/gi)].filter((match) =>
-      control.slice(match.index, match.index + WINDOW).includes(STOP_COLUMN),
-    );
-    // The stamp, the clear-on-arm, and the clear of a spent claim beside the stamp.
-    expect(statements.length).toBe(3);
-    expect(control.indexOf(STOP_COLUMN)).toBeGreaterThan(0);
+    // A count would be brittle and would not say what matters. What matters is that no statement
+    // reaching either column sits outside a named writer, where a reader would not look for it.
+    const owners = [
+      'export function establishEvictionCompatibility',
+      'export function recordEvictionDisarm',
+      'export function claimEvictionStop',
+      'export function releaseEvictionStopClaim',
+    ].map((signature) => {
+      const from = control.indexOf(signature);
+      expect(from).toBeGreaterThan(0);
+      const next = control.indexOf('\nexport ', from + signature.length);
+      return { from, to: next === -1 ? control.length : next };
+    });
+
+    const stray: string[] = [];
+    for (const match of control.matchAll(/UPDATE\s+publication_control/gi)) {
+      const window = control.slice(match.index, match.index + WINDOW);
+      if (!window.includes(STOP_COLUMN) && !window.includes(CLAIM_COLUMN)) {
+        continue;
+      }
+      if (!owners.some((span) => match.index >= span.from && match.index < span.to)) {
+        stray.push(window.split('\n')[1] ?? window.slice(0, 60));
+      }
+    }
+    expect(stray).toEqual([]);
   });
 
   it('catches a rogue clear of the stop wherever it is written', () => {
@@ -301,7 +323,7 @@ describe('the stop on the same row has one writer set and no other', () => {
       'application',
       'eviction-arming.ts',
     );
-    for (const writer of ['recordEvictionDisarm', 'claimEvictionStop']) {
+    for (const writer of [DISARM_WRITER, CLAIM_WRITER, 'releaseEvictionStopClaim']) {
       const callers = files.filter(
         (file) => file !== definition && readFileSync(file, 'utf8').includes(`${writer}(`),
       );

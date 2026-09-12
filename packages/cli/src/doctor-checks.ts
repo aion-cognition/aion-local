@@ -101,7 +101,8 @@ export function evictionFence(report: CoverageStateReport): string {
     // operation is named because re-running the command is what finishes it.
     return (
       `eviction fence DISARMED: a stop is owed by ${report.evictionStopRequestedBy} and is not ` +
-      'recorded yet. Nothing is removed. Re-run `aion evict disarm` to finish it'
+      'recorded yet. Nothing is removed. `aion evict disarm` finishes it; `aion evict arm` ' +
+      'refuses until it is finished'
     );
   }
   if (report.evictionGate === 'disarmed') {

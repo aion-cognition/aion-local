@@ -1,5 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 
+import { releaseClaim, takeClaim } from './claims.js';
 import {
   PublicationInvariantError,
   PublicationPendingError,
@@ -149,16 +150,7 @@ export class PublicationCoordinator {
         // Before anything already pending is settled, because settling it is exactly what a
         // request of this shape exists to prevent. Idempotent: the second pass re-enters here
         // with the same identity and the claim is already its own.
-        if (handler.claimBeforeRecovery !== undefined) {
-          publicationWrite(this.#options.db, () => {
-            this.#sync(
-              handler.claimBeforeRecovery?.(
-                { db: this.#options.db, operationId: request.operationId },
-                parseJson(payloadJson),
-              ),
-            );
-          });
-        }
+        takeClaim(this.#options.db, handler, request.operationId, payloadJson);
         if (state.pending !== undefined) {
           const recovered = await this.#recoverLocked(lock, state.pending, state.committed);
           return state.pending.operationId === request.operationId ? recovered : undefined;
@@ -183,6 +175,8 @@ export class PublicationCoordinator {
             check.status === 'valid',
           );
           if (check.status !== 'valid') {
+            // The outcome and the release of anything this request claimed, one durable step.
+            releaseClaim(this.#options.db, handler, request.operationId, payloadJson);
             return discardCoordinatorRecord(this.#options.db, saved, check.status, check.reason);
           }
           this.#sync(
@@ -301,6 +295,7 @@ export class PublicationCoordinator {
             check.reason,
           ),
         );
+        releaseClaim(this.#options.db, handler, record.operationId, record.payloadJson);
         return discardCoordinatorRecord(this.#options.db, record, check.status, check.reason);
       });
       return publicationOutcome(discarded);
