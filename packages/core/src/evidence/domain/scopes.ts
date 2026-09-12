@@ -97,9 +97,49 @@ export function nodeScopeDirection(role: DurableRole): ScopeDirection {
   return NODE_DIRECTION[role];
 }
 
+/** The other end of the same role. The source always sits opposite the node. */
+export function sourceScopeDirection(role: DurableRole): ScopeDirection {
+  return NODE_DIRECTION[role] === 'in' ? 'out' : 'in';
+}
+
 /** The scope a node's census for this role is filed under. */
 export function nodeRoleScope(role: DurableRole): string {
   return durableRoleScope(role, nodeScopeDirection(role));
+}
+
+/** The scope a source's census for this role is filed under. */
+export function sourceRoleScope(role: DurableRole): string {
+  return durableRoleScope(role, sourceScopeDirection(role));
+}
+
+/** One endpoint's counter, named: which endpoint, and the scope its census is filed under. */
+export type EndpointScope = {
+  readonly endpointId: string;
+  readonly relationClass: string;
+};
+
+/**
+ * BOTH counters a writer changing this incidence has to advance, in a fixed order.
+ *
+ * A writer that changes an incidence and advances only the reciprocal scope is nonconforming:
+ * the node's census and the source's census are two different counters answering two different
+ * questions, and a reader asking the one that did not move is told nothing changed. The rule was
+ * written down and every writer implemented it separately, by computing the opposite direction
+ * inline; five copies of that computation is five chances to keep one and drop the other.
+ *
+ * This is the rule as a value rather than as a habit. There is nothing to enforce with a scan —
+ * the direction is computed at runtime and no column name gives it away — so the enforcement is
+ * that writers call this and a battery holds it to the pair.
+ */
+export function bothEndpoints(
+  role: DurableRole,
+  sourceId: string,
+  nodeId: string,
+): readonly [EndpointScope, EndpointScope] {
+  return [
+    { endpointId: sourceId, relationClass: sourceRoleScope(role) },
+    { endpointId: nodeId, relationClass: nodeRoleScope(role) },
+  ];
 }
 
 export function retainedRoleScope(role: string, direction: ScopeDirection): string {

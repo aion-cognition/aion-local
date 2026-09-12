@@ -1,6 +1,6 @@
 import { settleConfirmationSignals } from './confirmation-signals.js';
 import type { ConfirmationStatement, ReferenceStatements } from './reference-statements.js';
-import { durableRoleScope, type DurableRole } from '../../evidence/domain/scopes.js';
+import { bothEndpoints, type DurableRole } from '../../evidence/domain/scopes.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   heldDeliveryLinkVersions,
@@ -92,11 +92,10 @@ function affectedScopes(
 ): readonly { readonly endpointId: string; readonly relationClass: string }[] {
   const scopes = new Map<string, { endpointId: string; relationClass: string }>();
   for (const target of acceptance.targets) {
-    const role = ROLE_OF_KIND[target.kind];
-    for (const entry of [
-      { endpointId: acceptance.sourceId, relationClass: durableRoleScope(role, 'out') },
-      { endpointId: target.id, relationClass: durableRoleScope(role, 'in') },
-    ]) {
+    // Both directions come off the role rather than being written in here. All three stated roles
+    // put the node on the `in` side today, so the two agree; a role that did not would have made
+    // this writer file the source's census under a counter nothing reads.
+    for (const entry of bothEndpoints(ROLE_OF_KIND[target.kind], acceptance.sourceId, target.id)) {
       scopes.set(`${entry.endpointId}\n${entry.relationClass}`, entry);
     }
   }

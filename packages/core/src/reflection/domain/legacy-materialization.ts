@@ -1,9 +1,4 @@
-import {
-  durableRoleScope,
-  nodeScopeDirection,
-  type DurableRole,
-  type ScopeDirection,
-} from '../../evidence/domain/scopes.js';
+import { bothEndpoints, type DurableRole } from '../../evidence/domain/scopes.js';
 import type {
   EndpointContribution,
   LegacyRelation,
@@ -289,12 +284,7 @@ export function planScopes(
 ): readonly ScopeAdvanceKey[] {
   const scopes = new Map<string, ScopeAdvanceKey>();
   for (const entry of links) {
-    const node = nodeScopeDirection(entry.scopeRole);
-    const source: ScopeDirection = node === 'in' ? 'out' : 'in';
-    for (const scope of [
-      { endpointId: sourceId, relationClass: durableRoleScope(entry.scopeRole, source) },
-      { endpointId: entry.toId, relationClass: durableRoleScope(entry.scopeRole, node) },
-    ]) {
+    for (const scope of bothEndpoints(entry.scopeRole, sourceId, entry.toId)) {
       scopes.set(`${scope.endpointId}\n${scope.relationClass}`, scope);
     }
   }
@@ -369,12 +359,11 @@ type Collected = {
 
 /** Which of the link's two scopes this endpoint sits at, or nothing when it is neither end. */
 function endpointScopeOf(entry: MaterializedLink, endpointId: string): string | undefined {
-  const node = nodeScopeDirection(entry.scopeRole);
-  if (entry.toId === endpointId) {
-    return durableRoleScope(entry.scopeRole, node);
+  const [source, node] = bothEndpoints(entry.scopeRole, entry.fromId, entry.toId);
+  if (node.endpointId === endpointId) {
+    return node.relationClass;
   }
-  const source: ScopeDirection = node === 'in' ? 'out' : 'in';
-  return entry.fromId === endpointId ? durableRoleScope(entry.scopeRole, source) : undefined;
+  return source.endpointId === endpointId ? source.relationClass : undefined;
 }
 
 /**

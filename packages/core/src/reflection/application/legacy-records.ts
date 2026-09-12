@@ -1,10 +1,6 @@
 import { INCOMING_STATEMENT_SCOPES } from './chunk-evidence.js';
 import { NODE_SUPPORT_ROLE_SCOPES } from '../../evidence/application/node-support.js';
-import {
-  durableRoleScope,
-  nodeScopeDirection,
-  type ScopeDirection,
-} from '../../evidence/domain/scopes.js';
+import { nodeRoleScope, sourceRoleScope } from '../../evidence/domain/scopes.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { prepareMaterializedLinkVersion } from '../../infrastructure/sqlite/evidence-link-materialization.js';
 import { acknowledgeStatedLinkVersions } from '../../infrastructure/sqlite/evidence-links.js';
@@ -341,9 +337,7 @@ export function endpointCensusScopes(db: SqliteHandle, endpointId: string): read
     if (role === undefined) {
       continue;
     }
-    const node = nodeScopeDirection(role);
-    const source: ScopeDirection = node === 'in' ? 'out' : 'in';
-    scopes.add(durableRoleScope(role, row.from_id === endpointId ? source : node));
+    scopes.add(row.from_id === endpointId ? sourceRoleScope(role) : nodeRoleScope(role));
   }
   if (isNodeEndpoint(db, endpointId)) {
     for (const scope of NODE_SUPPORT_ROLE_SCOPES) {

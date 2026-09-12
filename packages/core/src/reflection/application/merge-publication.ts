@@ -9,11 +9,7 @@ import {
 import { verifyEvidenceRevision } from '../../evidence/application/dependencies.js';
 import { ownershipIncidence, ownershipSummaryFor } from '../../evidence/application/ownership.js';
 import { ownershipEvidenceVersion } from '../../evidence/domain/ownership.js';
-import {
-  durableRoleScope,
-  nodeScopeDirection,
-  type DurableRole,
-} from '../../evidence/domain/scopes.js';
+import { bothEndpoints, nodeRoleScope, type DurableRole } from '../../evidence/domain/scopes.js';
 import { mergeClaimPairInTransaction } from '../../infrastructure/graph/claim-dedup-queries.js';
 import { projectOwnershipSummary } from '../../infrastructure/graph/ownership-summary-queries.js';
 import { PublicationOperation } from '../../infrastructure/publication/operation.js';
@@ -140,12 +136,11 @@ function carriedScopes(
     if (!isCarriedRole(row.role)) {
       continue;
     }
-    const node = nodeScopeDirection(row.role);
-    const source = node === 'in' ? 'out' : 'in';
+    // Three endpoints, two roles: the merge moves an incidence from the loser to the survivor, so
+    // both nodes carry the node end of it and the source behind them carries the other.
     for (const entry of [
-      { endpointId: data.survivorId, relationClass: durableRoleScope(row.role, node) },
-      { endpointId: data.loserId, relationClass: durableRoleScope(row.role, node) },
-      { endpointId: row.sourceId, relationClass: durableRoleScope(row.role, source) },
+      ...bothEndpoints(row.role, row.sourceId, data.survivorId),
+      { endpointId: data.loserId, relationClass: nodeRoleScope(row.role) },
     ]) {
       scopes.set(`${entry.endpointId}\n${entry.relationClass}`, entry);
     }

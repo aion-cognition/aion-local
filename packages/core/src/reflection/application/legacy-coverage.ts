@@ -1,4 +1,4 @@
-import { durableRoleScope, nodeScopeDirection } from '../../evidence/domain/scopes.js';
+import { bothEndpoints } from '../../evidence/domain/scopes.js';
 import type { LegacyCoverageEdge } from '../../infrastructure/graph/legacy-narrative-input.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
@@ -60,14 +60,9 @@ function linksOf(input: LegacyCoverageWrite): readonly CoverageRecord[] {
 }
 
 export function legacyCoverageScopes(input: LegacyCoverageWrite) {
-  const node = nodeScopeDirection('source_coverage');
-  const source = node === 'in' ? 'out' : 'in';
   const scopes = new Map<string, { endpointId: string; relationClass: string }>();
   for (const link of linksOf(input)) {
-    for (const entry of [
-      { endpointId: link.sourceId, relationClass: durableRoleScope('source_coverage', source) },
-      { endpointId: link.narrativeId, relationClass: durableRoleScope('source_coverage', node) },
-    ]) {
+    for (const entry of bothEndpoints('source_coverage', link.sourceId, link.narrativeId)) {
       scopes.set(`${entry.endpointId}\n${entry.relationClass}`, entry);
     }
   }
