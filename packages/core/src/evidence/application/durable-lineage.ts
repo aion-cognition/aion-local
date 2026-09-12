@@ -34,7 +34,10 @@ export type DurableLineage = {
   readonly confirmation?: StatedConfirmation;
   /** The published revisions citing this node at the vantage asked for. */
   readonly citedBy: readonly string[];
-  /** Whether the citation scope has been counted, which is what makes an empty set an answer. */
+  /**
+   * Whether the citation set is an answer rather than silence. True wherever the revision records
+   * could be read: they are the population, so an empty read is an empty set.
+   */
   readonly citationsProved: boolean;
   /** Every scope this reading consulted, for the revision a writer fences on. */
   readonly dependencies: readonly EvidenceDependency[];
@@ -56,10 +59,17 @@ function stamp(value: unknown, fallback: string | null): Date | undefined {
 }
 
 /**
- * The citation set at this vantage, and whether anyone has counted the scope that holds it.
+ * The citation set at this vantage. An empty answer is an answer.
  *
- * The proof is the citation scope's own. Borrowing the extraction census would answer "nothing
- * cites this" from a count of something else entirely.
+ * The records are the population: a revision writes what it cited in the transaction that
+ * acknowledges it, so the rows ARE the citation set and an empty read is "nothing cites this"
+ * rather than "nobody looked". Gating that on the scope's census asked for a count no producer
+ * writes on a citation target, which left every uncited node reading as unavailable forever while
+ * the repair path treated the same empty read as absence. Two readers of one population disagreed,
+ * and the destructive one was the less careful of the two.
+ *
+ * The scope token is still recorded where the counter has published one, so a reading stays
+ * fenced on the population it rests on and a writer that moves it invalidates this answer.
  */
 function citationsOf(
   db: SqliteHandle,
@@ -77,10 +87,7 @@ function citationsOf(
   if (scope.status === 'verified') {
     dependencies.push(scope.dependency);
   }
-  return {
-    ids: cited.map((citation) => citation.narrativeNodeId),
-    proved: scope.status === 'verified',
-  };
+  return { ids: cited.map((citation) => citation.narrativeNodeId), proved: true };
 }
 
 export function durableLineage(

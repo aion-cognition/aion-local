@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { certifyNodeSupport, NODE_SUPPORT_SCOPES } from './node-support.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import { scopeSupportsVerifiedEmpty } from '../../infrastructure/sqlite/evidence-scope.js';
+import { readCitationsOf } from '../../infrastructure/sqlite/narrative-citations.js';
 import {
   allocateNarrativeRevision,
   OVERVIEW_REVISION_FAMILY,
@@ -36,8 +37,11 @@ describe('node support', () => {
     establishScope(store.db, NODE, scope, NOW);
   }
 
-  /** A published revision that cites the node, recorded the way an acknowledgment records one. */
-  function publishCitingRevision(): void {
+  /**
+   * A published revision of one window, citing the node when asked to. Publishing a second one
+   * closes the first, which is how a citation becomes historical rather than current.
+   */
+  function publishRevision(cites: boolean): void {
     const allocated = allocateNarrativeRevision(store.db, OVERVIEW_REVISION_FAMILY, 'window', NOW);
     publishNarrativeRevision(store.db, OVERVIEW_REVISION_FAMILY, {
       familyKey: 'window',
@@ -48,11 +52,13 @@ describe('node support', () => {
       observedAckAt: NOW.toISOString(),
       publishedAt: NOW,
     });
-    store.db
-      .prepare(
-        'INSERT INTO revision_citations(narrative_node_id,target_id,target_kind) VALUES (?,?,?)',
-      )
-      .run(allocated.nodeId, NODE, 'retained_node');
+    if (cites) {
+      store.db
+        .prepare(
+          'INSERT INTO revision_citations(narrative_node_id,target_id,target_kind) VALUES (?,?,?)',
+        )
+        .run(allocated.nodeId, NODE, 'retained_node');
+    }
   }
 
   it('answers unknown while any support scope is uncounted', () => {
@@ -79,12 +85,25 @@ describe('node support', () => {
     for (const role of DURABLE_ROLES) {
       establish(nodeRoleScope(role));
     }
-    publishCitingRevision();
+    publishRevision(true);
 
     expect(certifyNodeSupport(store.db, NODE)).toMatchObject({
       support: 'supported',
-      reason: 'cited by a narrative revision',
+      reason: 'cited by a published narrative revision',
     });
+  });
+
+  it('stays supported on a citation a superseded revision made', () => {
+    for (const role of DURABLE_ROLES) {
+      establish(nodeRoleScope(role));
+    }
+    publishRevision(true);
+    // A successor takes the family, so the citing revision is closed and no longer what the
+    // family serves. What it rested on is still a fact about it, and a forget has no reopen path.
+    publishRevision(false);
+
+    expect(readCitationsOf(store.db, NODE)).toEqual([]);
+    expect(certifyNodeSupport(store.db, NODE)).toMatchObject({ support: 'supported' });
   });
 
   it('answers unsupported only once every census is established and empty', () => {

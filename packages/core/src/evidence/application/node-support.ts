@@ -9,7 +9,7 @@ import {
   publishedScopeToken,
   scopeSupportsVerifiedEmpty,
 } from '../../infrastructure/sqlite/evidence-scope.js';
-import { readCitationsOf } from '../../infrastructure/sqlite/narrative-citations.js';
+import { countCitationsTo } from '../../infrastructure/sqlite/narrative-citations.js';
 import { NARRATIVE_SCOPES, nodeRoleScope, type DurableRole } from '../domain/scopes.js';
 
 /**
@@ -136,8 +136,16 @@ export function certifyNodeSupport(
   if (countCommittedStatedLinksTo(db, nodeId, STATED_SUPPORT_KINDS) > 0) {
     return { support: 'supported', reason: 'a committed statement names it', evidenceRevision };
   }
-  if (readCitationsOf(db, nodeId).length > 0) {
-    return { support: 'supported', reason: 'cited by a narrative revision', evidenceRevision };
+  // Every revision that ever published citing it, not only the one the family serves now. A
+  // superseded revision still rested on this node and the lineage walk still crosses to it, and
+  // what this reading authorizes is a suppression and then a forget with no reopen path, so it
+  // reads the wider population on purpose.
+  if (countCitationsTo(db, nodeId) > 0) {
+    return {
+      support: 'supported',
+      reason: 'cited by a published narrative revision',
+      evidenceRevision,
+    };
   }
   // The node may BE a narrative revision rather than a target of one. Nothing above can see that:
   // a chunk's narrative is produced by no source and named by no statement, so every source-side
@@ -196,7 +204,7 @@ export function certifyNodeSupport(
   // population moves.
   return {
     support: 'unsupported',
-    reason: 'every support census is established and empty, and no revision cites it',
+    reason: 'every support census is established and empty, and no revision ever cited it',
     evidenceRevision,
   };
 }

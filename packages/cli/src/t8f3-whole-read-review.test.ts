@@ -138,12 +138,14 @@ describe('why for a retained node with no resident origin edge', () => {
     expect(text).toContain('citations');
   });
 
-  it('says the citation records could not answer rather than inventing an absence', async () => {
+  it('reads the citation set out of the records rather than borrowing another census', async () => {
     const lines: string[] = [];
 
     await runWhy([NODE], (line: string) => lines.push(line));
 
-    expect(lines.join('\n')).toContain('the citation records could not answer');
+    // Nothing cites it, and the records are the population, so the answer is the empty set and
+    // not a refusal to answer.
+    expect(lines.join('\n')).toContain('citations        none');
   });
 });
 

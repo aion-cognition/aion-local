@@ -261,10 +261,10 @@ it('treats shared-parent convergence as complete rather than a cycle', () => {
   expect.soft(result.complete).toBe(true);
 });
 
-it('does not borrow extraction census as proof of an empty citation set', async () => {
+it('answers an empty citation set from the citation records themselves', async () => {
   const batch = await resolver().resolveMetadata(['old'], checkedContext(), { maxRoots: 4 });
   expect(batch.results.get(JSON.stringify(['id', 'old']))?.value?.narrativeBinding).toEqual({
-    status: 'unavailable',
+    status: 'none',
   });
 });
 

@@ -88,6 +88,26 @@ export function readCitationsOf(db: SqliteHandle, targetId: string, at?: Date): 
   }));
 }
 
+/**
+ * How many revisions EVER published citing this target, whether or not one is still the head.
+ *
+ * The head selection is right for a binding question, which asks what the family serves. It is
+ * wrong for a destructive one: a revision that published and was later closed still rested on this
+ * node, the lineage walk still crosses it, and a repair that read only the head would forget a node
+ * a superseded account of history depends on. So the destructive reader asks this instead, and the
+ * two readers differ in the direction that leaves the irreversible path the more careful of them.
+ */
+export function countCitationsTo(db: SqliteHandle, targetId: string): number {
+  const row = db
+    .prepare(
+      `SELECT count(*) AS n FROM revision_citations c
+       JOIN (${EVER_PUBLISHED}) p ON p.node_id = c.narrative_node_id
+       WHERE c.target_id = ?`,
+    )
+    .get(targetId) as { n: number };
+  return row.n;
+}
+
 /** What one revision cites, which is the outbound half a lineage walk crosses. */
 export type Citation = {
   readonly targetId: string;

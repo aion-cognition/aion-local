@@ -101,9 +101,9 @@ function issueOn(
 }
 
 /**
- * What the citation records say. An empty set is only "cited by nothing" where the citation
- * scope itself has been counted; otherwise nobody has looked, and a count of some other scope
- * answers a different question.
+ * What the citation records say. The records are the population a revision writes as it publishes,
+ * so an empty read is "cited by nothing" rather than "nobody looked", and the served answer says
+ * the same thing the repair path reads out of the same rows.
  */
 function bindingOf(durable: DurableLineage): NarrativeBinding {
   const cited = durable.citedBy;

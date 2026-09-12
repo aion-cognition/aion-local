@@ -218,8 +218,9 @@ export function renderProvenance(
 type DurableMetadata = NonNullable<DurableReading['value']>;
 
 /**
- * What the citation records say. "Unavailable" is its own answer: no producer writes these
- * records yet, so reporting none would say the substrate looked and found nothing.
+ * What the citation records say. `none` is a read of the records, not an assumption about them: a
+ * revision writes what it cited as it publishes, so an empty set is an empty set. `unavailable`
+ * stays for the case where the read itself could not be taken.
  */
 function citationLine(binding: DurableMetadata['narrativeBinding']): string {
   if (binding.status === 'cited') {
