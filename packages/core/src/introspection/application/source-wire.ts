@@ -132,6 +132,8 @@ export function sourceOutputFor(outcome: SourceInspectOutcome): SourceOutput {
         ...(outcome.continuation === undefined ? {} : { continuation: outcome.continuation }),
         coverage: outcome.coverage,
       };
+    case 'restart_required':
+      return { schema_version: version, status: 'restart_required', reason: outcome.reason };
     case 'unavailable':
       return {
         schema_version: version,
@@ -242,6 +244,8 @@ export function sourceText(output: SourceOutput): string {
           : `\n  more parts follow; continue from ${output.continuation}`;
       return [head, ...parts].join('\n') + more;
     }
+    case 'restart_required':
+      return 'the raw projection changed under this page; read the source again from the start';
     case 'unavailable': {
       const named = (output.reasons ?? [])
         .map((issue) => `${issue.field}=${issue.reason}`)

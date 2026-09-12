@@ -5,6 +5,7 @@ import type { SourceSearchDeps } from './source-search.js';
 import { statedCoverage } from '../../evidence/application/reasons.js';
 import type { SourceEvidence, SourcePartEvidence } from '../../evidence/application/sources.js';
 import {
+  evidenceRequestKey,
   idAddress,
   partAddress,
   SOURCE_PART_KINDS,
@@ -16,7 +17,13 @@ import {
   type EvidenceIssue,
   type EvidenceResult,
 } from '../../evidence/domain/result.js';
-import { checkCoverage, CoverageRequestError } from '../../recall/application/coverage-checker.js';
+import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { readSourceResidency } from '../../infrastructure/sqlite/source-lifecycle.js';
+import {
+  checkCoverage,
+  coverageRefusal,
+  CoverageRequestError,
+} from '../../recall/application/coverage-checker.js';
 import { requestedLimit, SOURCE_SEARCH_LIMITS, SourceQueryError } from '../domain/source-search.js';
 
 /**
@@ -79,6 +86,7 @@ export type SourceInspectOutcome =
       readonly coverage: HistoryCoverage;
     }
   | { readonly status: 'coverage_refused'; readonly refusal: CoverageRefusal }
+  | { readonly status: 'restart_required'; readonly reason: 'source_projection_changed' }
   | {
       readonly status: 'invalid_request';
       readonly field: 'id' | 'part' | 'cursor' | 'limit' | 'as_of' | 'knew_at';
@@ -122,31 +130,75 @@ function inspected(part: SourcePartEvidence, slice: PartSlice): InspectedPart {
 }
 
 /** Where a page stopped: which part, and how far into that part's own text. */
-type InspectCursor = {
+type InspectPosition = {
   readonly index: number;
   readonly offset: number;
 };
 
+const START: InspectPosition = { index: 0, offset: 0 };
+
 /**
- * The position a continuation names. A bare number is the part index a page ended before; the
- * dotted form adds the UTF-16 offset inside that part, which is what makes a part larger than
- * one response resumable rather than truncated.
+ * What a continuation carries besides the position it stopped at.
+ *
+ * The position alone is a number, and a number is true of any source under any contract: pages
+ * one and two of a read could straddle a coverage change, a rebuilt projection or a different
+ * source entirely, and nothing in the answer would say so. So the page states the facts it was
+ * served under and the next page verifies them, which is the discipline the sibling search
+ * reader already holds and the same three facts it binds: whose read this is, what contract it
+ * was answered under, and which projection of the bytes it saw.
  */
-function cursorPosition(cursor: string | undefined): InspectCursor {
-  if (cursor === undefined) {
-    return { index: 0, offset: 0 };
-  }
-  const [head, tail] = cursor.split('.');
-  const index = Number(head);
-  const offset = tail === undefined ? 0 : Number(tail);
-  if (!Number.isInteger(index) || index < 0 || !Number.isInteger(offset) || offset < 0) {
-    throw new SourceQueryError('cursor', 'the continuation is not one this substrate issued');
-  }
-  return { index, offset };
+type InspectCursor = InspectPosition & {
+  /** The canonical request key, so a continuation cannot be spent on another address. */
+  readonly address: string;
+  readonly coverageEpoch: string;
+  /** The source's projection generation at the page that issued this. */
+  readonly projectionGeneration: number;
+};
+
+function encodeCursor(cursor: InspectCursor): string {
+  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
 }
 
-function encodeCursor(position: InspectCursor): string {
-  return `${String(position.index)}.${String(position.offset)}`;
+/** A cursor this substrate did not produce is refused rather than repaired into something. */
+function decodeCursor(encoded: string): InspectCursor {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+  } catch {
+    throw new SourceQueryError('cursor', 'the continuation is not one this substrate issued');
+  }
+  const value = parsed as Partial<InspectCursor> | null;
+  if (
+    value === null ||
+    typeof value !== 'object' ||
+    typeof value.address !== 'string' ||
+    typeof value.coverageEpoch !== 'string' ||
+    !Number.isInteger(value.projectionGeneration) ||
+    !Number.isInteger(value.index) ||
+    !Number.isInteger(value.offset) ||
+    (value.index ?? -1) < 0 ||
+    (value.offset ?? -1) < 0
+  ) {
+    throw new SourceQueryError('cursor', 'the continuation is not one this substrate issued');
+  }
+  return {
+    address: value.address,
+    coverageEpoch: value.coverageEpoch,
+    projectionGeneration: value.projectionGeneration as number,
+    index: value.index as number,
+    offset: value.offset as number,
+  };
+}
+
+/**
+ * Which projection of a source's bytes a reading saw.
+ *
+ * A source with no residency row has never been moved, and zero is that reading rather than an
+ * absence: the number only has to be comparable across two reads of the same source, and a row
+ * appearing between them is itself the change worth refusing on.
+ */
+function projectionGenerationOf(db: SqliteHandle, sourceId: string): number {
+  return readSourceResidency(db, sourceId)?.projectionGeneration ?? 0;
 }
 
 type PartSlice = {
@@ -188,7 +240,7 @@ function sliceWithinBytes(text: string, from: number, maxBytes: number): PartSli
 
 type InspectPage = {
   readonly page: readonly InspectedPart[];
-  readonly next: InspectCursor | undefined;
+  readonly next: InspectPosition | undefined;
 };
 
 /**
@@ -202,7 +254,7 @@ type InspectPage = {
  */
 function pageFrom(
   parts: readonly SourcePartEvidence[],
-  from: InspectCursor,
+  from: InspectPosition,
   limit: number,
 ): InspectPage {
   const page: InspectedPart[] = [];
@@ -242,11 +294,11 @@ export async function runSourceInspection(
   request: SourceInspectRequest,
 ): Promise<SourceInspectOutcome> {
   let address: EvidenceAddress;
-  let position: InspectCursor;
+  let bound: InspectCursor | undefined;
   let limit: number;
   try {
     address = addressOf(request);
-    position = cursorPosition(request.cursor);
+    bound = request.cursor === undefined ? undefined : decodeCursor(request.cursor);
     limit = requestedLimit(request.limit);
   } catch (err) {
     if (err instanceof SourceQueryError) {
@@ -278,6 +330,37 @@ export async function runSourceInspection(
     return { status: 'coverage_refused', refusal: checked.refusal };
   }
 
+  if (bound !== undefined) {
+    // A continuation is spendable once, on the read that issued it. An address it does not name
+    // would be answered from part ordinals that mean something else entirely.
+    if (bound.address !== evidenceRequestKey(address)) {
+      return {
+        status: 'invalid_request',
+        field: 'cursor',
+        message: 'the continuation belongs to a different source',
+      };
+    }
+    if (bound.coverageEpoch !== checked.context.coverageEpoch) {
+      return {
+        status: 'coverage_refused',
+        refusal: coverageRefusal(
+          'coverage_changed',
+          {
+            ...(request.asOf === undefined ? {} : { asOf: new Date(request.asOf) }),
+            ...(request.knewAt === undefined ? {} : { knewAt: new Date(request.knewAt) }),
+            now,
+          },
+          {
+            coverageState: checked.context.coverageState,
+            ...(checked.coverage.history_since === undefined
+              ? {}
+              : { historySince: checked.coverage.history_since }),
+          },
+        ),
+      };
+    }
+  }
+
   const batch = await deps.resolver.resolveSources([address], checked.context, 'raw_inspection');
   // The contract is asked again at the end. A read that began under one and finished under
   // another has no statement it can honestly attach to what it found.
@@ -305,6 +388,14 @@ export async function runSourceInspection(
       coverage,
     };
   }
+  // The projection the resolved bytes came out of, read once here and asked again below. The
+  // window this pair covers is from the resolution to the disclosure; the resolver's own read is
+  // the resolver's to answer for, and this does not claim to cover it.
+  const resolvedGeneration = projectionGenerationOf(deps.db, result.value.sourceId);
+  if (bound !== undefined && bound.projectionGeneration !== resolvedGeneration) {
+    return { status: 'restart_required', reason: 'source_projection_changed' };
+  }
+
   // A statement accepted while the parts were being read withholds them here too, and so does
   // a census that stopped being able to prove the question. The three answers stay apart: only
   // proved suppression is the substrate saying so, and only it keeps the statement gap-free.
@@ -323,7 +414,13 @@ export async function runSourceInspection(
       coverage: statedCoverage(checked.coverage, issues).coverage,
     };
   }
-  const { page, next } = pageFrom(result.value.parts, position, limit);
+  const { page, next } = pageFrom(result.value.parts, bound ?? START, limit);
+  // Asked again after the page was cut and the disclosure decided. A projection that moved in
+  // that window makes these bytes a reading of storage that no longer stands, and handing them
+  // over with a continuation would invite the caller to join them to a page from the new one.
+  if (projectionGenerationOf(deps.db, result.value.sourceId) !== resolvedGeneration) {
+    return { status: 'restart_required', reason: 'source_projection_changed' };
+  }
   return {
     status: 'source',
     sourceId: result.value.sourceId,
@@ -332,7 +429,16 @@ export async function runSourceInspection(
     residency: result.residency,
     evidence: result.evidence.status,
     parts: page,
-    ...(next === undefined ? {} : { continuation: encodeCursor(next) }),
+    ...(next === undefined
+      ? {}
+      : {
+          continuation: encodeCursor({
+            ...next,
+            address: evidenceRequestKey(address),
+            coverageEpoch: checked.context.coverageEpoch,
+            projectionGeneration: resolvedGeneration,
+          }),
+        }),
     coverage,
   };
 }

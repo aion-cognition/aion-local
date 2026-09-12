@@ -378,6 +378,72 @@ describe('archive search and inspection', () => {
       expect(rejoined).toBe(captured);
     });
 
+    it('refuses a continuation issued for a different source', async () => {
+      seedSource(store.db, {
+        sourceId: 'episode-2',
+        sessionId: 'session-1',
+        identity: 'agent-1',
+        content: CONTENT,
+        turnIds: ['turn-c', 'turn-d'],
+        now: NOW,
+      });
+      const first = await runSourceInspection(deps, { id: 'episode-1', limit: 1 });
+      if (first.status !== 'source' || first.continuation === undefined) {
+        throw new Error('a one-part page continues');
+      }
+
+      const other = await runSourceInspection(deps, {
+        id: 'episode-2',
+        cursor: first.continuation,
+      });
+
+      expect(other).toMatchObject({ status: 'invalid_request', field: 'cursor' });
+    });
+
+    it('refuses a continuation the coverage contract has moved under', async () => {
+      const first = await runSourceInspection(deps, { id: 'episode-1', limit: 1 });
+      if (first.status !== 'source' || first.continuation === undefined) {
+        throw new Error('a one-part page continues');
+      }
+      store.db.prepare("UPDATE coverage_contract SET epoch = 'a-later-epoch'").run();
+
+      const second = await runSourceInspection(deps, {
+        id: 'episode-1',
+        cursor: first.continuation,
+      });
+
+      expect(second).toMatchObject({
+        status: 'coverage_refused',
+        refusal: { reason: 'coverage_changed' },
+      });
+    });
+
+    it('asks for a restart when the raw projection moved between two pages', async () => {
+      const first = await runSourceInspection(deps, { id: 'episode-1', limit: 1 });
+      if (first.status !== 'source' || first.continuation === undefined) {
+        throw new Error('a one-part page continues');
+      }
+      transitionSourceResidency(store.db, {
+        sourceId: 'episode-1',
+        state: 'resident',
+        operationId: 'rebuild-1',
+        transitionedAt: LATER,
+      });
+
+      const second = await runSourceInspection(deps, {
+        id: 'episode-1',
+        cursor: first.continuation,
+      });
+
+      expect(second).toEqual({ status: 'restart_required', reason: 'source_projection_changed' });
+    });
+
+    it('does not answer a bare position, which states none of what a page was served under', () => {
+      return expect(
+        runSourceInspection(deps, { id: 'episode-1', cursor: '1.0' }),
+      ).resolves.toMatchObject({ status: 'invalid_request', field: 'cursor' });
+    });
+
     it('resolves an original turn id to the part that holds it', async () => {
       const outcome = await runSourceInspection(deps, { id: 'turn-b' });
       if (outcome.status !== 'source') {

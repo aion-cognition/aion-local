@@ -137,7 +137,13 @@ export const InspectedPartSchema = z.strictObject({
 /** Shaped like the search output and for the same reason: one object, `status` decides. */
 export const SourceOutputSchema = z.strictObject({
   schema_version: z.literal(SOURCE_TOOL_SCHEMA_VERSION),
-  status: z.enum(['source', 'unavailable', 'coverage_refusal', 'invalid_request']),
+  status: z.enum([
+    'source',
+    'restart_required',
+    'unavailable',
+    'coverage_refusal',
+    'invalid_request',
+  ]),
   source_id: z.string().optional(),
   session_id: z.string().optional(),
   occurred_at: z.string().optional(),
@@ -146,6 +152,8 @@ export const SourceOutputSchema = z.strictObject({
   parts: z.array(InspectedPartSchema).optional(),
   /** Present while the source continues. No page is ever the whole source. */
   continuation: z.string().optional(),
+  /** Present on `restart_required`: the raw projection was replaced between two pages. */
+  reason: z.literal('source_projection_changed').optional(),
   coverage: HistoryCoverageSchema.optional(),
   reasons: z.array(z.strictObject({ field: z.string(), reason: z.string() })).optional(),
   coverage_refusal: CoverageRefusalSchema.optional(),
