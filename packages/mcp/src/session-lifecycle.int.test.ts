@@ -6,9 +6,11 @@ import {
   getLastPack,
   handleRecall,
   handleReflection,
+  INSTALLED_PUBLICATION_HANDLERS,
   LaneAssigner,
   openLogger,
   openSqliteHandle,
+  PublicationCoordinator,
   runGraphMigrations,
   SessionManager,
   SessionNarrativeCloser,
@@ -130,8 +132,20 @@ beforeAll(async () => {
     logger,
   };
 
+  // The idle-close trigger narrates, and narration publishes. The service composes both halves
+  // for itself; this fixture stands in for the service, so it owes the same composition. With
+  // them missing the trigger fired, returned 'failed' and wrote nothing, and the only symptom
+  // was an empty narrative query.
+  const publications = new PublicationCoordinator({
+    driver: harness.driver,
+    db,
+    logger,
+    handlers: [...INSTALLED_PUBLICATION_HANDLERS],
+  });
+  await publications.initialize();
+
   narratives = new SessionNarrativeCloser(
-    { driver: harness.driver, provider, logger },
+    { driver: harness.driver, db, provider, logger, publications },
     { model: config.models.reflect },
   );
 

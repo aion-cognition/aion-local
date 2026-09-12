@@ -10,6 +10,7 @@ import {
   findSessionNarratives,
   handleRecall,
   handleReflection,
+  INSTALLED_PUBLICATION_HANDLERS,
   isLedgerApplied,
   LaneAssigner,
   listReflectionJobs,
@@ -18,6 +19,7 @@ import {
   openSqliteHandle,
   orchestratorLedgerKey,
   PIPELINE_VERSION,
+  PublicationCoordinator,
   ReflectionOrchestrator,
   ReflectionWorker,
   runGraphMigrations,
@@ -112,6 +114,7 @@ let sessions: SessionManager;
 let provider: Provider;
 let worker: ReflectionWorker;
 let config: Config;
+let publications: PublicationCoordinator;
 let workEpisodeId: string;
 let entitiesAfterRun: readonly EpisodeEntity[];
 
@@ -197,6 +200,15 @@ beforeAll(async () => {
     baseUrl: config.ollama.url,
     embedModel: config.models.embed,
   });
+  // Gate item 3 narrates, and narration publishes. The intake publisher beside it is not a
+  // substitute: the narrative path calls `recover()` and `publish()` on the coordinator.
+  publications = new PublicationCoordinator({
+    driver: harness.driver,
+    db,
+    logger,
+    handlers: [...INSTALLED_PUBLICATION_HANDLERS],
+  });
+  await publications.initialize();
 
   worker = new ReflectionWorker(
     {
@@ -290,7 +302,7 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('gate item 2: the ledger blocks the re-run'
 describe.skipIf(REMOTE_JUDGE_ABSENT)('gate item 3: a closed session leaves a narrative', () => {
   it('writes one on the transport close hook the service registers', async () => {
     const closer = new SessionNarrativeCloser(
-      { driver: harness.driver, provider, logger },
+      { driver: harness.driver, db, provider, logger, publications },
       narrativeOptions(config),
     );
 

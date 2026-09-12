@@ -1,8 +1,10 @@
 import {
   closeSessionNarrative,
   findEpisodeCognitiveNodes,
+  INSTALLED_PUBLICATION_HANDLERS,
   listSupersessionProposals,
   NARRATIVE_PROPERTIES,
+  PublicationCoordinator,
   supersedeEpisode,
   UNANIMOUS_APPLY_METHOD,
   type NarrativeDeps,
@@ -72,6 +74,8 @@ type StoredCase = {
 const substrate = new GateSubstrate('change');
 const cases: StoredCase[] = [];
 let proposals: readonly SupersessionProposal[] = [];
+/** Built once: narration publishes, and every case in this file narrates through it. */
+let publications: PublicationCoordinator;
 
 function sessionFor(entry: ChangeCase): string {
   return `gate-change-${entry.key}`;
@@ -114,6 +118,13 @@ function bestRank(
 
 beforeAll(async () => {
   await substrate.open();
+  publications = new PublicationCoordinator({
+    driver: substrate.driver,
+    db: substrate.db,
+    logger: substrate.logger,
+    handlers: [...INSTALLED_PUBLICATION_HANDLERS],
+  });
+  await publications.initialize();
 
   const baselineIds: string[] = [];
   for (const entry of CHANGE_BATTERY) {
@@ -331,8 +342,10 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('narrative grounding on the fabrication fix
 
     const deps: NarrativeDeps = {
       driver: substrate.driver,
+      db: substrate.db,
       provider: substrate.provider,
       logger: substrate.logger,
+      publications,
     };
     const result = await closeSessionNarrative(
       deps,

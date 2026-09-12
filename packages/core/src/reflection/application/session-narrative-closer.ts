@@ -20,7 +20,16 @@ export class SessionNarrativeCloser {
   readonly onSessionClosed = (sessionId: string): void => {
     this.#pending = this.#pending.then(async () => {
       try {
-        await closeSessionNarrative(this.#deps, sessionId, this.#options);
+        const result = await closeSessionNarrative(this.#deps, sessionId, this.#options);
+        // `narrateSession` fails closed by returning rather than throwing, so the catch below
+        // never sees a refusal. Dropping the result made an entirely uncomposed narrative half
+        // silent at every log level, and the only symptom was a session that never narrated.
+        if (result.status === 'failed') {
+          this.#deps.logger.warn(
+            { sessionId, summary: result.summary },
+            'session close narrative did not write',
+          );
+        }
       } catch (err) {
         this.#deps.logger.error({ err, sessionId }, 'session close narrative failed');
       }

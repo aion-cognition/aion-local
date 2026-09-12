@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { INSTALLED_PUBLICATION_HANDLERS } from './installed-publications.js';
 import { closeSessionNarrative, type NarrativeDeps } from './narratives.js';
 import { ReflectionOrchestrator } from './orchestrator.js';
 import { CognitiveExtractionStage } from './stages/cognitive.js';
@@ -28,6 +29,7 @@ import {
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import { testGenerationProvider } from '../../infrastructure/providers/test-support/generation-provider.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
+import { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 
 /**
@@ -206,7 +208,24 @@ beforeAll(async () => {
   const run = await orchestrator.run(EPISODE_ID, { now: TODAY });
   expect(run.status).toBe('completed');
 
-  const narrativeDeps: NarrativeDeps = { driver: harness.driver, provider, logger };
+  // Narration publishes, so the coordinator and its SQLite side are part of the composition.
+  // Without them `narrateSession` fails closed before it reads an episode, and the whole file
+  // reports a narrative that was never attempted.
+  const publications = new PublicationCoordinator({
+    driver: harness.driver,
+    db,
+    logger,
+    handlers: [...INSTALLED_PUBLICATION_HANDLERS],
+  });
+  await publications.initialize();
+
+  const narrativeDeps: NarrativeDeps = {
+    driver: harness.driver,
+    db,
+    provider,
+    logger,
+    publications,
+  };
   const narrated = await closeSessionNarrative(narrativeDeps, SESSION_ID, {
     now: TODAY,
     occurredAt: OCCURRED_AT,

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { INSTALLED_PUBLICATION_HANDLERS } from './installed-publications.js';
 import { handleReflection, type ReflectionIntakeDeps } from './intake.js';
 import { LaneAssigner } from './lanes.js';
 import { closeSuperseded } from './narrative-write.js';
@@ -51,6 +52,7 @@ import {
 import { openLogger } from '../../infrastructure/logging/logger.js';
 import { testGenerationProvider } from '../../infrastructure/providers/test-support/generation-provider.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
+import { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { SessionManager } from '../../session/session-manager.js';
 import { directIntakePublisher } from '../test-support/direct-intake.fixture.js';
@@ -322,8 +324,24 @@ beforeAll(async () => {
     publications: directIntakePublisher(harness.driver, db),
     acceptHookCapture: true,
   };
-  deps = { driver: harness.driver, provider: provider(), logger };
-  structuralDeps = { driver: harness.driver, provider: deterministicNarrativeProvider(), logger };
+  // Narration publishes. Both deps sets carry the coordinator and its SQLite side, because
+  // without them `narrateSession` fails closed ahead of every assertion in this file.
+  const publications = new PublicationCoordinator({
+    driver: harness.driver,
+    db,
+    logger,
+    handlers: [...INSTALLED_PUBLICATION_HANDLERS],
+  });
+  await publications.initialize();
+
+  deps = { driver: harness.driver, db, provider: provider(), logger, publications };
+  structuralDeps = {
+    driver: harness.driver,
+    db,
+    provider: deterministicNarrativeProvider(),
+    logger,
+    publications,
+  };
 
   for (const payload of EPISODES) {
     await push(payload, SESSION_IDENTITY);

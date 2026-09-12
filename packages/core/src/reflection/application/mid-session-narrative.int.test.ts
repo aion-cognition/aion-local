@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { INSTALLED_PUBLICATION_HANDLERS } from './installed-publications.js';
 import { closeSessionNarrative, SessionNarrativeStage, type NarrativeDeps } from './narratives.js';
 import { BITEMPORAL_PROPERTIES, writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
 import { upsertEdge } from '../../infrastructure/graph/edges.js';
@@ -23,6 +24,7 @@ import {
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
+import { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import type { StageContext } from '../domain/stage.js';
 import { PIPELINE_VERSION } from '../domain/version.js';
@@ -131,7 +133,16 @@ beforeAll(async () => {
   db = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
   logger = openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'error' });
   await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
-  deps = { driver: harness.driver, provider: stubProvider(), logger };
+  // Narration publishes; without the coordinator and its SQLite side it fails closed and the
+  // mid-session assertions below read a narrative that was never attempted.
+  const publications = new PublicationCoordinator({
+    driver: harness.driver,
+    db,
+    logger,
+    handlers: [...INSTALLED_PUBLICATION_HANDLERS],
+  });
+  await publications.initialize();
+  deps = { driver: harness.driver, db, provider: stubProvider(), logger, publications };
 
   for (const sessionId of [SESSION_ID, QUIET_SESSION_ID]) {
     await seedSession(sessionId);
