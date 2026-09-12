@@ -131,7 +131,7 @@ beforeAll(async () => {
     },
   });
   await coordinator.initialize();
-}, 60_000);
+}, 300_000);
 
 afterEach(async () => {
   for (const actor of actors.splice(0)) {

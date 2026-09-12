@@ -3,6 +3,7 @@ import neo4j, { type Driver } from 'neo4j-driver';
 import { NEO4J_DEFAULT_USER } from '../provision.js';
 import {
   removeNeo4jContainer,
+  removeStartedNeo4jContainers,
   startNeo4jContainer,
   type Neo4jTestContainer,
 } from './neo4j-container.fixture.js';
@@ -28,6 +29,15 @@ const RESET_BATCH_SIZE = 10_000;
 
 /** A localhost container either answers at once or is gone; waiting the default minute only delays the report. */
 const SHARED_CONNECT_TIMEOUT_MS = 10_000;
+
+/**
+ * A cold boot pays for the image, the plugin and the page cache before Bolt answers. One
+ * measured on a loaded host took 281 seconds, against the 60 the shared path assumes, so
+ * every file that boots its own container spent its whole hook budget on a container that
+ * was still starting. Only this path takes the longer wait; a leased container keeps the
+ * 10-second rule above.
+ */
+const DEDICATED_READY_TIMEOUT_MS = 180_000;
 
 export type Neo4jHarness = {
   driver: Driver;
@@ -166,7 +176,7 @@ async function leaseContainer(
  * Everything else reaches it as the fallback, when no shared container is published.
  */
 export async function startDedicatedNeo4jHarness(): Promise<Neo4jHarness> {
-  const container = await startNeo4jContainer();
+  const container = await startNeo4jContainer({ readyTimeoutMs: DEDICATED_READY_TIMEOUT_MS });
   const driver = neo4j.driver(
     container.uri,
     neo4j.auth.basic(NEO4J_DEFAULT_USER, container.password),
@@ -190,6 +200,9 @@ export async function startDedicatedNeo4jHarness(): Promise<Neo4jHarness> {
  */
 export async function stopNeo4jHarness(harness: Neo4jHarness | undefined): Promise<void> {
   if (harness === undefined) {
+    // A setup that timed out mid-boot never produced a harness to name its container, so the
+    // only reclaim left is by what this process started. A no-op when the boot never began.
+    await removeStartedNeo4jContainers();
     return;
   }
   await harness.driver.close();

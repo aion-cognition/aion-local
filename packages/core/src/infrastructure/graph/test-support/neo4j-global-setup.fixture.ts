@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import {
   removeNeo4jContainer,
+  removeStartedNeo4jContainers,
   startNeo4jContainer,
   type Neo4jTestContainer,
 } from './neo4j-container.fixture.js';
@@ -55,6 +56,9 @@ export async function teardown(): Promise<void> {
   if (currentPool !== undefined) {
     await Promise.all(currentPool.map((c) => removeNeo4jContainer(c.containerName)));
   }
+  // A `Promise.all` boot that lost one member never assigned `pool`, so the siblings that did
+  // come up are reachable only by what this process started. A no-op once the pool is removed.
+  await removeStartedNeo4jContainers();
   if (currentLeaseDir !== undefined) {
     await rm(currentLeaseDir, { recursive: true, force: true });
   }

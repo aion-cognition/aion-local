@@ -71,7 +71,7 @@ beforeAll(async () => {
     },
   });
   await coordinator.initialize();
-}, 60_000);
+}, 300_000);
 
 beforeEach(async () => {
   clock = NOW;

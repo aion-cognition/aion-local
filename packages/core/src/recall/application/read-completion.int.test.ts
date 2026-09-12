@@ -74,7 +74,7 @@ beforeAll(async () => {
     },
   });
   await coordinator.initialize();
-}, 60_000);
+}, 300_000);
 
 afterAll(async () => {
   store.close();

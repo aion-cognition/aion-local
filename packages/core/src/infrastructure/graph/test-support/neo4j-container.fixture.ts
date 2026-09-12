@@ -11,10 +11,29 @@ const NEO4J_TEST_IMAGE = 'neo4j:2026.07.1-community';
 const NEO4J_TEST_PASSWORD = 'aion-test-harness-password';
 const READY_TIMEOUT_MS = 60_000;
 
+/**
+ * Every name this process has handed to `docker run` and not yet taken back.
+ *
+ * A hook that times out mid-boot is not a rejection. The promise is abandoned, the `catch`
+ * below never runs, and the name the container was created under never reaches the caller, so
+ * teardown is handed `undefined` and removes nothing. One 60-second hook left a container
+ * running for two hours that way. This set is the only place the name still exists. It is
+ * module state, which vitest's per-file isolation scopes to the file that started them.
+ */
+const started = new Set<string>();
+
 export type Neo4jTestContainer = {
   readonly containerName: string;
   readonly uri: string;
   readonly password: string;
+};
+
+export type Neo4jContainerOptions = {
+  /**
+   * How long to poll Bolt before giving up. The default suits a warm image on an idle host; a
+   * cold boot under load is measured in minutes, and the caller that pays for one says so.
+   */
+  readonly readyTimeoutMs?: number;
 };
 
 async function runDocker(args: readonly string[]): Promise<string> {
@@ -40,8 +59,13 @@ async function resolveMappedPort(containerName: string, containerPort: number): 
  * Booting one of these takes roughly twenty seconds, which is why a run starts one and the
  * files share it rather than each starting its own.
  */
-export async function startNeo4jContainer(): Promise<Neo4jTestContainer> {
+export async function startNeo4jContainer(
+  options: Neo4jContainerOptions = {},
+): Promise<Neo4jTestContainer> {
   const containerName = `aion-test-neo4j-${randomUUID()}`;
+  // Recorded before the run rather than after it, so a timeout during `docker run` itself
+  // still leaves a reclaimable name.
+  started.add(containerName);
 
   await runDocker([
     'run',
@@ -68,15 +92,38 @@ export async function startNeo4jContainer(): Promise<Neo4jTestContainer> {
   try {
     const boltPort = await resolveMappedPort(containerName, 7687);
     const uri = `bolt://127.0.0.1:${boltPort}`;
-    await waitForBoltReady({ uri, password: NEO4J_TEST_PASSWORD }, { timeoutMs: READY_TIMEOUT_MS });
+    await waitForBoltReady(
+      { uri, password: NEO4J_TEST_PASSWORD },
+      { timeoutMs: options.readyTimeoutMs ?? READY_TIMEOUT_MS },
+    );
     return { containerName, uri, password: NEO4J_TEST_PASSWORD };
   } catch (err) {
-    await runDocker(['rm', '-f', '-v', containerName]);
+    await removeNeo4jContainer(containerName);
     throw err;
   }
 }
 
 /** Force-removes the container and its anonymous volumes in one step. */
 export async function removeNeo4jContainer(containerName: string): Promise<void> {
+  started.delete(containerName);
   await runDocker(['rm', '-f', '-v', containerName]);
+}
+
+/**
+ * Removes whatever this process started and never took back, and answers with what it removed.
+ *
+ * Teardown calls this unconditionally, including the teardown of a `beforeAll` that timed out
+ * before it could name anything. A name Docker has already forgotten is not worth failing a
+ * teardown over, so each removal is taken on its own.
+ */
+export async function removeStartedNeo4jContainers(): Promise<string[]> {
+  const orphans = [...started];
+  for (const containerName of orphans) {
+    try {
+      await removeNeo4jContainer(containerName);
+    } catch {
+      started.delete(containerName);
+    }
+  }
+  return orphans;
 }

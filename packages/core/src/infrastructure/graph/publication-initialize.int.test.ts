@@ -29,7 +29,7 @@ beforeAll(async () => {
     handlers: [],
     logger: { warn: () => undefined, error: () => undefined },
   });
-}, 60_000);
+}, 300_000);
 
 afterAll(async () => {
   store.close();
