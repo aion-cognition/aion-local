@@ -55,7 +55,16 @@ export type LinkVersionKey = {
  * purpose: delivery keys are not prefix-free by construction, and a prefix test would claim another
  * delivery's rows whenever one key happened to start with another. No pattern is involved either,
  * so a delivery key carrying a wildcard character means nothing here.
+ *
+ * The class is a predicate rather than an assumption. A delivery key is caller text and the
+ * materialization and retirement writers key their own rows by the same colon shape, so a delivery
+ * named to collide with one of theirs would otherwise put a row of another class in front of a
+ * caller that releases what it finds. Narrowing to `stated` here makes the guarantee structural:
+ * the only rows this can return are the ones the reference delivery itself wrote, which is what
+ * the caller's refusal already says it counted.
  */
+const STATED = 'stated';
+
 export function heldDeliveryLinkVersions(
   db: SqliteHandle,
   fromId: string,
@@ -66,10 +75,11 @@ export function heldDeliveryLinkVersions(
       `SELECT v.link_id AS link_id, v.operation_key AS operation_key
        FROM evidence_links l
        JOIN evidence_link_versions v ON v.link_id = l.link_id
-       WHERE l.from_id = ? AND v.known_from IS NULL AND v.operation_key = ? || v.link_id
+       WHERE l.from_id = ? AND v.known_from IS NULL AND v.state = ?
+         AND v.operation_key = ? || v.link_id
        ORDER BY v.link_id`,
     )
-    .all(fromId, `${deliveryKey}:`) as { link_id: string; operation_key: string }[];
+    .all(fromId, STATED, `${deliveryKey}:`) as { link_id: string; operation_key: string }[];
   return rows.map((row) => ({ linkId: row.link_id, operationKey: row.operation_key }));
 }
 
