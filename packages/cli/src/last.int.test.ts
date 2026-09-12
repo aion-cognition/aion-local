@@ -24,6 +24,17 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runLast } from './last.js';
 
 /**
+ * The authorized key, read the way `testGenerationProvider` reads it, including its
+ * `TEST_AION_GENERATION=local` kill switch. Passed only into the service environment this
+ * fixture builds: the literal it used to build had no key field at all, so a keyed run of this
+ * root silently generated on the local route and discharged nothing.
+ */
+const ANTHROPIC_API_KEY =
+  process.env.TEST_AION_GENERATION === 'local'
+    ? undefined
+    : (process.env.AION_ANTHROPIC_API_KEY ?? '').trim() || undefined;
+
+/**
  * `aion last --json` must reproduce, byte-for-byte on content, the pack the MCP client
  * actually received. This drives a real client against a real `bootstrapService` over
  * loopback HTTP, then points the CLI's own code path at the same SQLite file the service
@@ -75,6 +86,7 @@ beforeAll(async () => {
     AION_LOG_FILE: join(dir, 'aion-mcp.jsonl'),
     AION_LOG_LEVEL: 'debug',
     AION_MCP_PORT: String(port),
+    ...(ANTHROPIC_API_KEY === undefined ? {} : { AION_ANTHROPIC_API_KEY: ANTHROPIC_API_KEY }),
   });
   await started.service.listen();
   const url = new URL(`http://127.0.0.1:${String(started.service.port)}${MCP_PATH}`);

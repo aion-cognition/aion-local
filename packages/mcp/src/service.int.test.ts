@@ -30,6 +30,17 @@ import { bootstrapService, type AionService } from './bootstrap.js';
 import { HEALTH_PATH, MCP_PATH } from './http.js';
 
 /**
+ * The authorized key, read the way `testGenerationProvider` reads it, including its
+ * `TEST_AION_GENERATION=local` kill switch. Passed only into the service environment this
+ * fixture builds: the literal it used to build had no key field at all, so a keyed run of this
+ * root silently generated on the local route and discharged nothing.
+ */
+const ANTHROPIC_API_KEY =
+  process.env.TEST_AION_GENERATION === 'local'
+    ? undefined
+    : (process.env.AION_ANTHROPIC_API_KEY ?? '').trim() || undefined;
+
+/**
  * The whole surface at once: the real assembly from `bootstrapService`, a throwaway Neo4j,
  * a temp SQLite, and the host's live Ollama, driven by the MCP SDK's own client over a
  * loopback socket. Two clients connect at the same time and each stores then recalls, which
@@ -130,6 +141,7 @@ beforeAll(async () => {
     AION_LOG_FILE: join(dir, 'aion.jsonl'),
     AION_LOG_LEVEL: 'debug',
     AION_MCP_PORT: String(port),
+    ...(ANTHROPIC_API_KEY === undefined ? {} : { AION_ANTHROPIC_API_KEY: ANTHROPIC_API_KEY }),
   });
   await started.service.listen();
   url = new URL(`http://127.0.0.1:${String(started.service.port)}${MCP_PATH}`);
