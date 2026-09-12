@@ -8,6 +8,8 @@ import type { Driver } from 'neo4j-driver';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { CliUsageError } from './args.js';
+
 /**
  * Everything that differs between the two substrates an install can run on, in one place. The
  * profile itself is a config knob (`AION_INSTALL_PROFILE`), because `doctor` and `status` have to
@@ -196,6 +198,34 @@ export function storePairingRefusal(
     'describe. Drop both and initialize again:',
     ...storeDropCommands(profile, dataDir).map((line) => `  ${line}`),
   ];
+}
+
+/**
+ * `--install docker` on a native install is a refusal rather than a silent no-op.
+ *
+ * Only the native branch does anything with the flag, so asking for docker on a substrate that is
+ * native used to validate and then change nothing: init would carry on against the host addresses
+ * it was told to leave. Switching is not a flag, and it is not one line either. The two profiles
+ * keep their substrates in different places — two volumes against two directories — so the move is
+ * a reset and an init, with whatever the old substrate held dropped deliberately.
+ *
+ * The other direction is not refused, because `docker` is the code default and a recorded default
+ * cannot be told from nobody having chosen. `--install native` on a docker-shaped config is the
+ * first choice rather than a switch, and the store-pairing check is what catches the case where it
+ * is pointed at a substrate that already exists elsewhere.
+ */
+export function refuseProfileSwitch(
+  requested: InstallProfile | undefined,
+  current: InstallProfile,
+): void {
+  if (requested === undefined || requested === current || current !== 'native') {
+    return;
+  }
+  throw new CliUsageError(
+    `this substrate is ${current}; switching profiles is a reset-and-init, not a flag. ` +
+      'Drop both stores (docs/operations.md, "Resetting the substrate"), set ' +
+      `${INSTALL_PROFILE_ENV_VAR}=${requested} in .env, and run init.`,
+  );
 }
 
 /** One line for `aion status` and one doctor check: which substrate this install is running. */

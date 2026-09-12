@@ -108,16 +108,51 @@ describe('what the start-time arm refuses to touch', () => {
 });
 
 describe('the identity the start-time arm publishes under', () => {
-  it('carries the revision and the contract, and no moment', () => {
-    // A moment in the identity would make every boot its own decision with its own receipt. One
-    // contract, one arming: a restart that finds the same facts republishes the same operation.
-    const first = evictionArmOnStartOperationId(EVICTION_COMPATIBILITY_REVISION, 'epoch-1');
+  const facts = {
+    revision: EVICTION_COMPATIBILITY_REVISION,
+    coverageEpoch: 'epoch-1',
+    coverageState: 'active',
+    bootstrapState: 'initialized',
+    activationCapabilityRevision: 1,
+    installedKinds: ['intake', 'episode_eviction', 'eviction_arming'],
+  };
 
-    expect(first).toBe(`eviction-arm:${String(EVICTION_COMPATIBILITY_REVISION)}:epoch-1`);
-    expect(first).toBe(evictionArmOnStartOperationId(EVICTION_COMPATIBILITY_REVISION, 'epoch-1'));
-    // A new contract is a new decision, because what was armed was armed against the old one.
-    expect(evictionArmOnStartOperationId(EVICTION_COMPATIBILITY_REVISION, 'epoch-2')).not.toBe(
-      first,
+  it('is the same for the same facts, and carries no moment', () => {
+    // A moment in the identity would make every boot its own decision with its own receipt. One
+    // set of facts, one arming: a restart that finds them unchanged republishes the same operation
+    // and gets its recorded outcome, which under unchanged facts is still the right one.
+    expect(evictionArmOnStartOperationId(facts)).toBe(evictionArmOnStartOperationId(facts));
+    expect(evictionArmOnStartOperationId(facts)).toContain(
+      `eviction-arm:${String(EVICTION_COMPATIBILITY_REVISION)}:epoch-1:active:initialized:1:`,
     );
+  });
+
+  it('moves when any fact the check reads moves', () => {
+    // The coordinator replays a recorded outcome for an identity it has seen without re-checking
+    // it, so a fact missing from here is a refusal that outlives the condition that caused it.
+    const moved = [
+      { ...facts, coverageEpoch: 'epoch-2' },
+      { ...facts, coverageState: 'preparing' },
+      { ...facts, bootstrapState: 'pairing' },
+      { ...facts, activationCapabilityRevision: 0 },
+      { ...facts, revision: 2 },
+      // The one that made this a defect rather than a nicety: a process composing a smaller
+      // handler set records `writer_audit_incomplete`, and the full composition has to be able to
+      // arm afterwards.
+      { ...facts, installedKinds: ['intake', 'eviction_arming'] },
+    ];
+
+    for (const one of moved) {
+      expect(evictionArmOnStartOperationId(one)).not.toBe(evictionArmOnStartOperationId(facts));
+    }
+  });
+
+  it('reads the composition as a set, since registration order is not a fact', () => {
+    expect(
+      evictionArmOnStartOperationId({
+        ...facts,
+        installedKinds: ['eviction_arming', 'episode_eviction', 'intake'],
+      }),
+    ).toBe(evictionArmOnStartOperationId(facts));
   });
 });

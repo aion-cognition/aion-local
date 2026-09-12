@@ -33,6 +33,7 @@ import {
 import { installFullProfile } from './hooks-cmd.js';
 import {
   readStorePairing,
+  refuseProfileSwitch,
   storePairingRefusal,
   upsertEnvValue,
   type InstallProfile,
@@ -461,6 +462,7 @@ export function runInit(
         interactive: process.stdin.isTTY,
         ask: askOnTerminal,
       });
+      refuseProfileSwitch(flags.install, config.install.profile);
       // The addresses first, the key second: both rewrite `.env` and re-read config, and the key
       // is settled against the substrate this install is actually going to talk to.
       const based =

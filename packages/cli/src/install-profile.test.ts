@@ -10,6 +10,7 @@ import {
   nativeAddresses,
   nativeDataDir,
   planNativeEnv,
+  refuseProfileSwitch,
   storeDropCommands,
   storePairing,
   storePairingRefusal,
@@ -161,6 +162,39 @@ describe('the half-reset refusal', () => {
   it('gives the docker profile two commands and the native profile a directory to remove', () => {
     expect(storeDropCommands('docker', '/data')).toHaveLength(2);
     expect(storeDropCommands('native', '/home/x/.aion')[0]).toBe('rm -rf /home/x/.aion');
+  });
+});
+
+describe('asking for the other profile', () => {
+  it('refuses docker on a native substrate, rather than validating and doing nothing', () => {
+    // Only the native branch acts on the flag, so this used to parse, pass validation, and leave
+    // init running against the host addresses it had just been told to leave.
+    expect(() => {
+      refuseProfileSwitch('docker', 'native');
+    }).toThrow('this substrate is native; switching profiles is a reset-and-init');
+    expect(() => {
+      refuseProfileSwitch('docker', 'native');
+    }).toThrow('AION_INSTALL_PROFILE=docker');
+  });
+
+  it('lets the flag through when it names the profile already in force', () => {
+    expect(() => {
+      refuseProfileSwitch('native', 'native');
+    }).not.toThrow();
+    expect(() => {
+      refuseProfileSwitch('docker', 'docker');
+    }).not.toThrow();
+    expect(() => {
+      refuseProfileSwitch(undefined, 'native');
+    }).not.toThrow();
+  });
+
+  it('lets native through on a docker-shaped config, which is the first choice', () => {
+    // `docker` is the code default, so a config that reads docker cannot be told apart from one
+    // nobody chose. Choosing native there is the flag doing its job.
+    expect(() => {
+      refuseProfileSwitch('native', 'docker');
+    }).not.toThrow();
   });
 });
 

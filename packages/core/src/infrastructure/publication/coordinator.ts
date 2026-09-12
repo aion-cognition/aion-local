@@ -120,6 +120,18 @@ export class PublicationCoordinator {
     }
   }
 
+  /**
+   * The kinds this coordinator was composed with, which is not the declared list.
+   *
+   * A caller that folds its own preconditions into an operation identity has to fold the
+   * composition it will publish through, and the static list cannot answer that: a process
+   * composing a smaller set is the case the arming check exists to catch, and asking the declared
+   * list would put the same identity on two different substrates' worth of capability.
+   */
+  get installedKinds(): readonly PublicationKind[] {
+    return [...this.#handlers.keys()];
+  }
+
   /** Bootstrap is additive and never replaces an initialized missing or foreign receipt. */
   async initialize(): Promise<void> {
     this.#outsideSqlite();

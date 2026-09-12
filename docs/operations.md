@@ -34,6 +34,12 @@ The flag was `--profile` for one release and is now `--install`, because `aion i
 native` put two different questions under one word. The old spelling still works and is not
 advertised.
 
+The flag chooses a profile once; it does not switch one. `--install docker` on a native install is
+refused, because the two profiles keep their stores in different places and moving between them
+means dropping both and initializing again. `--install native` on a docker-shaped config is not
+refused, since `docker` is the code default and a recorded default cannot be told from nobody
+having chosen.
+
 ### Bringing up the native profile
 
 Prerequisites: [Ollama](https://ollama.com) running on the host, and a host build, because the

@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { EVICTION_COMPATIBILITY_REVISION, evictionArmingPublication } from './eviction-arming.js';
 import type { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
 import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
@@ -23,11 +25,11 @@ import {
  * - It never re-arms a substrate somebody stopped. A disarm is an operator's statement, and a
  *   restart is not a retraction of it, so a standing stamp or an unrecorded stop claim leaves the
  *   fence exactly where the operator left it and says which of the two it found.
- * - It never publishes twice for one substrate. The identity carries the revision and the
- *   coverage epoch and no moment, so a restart that finds the same facts either reads the fence as
- *   already open and returns, or republishes the same operation and gets the recorded outcome
- *   back. A refusal is returned rather than thrown: the substrate serves reads with the fence shut,
- *   which is the state every substrate ships in.
+ * - It never publishes twice under one set of facts. The identity carries every fact the check
+ *   reads and no moment (see `StartArmingFacts`), so a restart that finds the same facts either
+ *   reads the fence as already open and returns, or republishes the same operation and gets the
+ *   recorded outcome back. A refusal is returned rather than thrown: the substrate serves reads
+ *   with the fence shut, which is the state every substrate ships in.
  */
 
 export type EvictionArmingOutcome =
@@ -36,13 +38,62 @@ export type EvictionArmingOutcome =
   | { readonly state: 'unarmed'; readonly reason: string };
 
 /**
- * Identity without a moment, which is what makes the start idempotent. The manual disarm keeps
- * its own timestamped identity: stopping can happen more than once on one substrate under one
- * revision and one contract, and each of those is its own decision. Arming under one contract is
- * one decision, taken once.
+ * Every fact the check reads, which is what the identity is cut from.
+ *
+ * The coordinator replays a recorded outcome for an identity it has seen and does not re-check it,
+ * so an identity narrower than the check turns one refusal into a permanent one. A start under a
+ * composition missing a handler would record `writer_audit_incomplete`, and every later start —
+ * full composition, same revision, same contract — would replay that refusal for the life of the
+ * epoch, with no command left to arm by hand and `aion evict status` printing an all-`[ok]` table
+ * beside a closed fence.
+ *
+ * So a substrate where any of these moved is a different decision and takes a fresh identity, and
+ * a repeat under identical facts replays an outcome that is still the right one. This is the
+ * coverage activation rule, and its docstring says why: every payload field is in its identity,
+ * including the one its own check does not read.
+ *
+ * Two inputs to the check are deliberately absent. The stop and the armed revision are read before
+ * this is built and both return early, so at the point an identity is needed they are constants:
+ * no stop stands, and the fence is below the revision.
  */
-export function evictionArmOnStartOperationId(revision: number, epoch: string): string {
-  return `eviction-arm:${String(revision)}:${epoch}`;
+export type StartArmingFacts = {
+  readonly revision: number;
+  readonly coverageEpoch: string;
+  readonly coverageState: string;
+  readonly bootstrapState: string;
+  readonly activationCapabilityRevision: number;
+  /** The composition that will publish it, from the coordinator rather than the declared list. */
+  readonly installedKinds: readonly string[];
+};
+
+/**
+ * The composition as one short stable token. A digest rather than the list: the identity is a key
+ * and the kinds are what moved, so what matters is that two different compositions cannot share
+ * one. Sorted first, because a set is what the check reads and registration order is not a fact.
+ */
+function compositionDigest(installedKinds: readonly string[]): string {
+  return createHash('sha256')
+    .update([...installedKinds].sort().join(','))
+    .digest('hex')
+    .slice(0, 12);
+}
+
+/**
+ * Identity without a moment, which is what makes the start idempotent. The manual acts keep their
+ * own timestamped identities: stopping and lifting a stop can each happen more than once on one
+ * substrate under one revision and one contract, and each of those is its own decision. Arming
+ * under one set of facts is one decision, taken once.
+ */
+export function evictionArmOnStartOperationId(facts: StartArmingFacts): string {
+  return [
+    'eviction-arm',
+    String(facts.revision),
+    facts.coverageEpoch,
+    facts.coverageState,
+    facts.bootstrapState,
+    String(facts.activationCapabilityRevision),
+    compositionDigest(facts.installedKinds),
+  ].join(':');
 }
 
 export async function armEvictionOnStart(
@@ -69,7 +120,14 @@ export async function armEvictionOnStart(
   }
   const outcome = await publications.publish({
     kind: evictionArmingPublication.kind,
-    operationId: evictionArmOnStartOperationId(EVICTION_COMPATIBILITY_REVISION, contract.epoch),
+    operationId: evictionArmOnStartOperationId({
+      revision: EVICTION_COMPATIBILITY_REVISION,
+      coverageEpoch: contract.epoch,
+      coverageState: contract.state,
+      bootstrapState: pairing.bootstrapState,
+      activationCapabilityRevision: pairing.activationCapabilityRevision,
+      installedKinds: publications.installedKinds,
+    }),
     payload: {
       act: 'arm',
       revision: EVICTION_COMPATIBILITY_REVISION,

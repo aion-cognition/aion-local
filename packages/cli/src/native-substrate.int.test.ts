@@ -21,26 +21,35 @@ import { applyNeo4jSettings, NEO4J_SETTINGS, resolveNeo4jLayout } from './native
  * shut.
  */
 
+/** Straight to the file descriptor: what a reporter catches, a reporter can decide not to print. */
+function notice(line: string): void {
+  process.stderr.write(`native substrate int: ${line}\n`);
+}
+
 const URI = (process.env.TEST_AION_NATIVE_NEO4J_URI ?? '').trim();
 const PASSWORD = (process.env.TEST_AION_NATIVE_NEO4J_PASSWORD ?? '').trim();
 const NEO4J_HOME = (process.env.TEST_AION_NATIVE_NEO4J_HOME ?? '').trim();
 const present = URI !== '' && PASSWORD !== '';
 
 /**
- * Always runs, and is how the skip is visible: a gated file whose cases all skip prints nothing
- * of its own, and a gate nobody can see is a gate nobody knows is shut. It also refuses a gate
- * that was half named, which is an operator mistake that would otherwise read as a clean skip.
+ * Always runs, and is how the skip is visible: a gated file whose cases all skip prints nothing of
+ * its own, and a gate nobody can see is a gate nobody knows is shut. It also refuses a gate that
+ * was half named, which is an operator mistake that would otherwise read as a clean skip.
+ *
+ * It writes to stderr directly rather than through `console`, because the reporter intercepts
+ * `console` and the default one does not print what it catches. A skip notice only the verbose
+ * reporter shows is the same invisible gate one step along.
  */
 it('says whether a native substrate was offered to it', () => {
   const named = [URI, PASSWORD].filter((value) => value !== '').length;
 
   expect(named === 0 || named === 2).toBe(true);
-  console.log(
+  notice(
     present
-      ? `native substrate int: RUNNING against ${URI}${NEO4J_HOME === '' ? '' : ` (${NEO4J_HOME})`}`
-      : 'native substrate int: SKIPPED. Set TEST_AION_NATIVE_NEO4J_URI and ' +
-          'TEST_AION_NATIVE_NEO4J_PASSWORD (and optionally TEST_AION_NATIVE_NEO4J_HOME) to run it ' +
-          'against a Neo4j you manage. Nothing here starts or changes a server.',
+      ? `RUNNING against ${URI}${NEO4J_HOME === '' ? '' : ` (${NEO4J_HOME})`}`
+      : 'SKIPPED. Set TEST_AION_NATIVE_NEO4J_URI and TEST_AION_NATIVE_NEO4J_PASSWORD (and ' +
+          'optionally TEST_AION_NATIVE_NEO4J_HOME) to run it against a Neo4j you manage. ' +
+          'Nothing here starts or changes a server.',
   );
 });
 
@@ -48,7 +57,7 @@ it.runIf(present)('reads the pairing off a real native server', async () => {
   const connection = new GraphConnection({ uri: URI, password: PASSWORD });
   try {
     const pairing = await readNeo4jPairing(connection.driver, URI);
-    console.log(`native substrate int: ${JSON.stringify(pairing)}`);
+    notice(JSON.stringify(pairing));
 
     // The requirement is that the two halves agree. Whether they are also the series this build
     // was measured on is the warning the doctor reports, not a failure here.
@@ -64,7 +73,7 @@ it.runIf(present && NEO4J_HOME !== '')(
   async () => {
     const layout = await resolveNeo4jLayout(HOST_ACTIONS, { NEO4J_HOME });
     expect(layout?.home).toBe(NEO4J_HOME);
-    console.log(`native substrate int: layout ${JSON.stringify(layout)}`);
+    notice(`layout ${JSON.stringify(layout)}`);
 
     // The real file is copied and the copy is what gets written, so this case cannot change the
     // configuration of a server somebody is running.

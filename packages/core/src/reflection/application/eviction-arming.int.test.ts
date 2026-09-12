@@ -127,6 +127,26 @@ it('refuses a composition that did not install every declared kind', async () =>
 it('arms the fence at start once coverage is active, and reads it back on the next start', async () => {
   await activateCoverage();
 
+  // A start under a composition missing a handler, first, because it is the case that used to
+  // poison every start after it: the refusal was recorded under an identity the full composition
+  // would rebuild, and the coordinator replays a recorded outcome rather than re-checking it.
+  const partial = new PublicationCoordinator({
+    driver,
+    db: store.db,
+    logger,
+    now: () => NOW,
+    handlers: INSTALLED_PUBLICATION_HANDLERS.filter(
+      (handler) => handler.kind !== 'episode_eviction',
+    ),
+  });
+  await partial.initialize();
+  expect(await armEvictionOnStart(partial, store.db)).toEqual({
+    state: 'unarmed',
+    reason: 'writer_audit_incomplete',
+  });
+  expect(armedRevision()).toBe(0);
+
+  // The same substrate, the same contract, the same revision, one fact moved: the composition.
   expect(await armEvictionOnStart(publications, store.db)).toEqual({
     state: 'armed',
     revision: EVICTION_COMPATIBILITY_REVISION,
