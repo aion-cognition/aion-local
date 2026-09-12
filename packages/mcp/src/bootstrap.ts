@@ -1,5 +1,4 @@
 import {
-  acceptsHookCapture,
   activateCoverageOnStart,
   ApiUsageRecorder,
   armEvictionOnStart,
@@ -20,6 +19,7 @@ import {
   narrativeSweepOptions,
   openLogger,
   plasticityCounters,
+  prepareSubstrateRoots,
   probeRecall,
   publishPipelineReadinessPolicy,
   ProviderRouter,
@@ -107,6 +107,9 @@ function fallbackMemberName(env: NodeJS.ProcessEnv): string {
 }
 
 export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionService> {
+  // Ahead of the config, because the path defaults it carries are the container's and the logger
+  // opens on the next line. A container run finds them already right and nothing is seeded.
+  prepareSubstrateRoots(env);
   const config = loadConfig(env);
   // The service takes the fd 1 tee, which is what `docker logs` reads. The CLI does not: its
   // answers go to fd 1.
@@ -316,7 +319,10 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       // One assigner for the service's life: its counters are the arrival rate, and a fresh
       // instance per call would measure nothing.
       lanes: new LaneAssigner(config.lanes),
-      acceptHookCapture: acceptsHookCapture(router.routing),
+      // Hooks are route-agnostic: the local route digests a capture, slower and free. The gate
+      // stays in the intake type for a deployment that wants to shut hook capture off on its own
+      // terms, and the service no longer decides it from the routing.
+      acceptHookCapture: true,
     };
     // A boot that unloaded a model changed what the substrate runs on, which is worth
     // remembering; a boot that found nothing resident changed nothing. Recorded through the

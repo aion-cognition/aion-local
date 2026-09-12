@@ -53,12 +53,16 @@ Check the install with `./bin/aion doctor`, which verifies every substrate invar
 the live stack and names anything broken. An archive install has no git history to stamp the
 image with, so `doctor` reports one service-freshness warning there; it is cosmetic.
 
-## Two profiles
+## Where generation runs
 
-Whether `AION_ANTHROPIC_API_KEY` is set decides the profile. Routing resolves it once at boot
-(`packages/core/src/infrastructure/providers/routing.ts`), and every difference below reads
-that resolved route rather than the key again, so a key with `AION_REFLECT_PROVIDER` pinned
-back to Ollama is the local profile.
+Everything runs locally by default and nothing here needs an API key. "Profile" means the install
+profile — docker or native, which machine the substrate runs on. Where generation runs is a
+separate question answered by knobs, and the answer is local unless you change it.
+
+Routing resolves once at boot (`packages/core/src/infrastructure/providers/routing.ts`) and every
+difference below reads the resolved route: an `AION_ANTHROPIC_API_KEY` sends both generation roles
+to Anthropic, `AION_CUE_PROVIDER` and `AION_REFLECT_PROVIDER` override that per role in either
+direction, and a role pinned to Anthropic with no key runs local and says so.
 
 **Keyed.** With both provider pins at `auto`, both generation roles run on `claude-haiku-4-5`:
 recall's cue call, and reflection with every stage behind it, narratives included.
@@ -80,29 +84,27 @@ What else the route decides:
   against 2,000 (`packages/core/src/reflection/domain/narrative-scale.ts`). Neither route clips
   a session longer than its own cap: it is narrated in chunks and the chunk texts folded once,
   so the local route pays more calls for the same coverage.
-- **Whether hooks are allowed.** They are a keyed-profile feature, refused at install, refused
-  at intake while reflection routes local, stripped by the hook client itself on its next fire,
-  and reported by `aion doctor` as `hooks-keyed-only`. [docs/harness.md](docs/harness.md) states
-  the rule.
+- **What a capture costs, not whether you get one.** Hooks are route-agnostic: they fire on every
+  install and hand the turn to whichever route this one resolved. `aion doctor` reports which
+  model digests them as `hooks-route`. [docs/harness.md](docs/harness.md) states the cadence.
 - **What a failed generation call costs.** The Anthropic provider retries a throttled or failed
   answer and trips a circuit breaker on a bad stretch; the Ollama provider has neither, and a
   failed call costs its stage. [docs/degradation.md](docs/degradation.md) carries both rungs,
   the keyed narrative knobs, and the case where a key is pinned to a role that has none.
 
-`init` takes one of the two profiles, and asks for it when you do not name one.
+`init` takes one of two generation profiles and asks when you do not name one. Both install the
+Claude Code harness hooks, which turn the agent's judgment call about when to remember into a
+fixed cadence: recall at session start and on a substantial prompt, capture on compaction, stop,
+subagent stop, and session end.
 
-- `aion init local` provisions the substrate and nothing else. The agent decides for itself
-  when to call recall and reflection.
-- `aion init full` also asks for an Anthropic key and installs the Claude Code harness hooks,
-  which turn that judgment call into a fixed cadence: recall at session start and on a
-  substantial prompt, capture on compaction, stop, subagent stop, and session end. The two
-  halves pair on purpose, since the hooks push enough small capture work to be worth routing
-  to Haiku.
+- `aion init local` provisions the substrate and routes every generation role to the host Ollama.
+- `aion init full` asks for an Anthropic key, records it in `.env`, and routes generation there.
 
-There is no key step before init: `full` asks for the key and records it in `.env`. To add
-one to an existing `local` install, put it in `.env` as `AION_ANTHROPIC_API_KEY=...` and
-rerun `./bin/aion init`; the service restarts with the key and routing follows it. Removing
-it from `.env` and rerunning init routes everything back to local models the same way.
+The key is optional spend rather than a capability. Hooks used to be the keyed profile's alone,
+because the local model of that build could not keep up with a capture on every turn; it can, and
+that rule is gone. To add a key to an existing install, put it in `.env` as
+`AION_ANTHROPIC_API_KEY=...` and rerun `./bin/aion init`; the service restarts with it and routing
+follows. Removing it and rerunning init routes everything back to local models the same way.
 
 `aion hooks install | uninstall | status` does the hook half on its own, and
 `--harness codex` points the same commands at `$CODEX_HOME/hooks.json` and the aion server
@@ -159,6 +161,8 @@ does not work and says so: the CLI orchestrates the repo it lives in.
 - `maintain`: the maintenance catalog, and forcing one operation to run now
 - `unmerge`: split an identity back out of the entity dedup absorbed it into
 - `timeline`: one episode across the archive, the graph, the queue, and the ledger
+- `logs`: tail the substrate's own log file, with the path it read printed first
+- `uninstall`: remove what init put on this machine, and say what it left
 
 The commands with teeth make you say so: `queue drop`, `queue reconcile --re-enqueue`,
 `forget`, `unforget`, `unsupersede`, `evict disarm` and `evict rearm` preview what they would do

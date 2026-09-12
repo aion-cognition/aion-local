@@ -205,7 +205,7 @@ function fireSessionStart(input: Record<string, unknown>): Promise<SessionStartR
     harness: 'claude',
     stopMode: 'push',
     minChars: 40,
-    keyState: 'present',
+    route: 'keyed',
     settingsPath: join(dataDir, 'unused-settings.json'),
     stateDir,
     endpoint,

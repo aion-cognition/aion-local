@@ -6,4 +6,5 @@
 export type { Config } from './schema.js';
 export { DEFAULTS } from './defaults.js';
 export { envFileValue, parseEnvFile } from './env-file.js';
+export { hostDataDir, prepareSubstrateRoots, runningInContainer } from './host-roots.js';
 export { loadConfig, ConfigError } from './load-config.js';

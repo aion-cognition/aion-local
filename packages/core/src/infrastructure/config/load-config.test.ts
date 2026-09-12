@@ -184,7 +184,11 @@ describe('loadConfig override precedence', () => {
       [LOG_FILE_ENV_VAR]: '/tmp/aion.jsonl',
       [LOG_LEVEL_ENV_VAR]: 'debug',
     });
-    expect(config.logging).toEqual({ filePath: '/tmp/aion.jsonl', level: 'debug' });
+    expect(config.logging).toEqual({
+      filePath: '/tmp/aion.jsonl',
+      level: 'debug',
+      retentionDays: DEFAULTS.logging.retentionDays,
+    });
   });
 
   it('applies many overrides independently of each other', () => {

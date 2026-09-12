@@ -200,7 +200,7 @@ reflections are refused, since reflection resolved local.
 
 **Diagnose.** The boot warn line above. `aion status` prints
 `<role> is pinned to anthropic with no key set, so it runs on <model>`
-(`packages/cli/src/snapshot.ts:370-374`), and `aion doctor`'s `hooks-keyed-only` check fails when
+(`packages/cli/src/snapshot.ts`), and `aion doctor`'s `hooks-route` check reports the route when
 hooks are installed against a locally routed reflect role.
 
 **Recovers.** Not automatically; nothing is broken. Set the key or drop the pin, then restart

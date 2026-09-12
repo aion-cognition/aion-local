@@ -28,7 +28,8 @@ import { mcpBaseUrl } from './compose.js';
 import {
   coverageCheck,
   graphPairingCheck,
-  hooksKeyedOnlyCheck,
+  neo4jBrowserUrl,
+  hooksRouteCheck,
   installProfileCheck,
   ollamaRuntimeProbe,
   queueLagCheck,
@@ -178,7 +179,10 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
             detail: `${connection.uri} unreachable: ${health.error ?? 'unknown error'}`,
           };
         }
-        return { ok: true, detail: `${connection.uri} (${health.agent ?? 'neo4j'})` };
+        return {
+          ok: true,
+          detail: `${connection.uri} (${health.agent ?? 'neo4j'}), browser ${neo4jBrowserUrl(connection.uri)}`,
+        };
       },
     },
     { name: 'install-profile', run: () => Promise.resolve(installProfileCheck(config)) },
@@ -398,8 +402,8 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
     },
     { name: 'ollama-runtime', run: () => ollamaRuntimeProbe(config.ollama.url) },
     {
-      name: 'hooks-keyed-only',
-      run: () => Promise.resolve(hooksKeyedOnlyCheck(config, env)),
+      name: 'hooks-route',
+      run: () => Promise.resolve(hooksRouteCheck(config, env)),
     },
     {
       name: 'volumes-writable',

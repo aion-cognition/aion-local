@@ -4,6 +4,7 @@ import {
   GraphConnection,
   loadConfig,
   openLogger,
+  prepareSubstrateRoots,
   SqliteStore,
   type Config,
   type Logger,
@@ -136,6 +137,11 @@ export async function withSubstrate<F>(command: SubstrateCommand<F>): Promise<nu
   let config: Config;
   try {
     flags = command.parse(argv);
+    // Before the config and well before the logger: the table's path defaults are the container's,
+    // and every command's first act is to open a log file under them. Inside the container this
+    // changes nothing. Inside the try, so a directory that cannot be made is reported as a refusal
+    // rather than thrown as a stack trace out of a process that has not started yet.
+    prepareSubstrateRoots(process.env);
     config = loadConfig(process.env);
   } catch (err) {
     report(spec, err);

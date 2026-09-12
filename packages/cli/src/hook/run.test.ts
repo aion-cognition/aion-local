@@ -12,18 +12,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { KeyState } from './key-state.js';
 import { mcpEndpoint, parseRpcBody, type FetchImpl } from './mcp.js';
 import {
   HOOK_EVENTS,
   HOOK_TIMEOUT_MS,
-  KEYLESS_NOTICE,
   STOP_INSTRUCTION,
   type Harness,
   type HookOptions,
   type StopMode,
 } from './options.js';
 import { OBSERVATION_LIMIT } from './payload.js';
+import type { GenerationRoute } from './route-state.js';
 import { main, parseHookFlags, parseHookInput, runHook } from './run.js';
 import { backupPath } from './settings-file.js';
 import { describeAionHooks } from './settings.js';
@@ -165,7 +164,7 @@ describe('hook events', () => {
     readonly harness?: Harness;
     readonly stopMode?: StopMode;
     readonly minChars?: number;
-    readonly keyState?: KeyState;
+    readonly route?: GenerationRoute;
     readonly settingsPath?: string;
     readonly now?: () => Date;
   };
@@ -176,7 +175,7 @@ describe('hook events', () => {
       harness: overrides.harness ?? 'claude',
       stopMode: overrides.stopMode ?? 'push',
       minChars: overrides.minChars ?? 40,
-      keyState: overrides.keyState ?? 'present',
+      route: overrides.route ?? 'keyed',
       // Under the temp directory whatever the case: no test may reach the real settings file.
       settingsPath: overrides.settingsPath ?? join(dir, 'home', '.claude', 'settings.json'),
       stateDir: join(dir, 'state'),
@@ -841,9 +840,7 @@ describe('hook events', () => {
     });
   });
 
-  describe('with no anthropic key on the machine', () => {
-    const LATER = (): Date => new Date('2026-08-30T05:00:00.000Z');
-
+  describe('on the local route, with no anthropic key on the machine', () => {
     let settingsPath: string;
 
     beforeEach(() => {
@@ -856,137 +853,92 @@ describe('hook events', () => {
       return JSON.parse(readFileSync(settingsPath, 'utf8'));
     }
 
-    function backups(): readonly string[] {
-      return readdirSync(join(dir, 'home', '.claude')).filter((name) => name.includes('.aion-'));
-    }
+    // The two tool events call nothing for this input on either route: research capture is off by
+    // default and the tool named here is aion's own. They are covered by the exit-0 case below.
+    const CAPTURING_EVENTS = HOOK_EVENTS.filter((event) => !event.includes('tool-use'));
 
-    function traceLines(): readonly Record<string, unknown>[] {
-      return readFileSync(join(dir, 'state', 'hooks.log'), 'utf8')
+    it.each(CAPTURING_EVENTS)(
+      'captures on the %s event the same as a keyed fire',
+      async (event) => {
+        // The rule this replaces: a fire that found no key removed the hooks and stopped capturing,
+        // because the local model could not keep up with a capture every turn. It can. A key is
+        // optional spend now, not a precondition for remembering anything.
+        writeFileSync(transcriptPath, `${USER_LINE}\n${ASSISTANT_LINE}\n`);
+        const { fetchImpl, calls } = transport({ structuredContent: POPULATED_PACK });
+
+        await expect(
+          runHook(
+            {
+              session_id: SESSION_ID,
+              transcript_path: transcriptPath,
+              prompt: 'why did the v3.21.596 migration deadlock against read-only joins',
+              tool_name: 'mcp__aion__reflection',
+              tool_input: { summary: 'the fix is a per-table split' },
+            },
+            options(event, { fetchImpl, route: 'local' }),
+          ),
+        ).resolves.toBe(0);
+
+        expect(calls.length).toBeGreaterThan(0);
+      },
+    );
+
+    it.each(HOOK_EVENTS)('never blocks the %s event on the route it found', async (event) => {
+      const { fetchImpl } = transport({ structuredContent: POPULATED_PACK });
+
+      await expect(
+        runHook({ session_id: SESSION_ID }, options(event, { fetchImpl, route: 'local' })),
+      ).resolves.toBe(0);
+    });
+
+    it('leaves the settings file exactly as it found it', async () => {
+      const before = settings();
+      const { fetchImpl } = transport({ structuredContent: POPULATED_PACK });
+
+      await runHook(
+        { session_id: SESSION_ID },
+        options('session-end', { fetchImpl, route: 'local' }),
+      );
+
+      // The client used to take its own hooks out here, back up the file, and tell the session
+      // why. A route-agnostic client never uninstalls itself.
+      expect(settings()).toEqual(before);
+      expect(readdirSync(join(dir, 'home', '.claude')).filter((n) => n.includes('.aion-'))).toEqual(
+        [],
+      );
+    });
+
+    it('says nothing to the session about the route it is on', async () => {
+      const { fetchImpl } = transport({ structuredContent: POPULATED_PACK });
+
+      await runHook(
+        { session_id: SESSION_ID },
+        options('session-start', { fetchImpl, route: 'local' }),
+      );
+
+      expect(JSON.parse(stdout[0] ?? '{}').hookSpecificOutput.additionalContext).toContain(
+        'Aion memory',
+      );
+    });
+
+    it('records the route on the trace, and nothing about a key', async () => {
+      const { fetchImpl } = transport({ structuredContent: POPULATED_PACK });
+
+      await runHook(
+        { session_id: SESSION_ID },
+        options('session-end', { fetchImpl, route: 'local' }),
+      );
+
+      const line = readFileSync(join(dir, 'state', 'hooks.log'), 'utf8')
         .split('\n')
-        .filter((line) => line !== '')
-        .map((line) => JSON.parse(line));
-    }
-
-    it.each(HOOK_EVENTS)('captures nothing on the %s event and exits 0', async (event) => {
-      writeFileSync(transcriptPath, `${USER_LINE}\n${ASSISTANT_LINE}\n`);
-      const { fetchImpl, calls } = transport({ structuredContent: POPULATED_PACK });
-
-      await expect(
-        runHook(
-          {
-            session_id: SESSION_ID,
-            transcript_path: transcriptPath,
-            prompt: 'why did the v3.21.596 migration deadlock against read-only joins',
-            tool_name: 'mcp__aion__reflection',
-            tool_input: { summary: 'the fix is a per-table split' },
-          },
-          options(event, { fetchImpl, keyState: 'absent' }),
-        ),
-      ).resolves.toBe(0);
-
-      expect(calls).toEqual([]);
-    });
-
-    it('records the keyless fire and what it removed in the trace', async () => {
-      const { fetchImpl } = transport({ structuredContent: POPULATED_PACK });
-
-      await runHook({ session_id: SESSION_ID }, options('session-end', { fetchImpl }));
-      await runHook(
-        { session_id: SESSION_ID },
-        options('session-end', { fetchImpl, keyState: 'absent' }),
-      );
-
-      const [capturing, keyless] = traceLines();
-      expect(capturing?.keyless).toBeUndefined();
-      expect(keyless).toMatchObject({ event: 'session-end', exit: 0, keyless: true, removed: 2 });
-    });
-
-    it('backs the settings file up and strips its own entries', async () => {
-      const { fetchImpl } = transport({ structuredContent: POPULATED_PACK });
-
-      await runHook(
-        { session_id: SESSION_ID },
-        options('session-start', { fetchImpl, keyState: 'absent' }),
-      );
-
-      expect(describeAionHooks(settings())).toEqual([]);
-      expect(JSON.parse(readFileSync(backupPath(settingsPath, NOW), 'utf8'))).toEqual(INSTALLED);
-    });
-
-    it('leaves every other setting and every foreign hook verbatim', async () => {
-      const { fetchImpl } = transport({ structuredContent: POPULATED_PACK });
-
-      await runHook(
-        { session_id: SESSION_ID },
-        options('session-end', { fetchImpl, keyState: 'absent' }),
-      );
-
-      expect(settings()).toEqual({
-        model: 'opus',
-        hooks: { Stop: [INSTALLED.hooks.Stop[0]] },
-      });
-    });
-
-    it('finds nothing left to remove on the next fire and writes nothing', async () => {
-      const { fetchImpl } = transport({ structuredContent: POPULATED_PACK });
-      const absent = { fetchImpl, keyState: 'absent' } as const;
-
-      await runHook({ session_id: SESSION_ID }, options('session-end', absent));
-      const stripped = readFileSync(settingsPath, 'utf8');
-
-      await runHook({ session_id: SESSION_ID }, options('session-end', { ...absent, now: LATER }));
-
-      expect(readFileSync(settingsPath, 'utf8')).toBe(stripped);
-      expect(backups()).toHaveLength(1);
-      expect(traceLines()[1]).toMatchObject({ keyless: true, removed: 0 });
-    });
-
-    it('tells the session why capture stopped', async () => {
-      const { fetchImpl } = transport({ structuredContent: POPULATED_PACK });
-
-      await runHook(
-        { session_id: SESSION_ID },
-        options('session-start', { fetchImpl, keyState: 'absent' }),
-      );
-
-      expect(JSON.parse(stdout[0] ?? '{}')).toEqual({
-        hookSpecificOutput: {
-          hookEventName: 'SessionStart',
-          additionalContext: KEYLESS_NOTICE,
-        },
-      });
-    });
-
-    it('says nothing to any event but session start', async () => {
-      const { fetchImpl } = transport({ structuredContent: POPULATED_PACK });
-
-      await runHook(
-        {
-          session_id: SESSION_ID,
-          prompt: 'why did the migration deadlock against read-only joins',
-        },
-        options('prompt-submit', { fetchImpl, keyState: 'absent' }),
-      );
-
-      expect(stdout).toEqual([]);
-    });
-
-    it('never blocks a turn in instruct mode', async () => {
-      writeFileSync(transcriptPath, `${USER_LINE}\n${ASSISTANT_LINE}\n`);
-      const { fetchImpl } = transport({ structuredContent: {} });
-
-      await expect(
-        runHook(
-          { session_id: SESSION_ID, transcript_path: transcriptPath },
-          options('stop', { fetchImpl, stopMode: 'instruct', keyState: 'absent' }),
-        ),
-      ).resolves.toBe(0);
-
-      expect(stderr).toEqual([]);
+        .filter((entry) => entry !== '')
+        .map((entry) => JSON.parse(entry) as Record<string, unknown>)[0];
+      expect(line?.keyless).toBeUndefined();
+      expect(line).toMatchObject({ event: 'session-end', exit: 0 });
     });
   });
 
-  describe('with the key state unknown', () => {
+  describe('with the route unreadable', () => {
     let settingsPath: string;
 
     beforeEach(() => {
@@ -1001,7 +953,7 @@ describe('hook events', () => {
       await expect(
         runHook(
           { session_id: SESSION_ID },
-          options('session-start', { fetchImpl, keyState: 'unknown' }),
+          options('session-start', { fetchImpl, route: 'unknown' }),
         ),
       ).resolves.toBe(0);
 
@@ -1019,7 +971,7 @@ describe('hook events', () => {
       await expect(
         runHook(
           { session_id: SESSION_ID, transcript_path: transcriptPath },
-          options('stop', { fetchImpl, stopMode: 'instruct', keyState: 'unknown' }),
+          options('stop', { fetchImpl, stopMode: 'instruct', route: 'unknown' }),
         ),
       ).resolves.toBe(2);
 
@@ -1041,7 +993,7 @@ describe('main', () => {
     vi.stubEnv('HOME', join(dir, 'home'));
     mkdirSync(join(dir, 'home'), { recursive: true });
 
-    // A readable .env with a blank key is what tells the client this machine is keyless.
+    // A readable .env with a blank key is what tells the client it is on the local route.
     scriptPath = join(dir, 'repo', 'packages', 'cli', 'dist', 'hook-main.js');
     mkdirSync(join(dir, 'repo', 'packages', 'cli', 'dist'), { recursive: true });
     writeFileSync(join(dir, 'repo', '.env'), 'AION_ANTHROPIC_API_KEY=\n');
@@ -1057,7 +1009,7 @@ describe('main', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('strips the codex hooks file when the flag names codex and the machine has no key', async () => {
+  it('leaves the codex hooks file alone when the machine has no key', async () => {
     await expect(
       main(['session-start', '--harness', 'codex'], {
         env: { CODEX_HOME: codexHome },
@@ -1070,10 +1022,11 @@ describe('main', () => {
       }),
     ).resolves.toBe(0);
 
+    // The entries stay, the file is not backed up because it was not rewritten, and the session
+    // start says what it always says: a machine with no key is a machine on the local route.
     const hooksFile = join(codexHome, 'hooks.json');
-    expect(describeAionHooks(JSON.parse(readFileSync(hooksFile, 'utf8')))).toEqual([]);
-    expect(existsSync(backupPath(hooksFile, NOW))).toBe(true);
-    expect(JSON.parse(stdout[0] ?? '{}').hookSpecificOutput.additionalContext).toBe(KEYLESS_NOTICE);
+    expect(describeAionHooks(JSON.parse(readFileSync(hooksFile, 'utf8')))).not.toEqual([]);
+    expect(existsSync(backupPath(hooksFile, NOW))).toBe(false);
   });
 });
 

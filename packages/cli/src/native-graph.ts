@@ -159,8 +159,9 @@ function series(version: string): string {
 
 /**
  * Puts the matching graph-data-science jar in the plugins directory, verifying what arrived
- * against a digest measured in this repo. A jar already there is left alone: it may be the one an
- * operator placed deliberately, and the pairing check after the server starts is what judges it.
+ * against a digest measured in this repo, and answers with the path it placed or nothing. A jar
+ * already there is left alone: it may be the one an operator placed deliberately, the pairing
+ * check after the server starts is what judges it, and uninstall removes only what we put down.
  *
  * A server series with no measured digest is the one case that stops and asks, and it asks with
  * the whole command rather than with a policy.
@@ -170,14 +171,15 @@ export async function ensureGdsPlugin(
   serverVersion: string,
   actions: HostActions,
   write: Writer,
-): Promise<void> {
+): Promise<string | undefined> {
   mkdirSync(layout.pluginsDir, { recursive: true });
   const present = readdirSync(layout.pluginsDir).filter(
     (entry) => entry.includes('graph-data-science') && entry.endsWith('.jar'),
   );
   if (present.length > 0) {
     write(`  graph-data-science plugin present (${present.join(', ')})`);
-    return;
+    // Nothing placed: somebody else's jar, and uninstall has to be able to tell the difference.
+    return undefined;
   }
   const release = gdsReleaseFor(series(serverVersion));
   if (release === undefined) {
@@ -204,6 +206,7 @@ export async function ensureGdsPlugin(
     );
   }
   write(`  graph-data-science ${release.version} verified and installed`);
+  return target;
 }
 
 /**

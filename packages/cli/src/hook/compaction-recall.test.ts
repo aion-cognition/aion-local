@@ -67,7 +67,7 @@ function options(fetchImpl: FetchImpl): HookOptions {
     harness: 'claude',
     stopMode: 'push',
     minChars: 40,
-    keyState: 'present',
+    route: 'keyed',
     settingsPath: '/dev/null',
     stateDir: '/dev/null',
     endpoint: 'http://127.0.0.1:8765/mcp',

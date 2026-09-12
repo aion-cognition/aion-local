@@ -39,18 +39,19 @@ import {
   type InstallProfile,
 } from './install-profile.js';
 import { lifecycleIntakeDeps, type LifecycleTarget } from './lifecycle.js';
+import { GIT_USER_NAME_ENV_VAR, resolveMemberName } from './member-name.js';
 import {
   prepareNativeProfile,
   prepareNativeService,
   provisionNativeGraph,
+  recordNativeInstall,
   reportNativeHealth,
+  type NativeGraphRecord,
 } from './native-install.js';
 import { stdoutWriter, type Writer } from './output.js';
 import { envFilePath, envTemplatePath, resolveRepoDir } from './paths.js';
 import { renderRegistration } from './registration.js';
 import { withSubstrate } from './substrate.js';
-
-export const GIT_USER_NAME_ENV_VAR = 'AION_GIT_USER_NAME';
 
 export const ANTHROPIC_KEY_ENV_VAR = 'AION_ANTHROPIC_API_KEY';
 
@@ -61,14 +62,14 @@ const MISSING_ANTHROPIC_KEY =
   `the full profile routes generation to Anthropic and needs ${ANTHROPIC_KEY_ENV_VAR}. ` +
   'Set it in the environment or .env, or run `aion init full` from a terminal.';
 
-const MISSING_MEMBER_NAME =
-  `no member name available: ${GIT_USER_NAME_ENV_VAR} is empty and there is no terminal to ask on. ` +
-  'Set `git config user.name` on the host, or run init from a terminal.';
-
 /**
- * `local` is the substrate on its own: Ollama for every generation role, no harness hooks.
- * `full` adds the Anthropic key and the Claude Code shims that make the recall and reflection
- * cadence a schedule rather than a judgment call.
+ * `local` is the substrate on its own: Ollama for every generation role. `full` adds an Anthropic
+ * key, which routes generation there and is optional spend rather than a capability.
+ *
+ * Both install the Claude Code hooks, which make the recall and reflection cadence a schedule
+ * rather than a judgment call. They used to be the keyed profile's alone, because the local model
+ * of that build could not keep up with a capture every turn; it can, and a capture is worth
+ * storing on either route.
  *
  * This is the generation profile; `--install` is the install profile, which is what the substrate
  * runs on, docker or native. Two different questions, and the second one is a flag because it is
@@ -140,6 +141,11 @@ export type AnthropicKeyInput = {
   readonly ask: (question: string) => Promise<string>;
 };
 
+/**
+ * The key `aion init full` settles. It is asked for because `full` is the profile that routes
+ * generation to Anthropic, and a profile that names a provider with no credential for it is a
+ * request nobody can serve. Every other install needs no key for anything, hooks included.
+ */
 export async function resolveAnthropicKey(input: AnthropicKeyInput): Promise<string> {
   const existing = (input.configured === '' ? (input.fromEnvFile ?? '') : input.configured).trim();
   if (existing !== '') {
@@ -153,37 +159,6 @@ export async function resolveAnthropicKey(input: AnthropicKeyInput): Promise<str
     throw new CliUsageError(MISSING_ANTHROPIC_KEY);
   }
   return answer;
-}
-
-export type MemberNameInput = {
-  readonly envName: string | undefined;
-  readonly assumeYes: boolean;
-  readonly interactive: boolean;
-  readonly ask: (question: string) => Promise<string>;
-};
-
-/**
- * `bin/aion` passes `git config user.name` through. Confirming it needs a terminal, so
- * `--yes` and the non-interactive case (the exit gate, CI) take it as given rather than
- * hanging on a prompt nobody can answer.
- */
-export async function resolveMemberName(input: MemberNameInput): Promise<string> {
-  const fallback = (input.envName ?? '').trim();
-
-  if (input.assumeYes || !input.interactive) {
-    if (fallback === '') {
-      throw new CliUsageError(MISSING_MEMBER_NAME);
-    }
-    return fallback;
-  }
-
-  const suffix = fallback === '' ? '' : ` [${fallback}]`;
-  const answer = (await input.ask(`Member name${suffix}: `)).trim();
-  const chosen = answer === '' ? fallback : answer;
-  if (chosen === '') {
-    throw new CliUsageError(MISSING_MEMBER_NAME);
-  }
-  return chosen;
 }
 
 async function askOnTerminal(question: string): Promise<string> {
@@ -241,10 +216,9 @@ async function provisionGraph(
   password: string,
   write: Writer,
   repoDir: string,
-): Promise<void> {
+): Promise<NativeGraphRecord | undefined> {
   if (config.install.profile === 'native') {
-    await provisionNativeGraph(config, password, write);
-    return;
+    return await provisionNativeGraph(config, password, write);
   }
   if (isManagedNeo4jUri(config.neo4j.uri)) {
     write(`starting compose service ${NEO4J_SERVICE}`);
@@ -259,6 +233,7 @@ async function provisionGraph(
     { timeoutMs: NEO4J_READY_TIMEOUT_MS },
   );
   write(`  bolt ready, graph-data-science ${gdsVersion}`);
+  return undefined;
 }
 
 type LifecycleSubstrate = LifecycleTarget & {
@@ -321,7 +296,7 @@ async function initialize(
     write(`neo4j password ready in ${envFilePath(repoDir)}`);
   }
 
-  await provisionGraph(config, password, write, repoDir);
+  const graph = await provisionGraph(config, password, write, repoDir);
 
   // Routing decides what is worth downloading: a role that routes to Anthropic has no local
   // model to pull, and reconciliation then unloads whatever an earlier local run left resident.
@@ -402,6 +377,9 @@ async function initialize(
 
   await provisionMcpService(config, write, repoDir);
   if (config.install.profile === 'native') {
+    // What this run put on the machine, so `aion uninstall` can tell it apart from what was
+    // already here. Written after the service is up, since that is the last thing init installs.
+    recordNativeInstall(config, repoDir, graph, write);
     // The whole machine changed in this run, so it closes with the report that judges it rather
     // than with a summary written here. The docker profile ends where it always has.
     await reportNativeHealth(config, password, write);
@@ -455,6 +433,9 @@ export function runInit(
       // Provisioning opens its own store and connection against the password it just settled,
       // which the shared lifecycle cannot know before this point.
       const { config } = substrate;
+      // First line, because it is the answer to "where did it put everything" and because a run
+      // that is about to write to the wrong place should say so before it does.
+      write(`data root ${config.operational.dataDir}`);
       const logger = substrate.logger();
       const profile = await resolveInitProfile({
         requested: flags.profile,
@@ -472,11 +453,14 @@ export function runInit(
       await initialize(resolved, flags, profile, write, logger);
 
       write('');
-      if (profile === 'full') {
-        installFullProfile(write);
-      } else {
-        write('The local profile is MCP-only: intake is the reflection tool, and no hooks run.');
-        write('Hooks come with `aion init full`, which asks for a key; see docs/harness.md.');
+      // Every profile, because hooks are route-agnostic: they capture a turn and hand it to
+      // whichever generation route this install resolved, and the local one is a route. The
+      // generation profile decides where that digest runs and what it costs, not whether the
+      // substrate is allowed to remember.
+      installFullProfile(write);
+      if (profile !== 'full') {
+        write('Hooks run on the local route. `aion init full` adds a key and routes them to');
+        write('Anthropic instead; see docs/harness.md.');
       }
       write('\naion init: ready');
       return 0;

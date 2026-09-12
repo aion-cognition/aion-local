@@ -1,11 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  parseInitFlags,
-  resolveAnthropicKey,
-  resolveInitProfile,
-  resolveMemberName,
-} from './init.js';
+import { parseInitFlags, resolveAnthropicKey, resolveInitProfile } from './init.js';
+import { resolveMemberName } from './member-name.js';
 import { registrationCommand, registrationJson } from './registration.js';
 
 const never = async (): Promise<string> => {

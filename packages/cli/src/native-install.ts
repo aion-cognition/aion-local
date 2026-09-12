@@ -18,6 +18,7 @@ import { dirname, join } from 'node:path';
 import { waitForMcpHealth } from './compose.js';
 import { buildDoctorChecks, runChecks, summarize } from './doctor.js';
 import { HOST_ACTIONS, NativeSetupError, type HostActions } from './host-actions.js';
+import { INSTALL_MANIFEST_VERSION, writeInstallManifest } from './install-manifest.js';
 import { applyNativeEnv, envFileEntry, planNativeEnv } from './install-profile.js';
 import {
   launchAgentPath,
@@ -114,20 +115,27 @@ async function readPairing(uri: string, password: string, write: Writer): Promis
  * A server that already answers is left exactly as it is. That is the idempotent path and the
  * common one: re-running init on a healthy install reads the pairing and changes nothing.
  */
+export type NativeGraphRecord = {
+  readonly neo4jHome: string;
+  readonly neo4jConfFile: string;
+  readonly gdsJar: string | undefined;
+};
+
 export async function provisionNativeGraph(
   config: Config,
   password: string,
   write: Writer,
   actions: HostActions = HOST_ACTIONS,
   env: NodeJS.ProcessEnv = process.env,
-): Promise<void> {
+): Promise<NativeGraphRecord | undefined> {
   const { uri } = config.neo4j;
   write(`neo4j at ${uri}`);
   const probe = await new GraphConnection({ uri, password }).health();
   if (probe.reachable) {
     write('  already running');
     await readPairing(uri, password, write);
-    return;
+    // Nothing of ours on this machine: a server that was already up is a server we did not set up.
+    return undefined;
   }
   if (looksLikeAuthFailure(probe.error)) {
     throw passwordRefusal(uri, await resolveNeo4jLayout(actions, env));
@@ -142,7 +150,7 @@ export async function provisionNativeGraph(
     );
   }
   write(`  neo4j ${version}`);
-  await ensureGdsPlugin(layout, version, actions, write);
+  const gdsJar = await ensureGdsPlugin(layout, version, actions, write);
   const changed = applyNeo4jSettings(layout.confFile, NEO4J_SETTINGS);
   write(
     changed.length === 0
@@ -166,6 +174,7 @@ export async function provisionNativeGraph(
     ]);
   }
   await readPairing(uri, password, write);
+  return { neo4jHome: layout.home, neo4jConfFile: layout.confFile, gdsJar };
 }
 
 /**
@@ -299,6 +308,39 @@ async function loadLaunchdJob(
     );
   }
   write(`  loaded ${MCP_LAUNCH_LABEL} in ${domain}`);
+}
+
+/**
+ * Stamps what this run installed. Read by `aion uninstall`, which removes only what it can prove
+ * we put there and prints the manual command for everything else.
+ *
+ * The launchd job is recorded on darwin whether or not this run wrote it, because the path is the
+ * one this build owns either way; the Neo4j facts are recorded only when init was the one that set
+ * the server up, and the plugin jar only when init was the one that fetched it.
+ */
+export function recordNativeInstall(
+  config: Config,
+  repoDir: string,
+  graph: NativeGraphRecord | undefined,
+  write: Writer,
+): void {
+  const path = writeInstallManifest(config.operational.dataDir, {
+    version: INSTALL_MANIFEST_VERSION,
+    profile: config.install.profile,
+    recordedAt: new Date().toISOString(),
+    repoDir,
+    dataDir: config.operational.dataDir,
+    ...(process.platform === 'darwin' ? { launchdPlist: launchAgentPath(homedir()) } : {}),
+    ...(graph === undefined
+      ? {}
+      : {
+          neo4jHome: graph.neo4jHome,
+          neo4jConfFile: graph.neo4jConfFile,
+          neo4jSettings: NEO4J_SETTINGS,
+          ...(graph.gdsJar === undefined ? {} : { gdsJar: graph.gdsJar }),
+        }),
+  });
+  write(`recorded what this install put on the machine in ${path}`);
 }
 
 /**

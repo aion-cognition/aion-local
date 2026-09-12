@@ -11,6 +11,13 @@ Two substrates, one substrate code. `AION_INSTALL_PROFILE` says which one this i
 `aion init` records it, and `aion doctor` and `aion status` read it back so they check the right
 thing without being told again.
 
+**Where the files go is decided before any of that.** The knob table's path defaults
+(`/data`, `/data/aion.sqlite`, `/data/logs/aion.jsonl`) are container paths, and every command
+opens a log file before it does anything else, so a process running on a host resolves them
+against the machine first: `~/.aion` and the two paths under it, created on demand. It is host
+context rather than profile — a bare `node packages/cli/dist/main.js` gets it too — and
+`AION_DATA_DIR` overrides both. `aion init` prints the resolved root on its first line.
+
 | | `docker` (default) | `native` |
 |---|---|---|
 | Neo4j | the `neo4j` compose service | a server on the host, installed by init if it is missing |
@@ -67,7 +74,9 @@ That one command does all of it. In order:
 6. Writes `~/Library/LaunchAgents/com.aion.mcp.plist`, loads it with `launchctl bootstrap`, and
    waits for `/health`. The job carries `KeepAlive`, `RunAtLoad`, and `ExitTimeOut` 20 seconds,
    which is the drain the compose service had as `stop_grace_period`.
-7. Prints the `aion doctor` report, which is where the coverage contract, the eviction fence and
+7. Records what it installed in `install-manifest.json` under the data root, which is what
+   `aion uninstall` reads to tell what it put there from what was already there.
+8. Prints the `aion doctor` report, which is where the coverage contract, the eviction fence and
    the Ollama tuning flags are reported.
 
 Then register the server with your harness, which `init` prints at the end, and the install is
@@ -544,6 +553,30 @@ many experiences one run asks back for. Each one is a full recall, cue call incl
 `aion maintain run recall_probe` declines with a noop. The probe's recall is assembled by the
 running service, and a CLI run holds none, the same as `curiosity` and its intake path.
 
+## Removing an install
+
+`aion uninstall` is init's mirror. It works out what to do before it does any of it, prints the
+plan in three groups, and asks twice.
+
+- **remove** is what this install put there and can prove it: the launchd job, the config lines
+  still carrying the values init wrote, a plugin jar init downloaded, and the data root. On the
+  docker profile it is `compose down --volumes` instead.
+- **manual** is something present that nothing proves is ours — a Neo4j that was already running,
+  a plugin jar somebody placed, a config file they maintain. It prints the command rather than
+  taking the decision.
+- **keep** is the shared tools. Homebrew's Neo4j, Ollama and the models are never removed as a
+  side effect; the commands to remove them yourself are printed in a block at the end.
+
+Init writes what it installed to `install-manifest.json` in the data root, and that record is what
+makes the first column possible. An install with no manifest (one that predates it, or one
+assembled by hand) still has everything uninstall can name for itself removed, and the rest listed
+as present and not provably ours.
+
+The second question is the data root, and `--yes` does not answer it: the path has to be typed
+back. That directory is the memory store, and `--yes` exists so a script can re-run an install
+rather than so it can delete one. It is idempotent over a half-installed machine: what is not
+there is not in the plan, and a job that was never loaded does not stop the step after it.
+
 ## Resetting the substrate
 
 A reset deletes everything the substrate holds, so it is a documented procedure rather than a
@@ -704,6 +737,10 @@ ever opened, `disarmed` is one somebody opened and then stopped, and both remove
 
 ## Logs
 
+`aion logs` tails it: `-n` lines (50 by default), `--level` filters by floor, `-f` follows, and the
+first line is the file it read. Following survives a rotation — the file being replaced under it is
+what the size going backwards means, and it reopens from the start of the new one.
+
 Everything writes structured JSONL to one file, `/data/logs/aion.jsonl` on the data volume by
 default and `~/.aion/logs/aion.jsonl` on the native profile. The service tees the same records to
 stdout, which `docker logs aion-aion-mcp-1` reads on the docker profile; the launchd job sends
@@ -713,7 +750,17 @@ there would break the single JSON object `--json` promises. The service logs und
 `aion-mcp`, and every CLI run under its command's name. `AION_LOG_LEVEL` moves the level
 (`debug` through `fatal`); writes are synchronous, so a crash keeps the tail that explains it.
 The container's stdout copy is capped by the compose `logging` block (10 MB × 3); the file on
-the volume is the uncapped durable record. The harness hooks are the one component outside
+the volume is the uncapped durable record. The file ages out on its own. `AION_LOG_RETENTION_DAYS` (default `1`, fractions accepted) is the
+window: a file whose last write is older than it becomes `aion.jsonl.1` when the next process
+opens a logger, and a rolled copy with nothing to replace it and an age past the window is
+deleted. So the disk holds the current window and the one before it. Enforcement runs wherever a
+logger opens, which is every CLI command and every service start, so both profiles get it without
+a second place to wire it; the container's stdout copy keeps the compose json-file cap as a belt.
+The first start after an upgrade ages out whatever the old build left and writes one line saying
+so. This is the file logger only — the graph's transaction logs are Neo4j's own
+`db.tx_log.rotation.retention_policy`.
+
+The harness hooks are the one component outside
 the containers; each fire appends one line to
 `~/.aion/hook-state/hooks.log` on the host.
 

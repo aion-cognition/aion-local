@@ -6,6 +6,7 @@ import { runForget } from './forget.js';
 import { runHooks } from './hooks-cmd.js';
 import { runInit } from './init.js';
 import { runLast } from './last.js';
+import { runLogs } from './logs.js';
 import { runMaintain } from './maintain.js';
 import { runProposals } from './proposals.js';
 import { runQueue } from './queue.js';
@@ -17,6 +18,7 @@ import { runStats } from './stats.js';
 import { runStatus } from './status.js';
 import { runTimelineCommand } from './timeline.js';
 import { runUnforget } from './unforget.js';
+import { runUninstall } from './uninstall.js';
 import { runUnmerge } from './unmerge.js';
 import { runUnsupersede } from './unsupersede.js';
 import { runWhy } from './why.js';
@@ -48,6 +50,14 @@ const commands: Record<string, Command> = {
   status: {
     summary: 'services, models, routing, and graph counts',
     run: (argv) => runStatus(argv),
+  },
+  logs: {
+    summary: 'tail the substrate log file: -n <lines> | --level <level> | -f',
+    run: (argv) => runLogs(argv),
+  },
+  uninstall: {
+    summary: 'remove what init put on this machine, and say what it left',
+    run: (argv) => runUninstall(argv),
   },
   doctor: {
     summary: 'check every substrate invariant and name what is broken',

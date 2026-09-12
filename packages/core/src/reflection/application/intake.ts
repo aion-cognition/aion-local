@@ -62,9 +62,13 @@ export type ReflectionIntakeDeps = ExperienceStoreDeps & {
   /** `operational.workerMaxAttempts`, so `pending_ahead` counts only rows a worker will claim. */
   readonly workerMaxAttempts: number;
   /**
-   * Whether a hook may push raw transcript windows at this service. True only where reflection
-   * is routed to the remote model: the local model spends tens of seconds an episode, so a hook
-   * that fires every turn buries the queue in transcript nobody asked to keep.
+   * Whether a hook may push raw transcript windows at this service.
+   *
+   * It used to be true only on the remote route, on the reasoning that the local model spent tens
+   * of seconds an episode and a hook firing every turn would bury the queue. Local reflection
+   * measured 18.5s a call, the lane backstop is what bounds a flood, and a capture is worth
+   * storing on either route: the service passes true and the switch stays for a deployment that
+   * wants to shut hook capture off on its own terms.
    */
   readonly acceptHookCapture: boolean;
 };

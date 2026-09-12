@@ -123,47 +123,46 @@ function runHooksCheck(config: Config, env: NodeJS.ProcessEnv): Promise<CheckRes
     db: undefined as unknown as SqliteHandle,
     env,
   });
-  const check = checks.find((candidate) => candidate.name === 'hooks-keyed-only');
+  const check = checks.find((candidate) => candidate.name === 'hooks-route');
   if (check === undefined) {
-    throw new Error('no hooks-keyed-only check');
+    throw new Error('no hooks-route check');
   }
   return check.run();
 }
 
-describe('the hooks-keyed-only check', () => {
+describe('the hooks-route check', () => {
   const keyed: Config = {
     ...DEFAULTS,
     anthropic: { ...DEFAULTS.anthropic, apiKey: 'sk-ant-test' },
   };
 
-  it('fails an install whose reflection runs on a local model', async () => {
+  it('passes an install whose reflection runs on a local model, and names the model', async () => {
+    // This used to fail, and the hook client used to remove itself alongside it. Both came from a
+    // build whose local model could not keep up with a capture every turn.
     const result = await runHooksCheck(DEFAULTS, { AION_HOOKS_INSTALLED: 'true' });
 
-    expect(result.ok).toBe(false);
+    expect(result.ok).toBe(true);
+    expect(result.warn).toBeUndefined();
     expect(result.detail).toContain(DEFAULTS.models.reflect);
-    expect(result.detail).toContain('AION_ANTHROPIC_API_KEY');
-    expect(result.detail).toContain('aion hooks uninstall');
+    expect(result.detail).toContain('nothing here needs one');
   });
 
-  it('names the fire the hook client removes itself on, not a session boundary', async () => {
-    const result = await runHooksCheck(DEFAULTS, { AION_HOOKS_INSTALLED: 'true' });
-
-    expect(result.detail).toContain('strips them on its next fire');
-  });
-
-  it('fails an install whose key a pin sends back to the local model', async () => {
+  it('passes an install whose key a pin sends back to the local model', async () => {
     const pinned: Config = { ...keyed, routing: { cue: 'auto', reflect: 'ollama' } };
 
     const result = await runHooksCheck(pinned, { AION_HOOKS_INSTALLED: 'true' });
 
-    expect(result.ok).toBe(false);
+    expect(result.ok).toBe(true);
     expect(result.detail).toContain(DEFAULTS.models.reflect);
   });
 
-  it('passes an install whose reflection routes to anthropic', async () => {
+  it('names the anthropic model when the route resolves there', async () => {
     const result = await runHooksCheck(keyed, { AION_HOOKS_INSTALLED: 'true' });
 
-    expect(result).toEqual({ ok: true, detail: 'hooks installed, keyed' });
+    expect(result).toEqual({
+      ok: true,
+      detail: `hooks installed; capture digests on ${DEFAULTS.anthropic.model}`,
+    });
   });
 
   it('passes a host with no hooks installed', async () => {

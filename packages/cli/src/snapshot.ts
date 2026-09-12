@@ -32,6 +32,7 @@ import {
   type SqliteHandle,
 } from '@aion/core';
 
+import { neo4jBrowserUrl } from './doctor-checks.js';
 import { ageOf, formatEdgeWeights } from './format.js';
 import { renderGeneration } from './generation-section.js';
 import { describeInstallProfile } from './install-profile.js';
@@ -217,6 +218,8 @@ export function renderSnapshot(
   write(
     `neo4j    ${snapshot.neo4j.reachable ? 'up' : 'down'}  ${snapshot.neo4j.uri} (${snapshot.neo4j.detail})`,
   );
+  // The same server's console, which is the address a person opens. One line, both profiles.
+  write(`browser  ${neo4jBrowserUrl(snapshot.neo4j.uri)}`);
   write(
     `ollama   ${snapshot.ollama.reachable ? 'up' : 'down'}  ${snapshot.ollama.url}${snapshot.ollama.detail === undefined ? '' : ` (${snapshot.ollama.detail})`}`,
   );

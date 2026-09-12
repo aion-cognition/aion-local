@@ -29,15 +29,16 @@ is the substrate.
 Hooks remain enabled because their rule reads the reflect route. The cue pin saves all cue
 generation API charges; its quality and latency comparison is still pending.
 
-Hooks are a keyed-profile feature, enforced three times over. `aion hooks install` refuses
-without a key. The server refuses hook capture while reflection routes to a local model, whether
-that is a missing key or a pin. The hook client itself stops capturing and strips its own entries
-on its next fire once the key is gone, out of `~/.claude/settings.json` or
-`$CODEX_HOME/hooks.json`, whichever file the harness that fired reads its hooks from. `aion
-doctor` reports the pairing as `hooks-keyed-only`, and `bin/aion` looks in both files to decide
-whether hooks are installed at all.
+Hooks are route-agnostic. They install on every profile, fire on every install, and hand the turn
+to whichever generation route this install resolved; the local route is a route. That was not
+always true — install refused without a key, the server refused capture on a local route, and the
+client stripped its own entries on its next fire — and all three came from a build whose local
+model could not keep up with a capture on every turn. It can: local reflection measured 18.5s a
+call. A key is optional spend, not a capability.
 
-`aion hooks install` does the hook half on its own, once the key is in `.env`.
+`aion doctor` reports which model digests a capture as `hooks-route`, and `bin/aion` looks in both
+`~/.claude/settings.json` and `$CODEX_HOME/hooks.json` to decide whether hooks are installed at
+all. `aion hooks install` does the hook half on its own, on any install.
 
 ## The events
 

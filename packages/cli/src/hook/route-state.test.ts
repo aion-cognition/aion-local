@@ -3,9 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { anthropicKeyState } from './key-state.js';
+import { generationRoute } from './route-state.js';
 
-describe('anthropicKeyState', () => {
+describe('generationRoute', () => {
   let dir: string;
   let repoDir: string;
   let scriptPath: string;
@@ -27,61 +27,61 @@ describe('anthropicKeyState', () => {
   }
 
   it('reads an exported key as present without looking at any file', () => {
-    expect(anthropicKeyState({ AION_ANTHROPIC_API_KEY: 'sk-exported' }, undefined)).toBe('present');
+    expect(generationRoute({ AION_ANTHROPIC_API_KEY: 'sk-exported' }, undefined)).toBe('keyed');
   });
 
   it('reads a blank exported key as no key at all', () => {
     envFile('AION_ANTHROPIC_API_KEY=sk-from-file\n');
 
-    expect(anthropicKeyState({ AION_ANTHROPIC_API_KEY: '   ' }, scriptPath)).toBe('present');
+    expect(generationRoute({ AION_ANTHROPIC_API_KEY: '   ' }, scriptPath)).toBe('keyed');
   });
 
   it('finds the key in the repo .env four directories above the script', () => {
     envFile('# the keyed profile\nAION_ANTHROPIC_API_KEY=sk-from-file\nAION_MCP_PORT=8765\n');
 
-    expect(anthropicKeyState({}, scriptPath)).toBe('present');
+    expect(generationRoute({}, scriptPath)).toBe('keyed');
   });
 
   it('strips one pair of quotes around the recorded value', () => {
     envFile('AION_ANTHROPIC_API_KEY="sk-quoted"\n');
 
-    expect(anthropicKeyState({}, scriptPath)).toBe('present');
+    expect(generationRoute({}, scriptPath)).toBe('keyed');
   });
 
   it('calls a readable file with no key of ours absent', () => {
     envFile('NEO4J_PASSWORD=hunter2\n');
 
-    expect(anthropicKeyState({}, scriptPath)).toBe('absent');
+    expect(generationRoute({}, scriptPath)).toBe('local');
   });
 
   it('calls an empty value absent, quoted or bare', () => {
     envFile('AION_ANTHROPIC_API_KEY=\n');
-    expect(anthropicKeyState({}, scriptPath)).toBe('absent');
+    expect(generationRoute({}, scriptPath)).toBe('local');
 
     envFile('AION_ANTHROPIC_API_KEY=""\n');
-    expect(anthropicKeyState({}, scriptPath)).toBe('absent');
+    expect(generationRoute({}, scriptPath)).toBe('local');
   });
 
   it('calls a commented-out key absent', () => {
     envFile('# AION_ANTHROPIC_API_KEY=sk-was-here\n');
 
-    expect(anthropicKeyState({}, scriptPath)).toBe('absent');
+    expect(generationRoute({}, scriptPath)).toBe('local');
   });
 
   it('takes the last line for a key the file records twice', () => {
     envFile('AION_ANTHROPIC_API_KEY=sk-first\nAION_ANTHROPIC_API_KEY=\n');
 
-    expect(anthropicKeyState({}, scriptPath)).toBe('absent');
+    expect(generationRoute({}, scriptPath)).toBe('local');
   });
 
   it('answers unknown when there is no .env to read', () => {
-    expect(anthropicKeyState({}, scriptPath)).toBe('unknown');
+    expect(generationRoute({}, scriptPath)).toBe('unknown');
   });
 
   it('answers unknown when nothing names the script', () => {
     envFile('AION_ANTHROPIC_API_KEY=sk-from-file\n');
 
-    expect(anthropicKeyState({}, undefined)).toBe('unknown');
-    expect(anthropicKeyState({}, '')).toBe('unknown');
+    expect(generationRoute({}, undefined)).toBe('unknown');
+    expect(generationRoute({}, '')).toBe('unknown');
   });
 });

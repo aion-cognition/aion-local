@@ -10,6 +10,15 @@ export function stderrWriter(line: string): void {
   process.stderr.write(`${line}\n`);
 }
 
+/**
+ * One line from the terminal. Exported for the confirmation that cannot be a yes-or-no: the
+ * uninstall's second question asks for the data root to be typed back, and a prompt that can be
+ * answered by holding down `y` is not a second question.
+ */
+export async function askLine(question: string): Promise<string> {
+  return await askOnTerminal(question);
+}
+
 async function askOnTerminal(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {

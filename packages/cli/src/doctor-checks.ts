@@ -40,6 +40,21 @@ export function installProfileCheck(config: Config): CheckResult {
 }
 
 /**
+ * The browser console beside the Bolt address, because they are the same server and nobody
+ * remembers the second port.
+ *
+ * On the docker profile the Bolt URI names the compose service, which resolves on compose's own
+ * network and nowhere a browser can reach; the console is published to the host's loopback, so
+ * that is the address to print. Any other host is one an operator gave us, and the console is on
+ * the same host as the Bolt port.
+ */
+export function neo4jBrowserUrl(boltUri: string): string {
+  const host = /^[a-z+]+:\/\/([^:/]+)/i.exec(boltUri)?.[1];
+  const reachable = host === undefined || host === 'neo4j' ? '127.0.0.1' : host;
+  return `http://${reachable}:7474`;
+}
+
+/**
  * Server version, plugin version and the verdict on the pairing. The docker profile pins both
  * through the image, so this only ever warns where somebody assembled the server themselves;
  * missing GDS fails on either profile, and the failure prints the install steps, because a
@@ -316,13 +331,19 @@ export function coverageCheck(db: SqliteHandle): CheckResult {
 }
 
 /**
- * Hooks push raw transcript windows at every turn, and only the keyed route digests that
- * volume. The resolved reflect route answers the routing half, so a key pinned back to Ollama
- * reads as the local profile it is. Whether hooks are installed is a host fact: the CLI runs in
- * a container that cannot see `~/.claude`, so `bin/aion` computes it and passes it through, and
- * a run reached any other way reports that it cannot see rather than guessing.
+ * Which route the hooks feed, reported and not judged.
+ *
+ * This used to fail a substrate that had hooks installed on the local route, and the hook client
+ * used to remove itself there. Both came from a build whose local model could not keep up with a
+ * capture every turn; the substrate is local-first, a key is optional spend, and hooks are
+ * route-agnostic. What is left is worth saying: a capture fires every turn, so an operator
+ * deserves to know which model is digesting it and what that costs.
+ *
+ * Whether hooks are installed is a host fact: the CLI runs in a container that cannot see
+ * `~/.claude`, so `bin/aion` computes it and passes it through, and a run reached any other way
+ * reports that it cannot see rather than guessing.
  */
-export function hooksKeyedOnlyCheck(config: Config, env: NodeJS.ProcessEnv): CheckResult {
+export function hooksRouteCheck(config: Config, env: NodeJS.ProcessEnv): CheckResult {
   const installed = (env.AION_HOOKS_INSTALLED ?? '').trim();
   if (installed === '') {
     return { ok: true, detail: 'hook settings not visible here' };
@@ -332,13 +353,15 @@ export function hooksKeyedOnlyCheck(config: Config, env: NodeJS.ProcessEnv): Che
   }
   const routing = resolveProviderRouting(config);
   if (acceptsHookCapture(routing)) {
-    return { ok: true, detail: 'hooks installed, keyed' };
+    return {
+      ok: true,
+      detail: `hooks installed; capture digests on ${routing.roles.reflect.model}`,
+    };
   }
   return {
-    ok: false,
+    ok: true,
     detail:
-      `hooks are installed but reflection runs locally on ${routing.roles.reflect.model}; ` +
-      'set AION_ANTHROPIC_API_KEY in .env, or remove the hooks (`aion hooks uninstall`; ' +
-      'the hook client also strips them on its next fire)',
+      `hooks installed; capture digests locally on ${routing.roles.reflect.model}. ` +
+      'A key plus AION_REFLECT_PROVIDER route it to Anthropic instead; nothing here needs one.',
   };
 }

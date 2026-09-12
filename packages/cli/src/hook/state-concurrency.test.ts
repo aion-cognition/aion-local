@@ -175,7 +175,7 @@ describe('two hook fires against one session state', () => {
       harness: 'claude',
       stopMode: 'push',
       minChars: 40,
-      keyState: 'present',
+      route: 'keyed',
       settingsPath: join(dir, 'settings.json'),
       stateDir,
       endpoint: 'http://127.0.0.1:8765/mcp',

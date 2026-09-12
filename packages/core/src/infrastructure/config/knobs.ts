@@ -7,9 +7,11 @@ import { TEMPORAL_KNOBS } from './temporal-knobs.js';
 import {
   DEFAULT_LOG_FILE,
   DEFAULT_LOG_LEVEL,
+  DEFAULT_LOG_RETENTION_DAYS,
   LOG_FILE_ENV_VAR,
   LOG_LEVEL_ENV_VAR,
   LOG_LEVELS,
+  LOG_RETENTION_ENV_VAR,
 } from '../logging/logger.js';
 import { DEFAULT_ANTHROPIC_MODEL } from '../providers/anthropic-provider.js';
 import { DEFAULT_SQLITE_PATH, SQLITE_PATH_ENV_VAR } from '../sqlite/database.js';
@@ -412,6 +414,11 @@ export const KNOBS = {
   logging: {
     filePath: [LOG_FILE_ENV_VAR, text, DEFAULT_LOG_FILE],
     level: [LOG_LEVEL_ENV_VAR, z.enum(LOG_LEVELS), DEFAULT_LOG_LEVEL],
+    // Days of file log kept, fractions allowed. One day, because this file is the tail somebody
+    // reads after something went wrong rather than an archive: a substrate's durable history is
+    // the graph and the experience store, and neither is here. Enforced wherever a logger opens,
+    // so both profiles get it; at most the current window and the one before it are on disk.
+    retentionDays: [LOG_RETENTION_ENV_VAR, positive, DEFAULT_LOG_RETENTION_DAYS],
   },
 } as const satisfies KnobTable;
 

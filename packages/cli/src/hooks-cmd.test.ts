@@ -213,47 +213,16 @@ describe('hooks install and uninstall', () => {
     );
   });
 
-  it('refuses to install when neither the environment nor the repo .env carries a key', () => {
-    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+  it('installs with no key anywhere, because hooks are route-agnostic', () => {
+    // The rule this replaces: install refused without a key, the server refused capture on a local
+    // route, and the client removed its own entries on the next fire. All three came from a build
+    // whose local model could not keep up with a capture every turn.
+    expect(installHooks(options({ env: {} }), write)).toBe(0);
 
-    expect(installHooks(options({ env: {} }), write)).toBe(1);
-
-    expect(existsSync(settingsPath)).toBe(false);
-    expect(written).toEqual([]);
-    const message = String(stderr.mock.calls[0]?.[0]);
-    expect(message).toContain('AION_ANTHROPIC_API_KEY');
-    expect(message).toContain('aion init full');
-    expect(message).toContain(join(repoDir, '.env'));
+    expect(describeAionHooks(settings())).toHaveLength(7);
   });
 
-  it('leaves an existing settings file and its directory untouched when it refuses', () => {
-    mkdirSync(join(dir, 'home', '.claude'), { recursive: true });
-    const original = { model: 'opus' };
-    writeFileSync(settingsPath, JSON.stringify(original));
-    vi.spyOn(process.stderr, 'write').mockReturnValue(true);
-
-    expect(installHooks(options({ env: {} }), write)).toBe(1);
-
-    expect(settings()).toEqual(original);
-    expect(readdirSync(join(dir, 'home', '.claude'))).toEqual(['settings.json']);
-  });
-
-  it('refuses without a key instead of printing the block to merge by hand', () => {
-    vi.spyOn(process.stderr, 'write').mockReturnValue(true);
-
-    expect(
-      installHooks(
-        options({ env: {}, repo: { path: '/host/aion-local', verified: false } }),
-        write,
-      ),
-    ).toBe(1);
-
-    expect(written).toEqual([]);
-  });
-
-  it('refuses the lite profile without a key the same way as the full profile', () => {
-    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
-
+  it('installs the lite profile with no key the same way', () => {
     expect(
       installHooks(
         options({
@@ -267,19 +236,20 @@ describe('hooks install and uninstall', () => {
         }),
         write,
       ),
-    ).toBe(1);
+    ).toBe(0);
 
-    expect(existsSync(settingsPath)).toBe(false);
-    expect(String(stderr.mock.calls[0]?.[0])).toContain('AION_ANTHROPIC_API_KEY');
+    expect(describeAionHooks(settings())).not.toHaveLength(0);
   });
 
-  it('reads a blank key as no key at all', () => {
-    vi.spyOn(process.stderr, 'write').mockReturnValue(true);
-    writeFileSync(join(repoDir, '.env'), 'AION_ANTHROPIC_API_KEY=\n');
+  it('prints the block to merge by hand with no key, for an unverified repo path', () => {
+    expect(
+      installHooks(
+        options({ env: {}, repo: { path: '/host/aion-local', verified: false } }),
+        write,
+      ),
+    ).toBe(0);
 
-    expect(installHooks(options({ env: { AION_ANTHROPIC_API_KEY: '   ' } }), write)).toBe(1);
-
-    expect(existsSync(settingsPath)).toBe(false);
+    expect(written.join('\n')).toContain('SessionStart');
   });
 
   it('installs when the key is recorded only in the repo .env', () => {
@@ -483,15 +453,11 @@ describe('hooks install and uninstall', () => {
       expect(configFile()).toBe(`${original}\n${SERVER_BLOCK}`);
     });
 
-    it('refuses without a key and writes neither file', () => {
-      const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+    it('writes both files with no key, the same as any other route', () => {
+      expect(installHooks(codexOptions({ env: {} }), write)).toBe(0);
 
-      expect(installHooks(codexOptions({ env: {} }), write)).toBe(1);
-
-      expect(existsSync(codexHooksPath)).toBe(false);
-      expect(existsSync(codexConfigPath)).toBe(false);
-      expect(written).toEqual([]);
-      expect(String(stderr.mock.calls[0]?.[0])).toContain('AION_ANTHROPIC_API_KEY');
+      expect(existsSync(codexHooksPath)).toBe(true);
+      expect(existsSync(codexConfigPath)).toBe(true);
     });
 
     it('removes the hook entries and says the server block stays', () => {

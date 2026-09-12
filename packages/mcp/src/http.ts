@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 /** Reflection payloads carry whole transcripts; the cap only exists so a runaway body cannot exhaust the heap. */
@@ -73,6 +72,8 @@ export function bindHost(inContainer: boolean): string {
   return inContainer ? '0.0.0.0' : '127.0.0.1';
 }
 
-export function runningInContainer(): boolean {
-  return existsSync('/.dockerenv');
-}
+/**
+ * Re-exported rather than defined here. The substrate's path resolution turns on the same fact and
+ * runs inside core, before any of this loads, so there is one probe and both readings of it agree.
+ */
+export { runningInContainer } from '@aion/core';

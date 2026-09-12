@@ -1,4 +1,5 @@
 import {
+  hostDataDir,
   latestAppliedGraphMigration,
   readMemberName,
   type Config,
@@ -25,11 +26,15 @@ export type InstallProfile = Config['install']['profile'];
 
 export const INSTALL_PROFILE_ENV_VAR = 'AION_INSTALL_PROFILE';
 
-/** The directory a native install keeps both of its own stores and its log under. */
-export const NATIVE_DATA_DIR_NAME = '.aion';
-
+/**
+ * The directory a native install keeps both of its own stores and its log under.
+ *
+ * One definition, in core, because two things reach for it and they have to agree: this writes it
+ * into `.env`, and `prepareSubstrateRoots` resolves it at every entry point before config loads —
+ * including on the command that runs before there is a `.env` at all.
+ */
 export function nativeDataDir(home: string): string {
-  return join(home, NATIVE_DATA_DIR_NAME);
+  return hostDataDir(home);
 }
 
 /**

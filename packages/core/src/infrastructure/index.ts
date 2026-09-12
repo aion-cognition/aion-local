@@ -7,6 +7,9 @@
 
 export { openLogger } from './logging/logger.js';
 export type { Logger } from './logging/logger.js';
+/** The level names `aion logs` filters by. The retention it enforces is the logger's own. */
+export { LOG_LEVELS } from './logging/logger.js';
+export type { LogLevel } from './logging/logger.js';
 
 export { describeError } from './errors.js';
 
@@ -103,6 +106,12 @@ export {
 } from './sqlite/served-items.js';
 
 export { DEFAULTS, envFileValue, loadConfig, parseEnvFile, ConfigError } from './config/index.js';
+/**
+ * Where the substrate's files go, decided before a process opens one. Every entry point calls
+ * `prepareSubstrateRoots` ahead of `loadConfig`: the table's path defaults are container paths,
+ * and a host run that took them dies on the logger before it can say anything.
+ */
+export { hostDataDir, prepareSubstrateRoots, runningInContainer } from './config/index.js';
 export type { Config } from './config/index.js';
 
 export {
