@@ -36,14 +36,24 @@ export type CoverageActivationOutcome =
   | { readonly state: 'preparing'; readonly reason: string };
 
 /**
- * Identity derived from the two durable facts the operation's own check reads back. A restart
- * that finds the same contract and the same capability republishes the same operation and gets
- * its recorded outcome; a substrate where either fact has moved is a different decision and
- * takes a different identity, so a refusal recorded against the old pair never stands in for
- * one nobody has taken.
+ * Identity derived from the whole payload, one field per segment.
+ *
+ * A restart that finds the same facts republishes the same operation and gets its recorded
+ * outcome; a substrate where any of them has moved is a different decision and takes a different
+ * identity, so a refusal recorded against the old set never stands in for one nobody has taken.
+ *
+ * Every payload field is here, including the one the handler's check does not read. The
+ * coordinator refuses an identity it has seen carrying different payload bytes, and it refuses it
+ * by throwing rather than by deciding, so an identity narrower than its payload turns a policy
+ * change into a failed boot instead of a refusal with a reason. A field added to the payload is
+ * added here in the same edit.
  */
-function activationOperationId(epoch: string, capabilityRevision: number): string {
-  return `coverage-activation:${epoch}:${String(capabilityRevision)}`;
+function activationOperationId(
+  epoch: string,
+  capabilityRevision: number,
+  fieldPolicyVersion: number,
+): string {
+  return `coverage-activation:${epoch}:${String(capabilityRevision)}:${String(fieldPolicyVersion)}`;
 }
 
 /**
@@ -81,7 +91,7 @@ export async function activateCoverageOnStart(
   }
   const outcome = await publications.publish({
     kind: 'coverage_activation',
-    operationId: activationOperationId(contract.epoch, capabilityRevision),
+    operationId: activationOperationId(contract.epoch, capabilityRevision, FIELD_POLICY_VERSION),
     payload: {
       expectedEpoch: contract.epoch,
       capabilityRevision,

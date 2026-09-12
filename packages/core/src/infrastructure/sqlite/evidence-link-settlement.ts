@@ -38,6 +38,9 @@ export type LinkVersionKey = {
   readonly operationKey: string;
 };
 
+/** The version class a reference delivery writes. The read below answers for this one alone. */
+const STATED = 'stated';
+
 /**
  * Every version one DELIVERY still holds outside the committed view, at whatever address it wrote
  * them under.
@@ -63,8 +66,6 @@ export type LinkVersionKey = {
  * the only rows this can return are the ones the reference delivery itself wrote, which is what
  * the caller's refusal already says it counted.
  */
-const STATED = 'stated';
-
 export function heldDeliveryLinkVersions(
   db: SqliteHandle,
   fromId: string,

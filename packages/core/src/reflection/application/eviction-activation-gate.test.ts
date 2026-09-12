@@ -30,15 +30,29 @@ const CAPABILITY_COLUMN = 'eviction_compatibility_revision';
 const COVERAGE_COLUMN = 'activation_capability_revision';
 
 /**
- * A write is an UPDATE or an INSERT reaching this column; a read of it is not one.
+ * A write is an UPDATE, an INSERT or a REPLACE reaching this column; a read of it is not one.
  *
  * The scan windows on the table name rather than matching up to a delimiter, because the
  * statements in this repo are template literals spanning several lines and a delimiter-bounded
  * pattern stops at the first backtick or quote it meets. Everything inside the window counts,
  * whatever it is made of.
+ *
+ * The REPLACE pattern covers both spellings SQLite accepts, the bare `REPLACE INTO` and the
+ * `INSERT OR REPLACE INTO` whose tail it matches. Neither is used anywhere in this repo today,
+ * and the point of naming them is that a writer added in either form is caught by the scan
+ * rather than by somebody noticing.
+ *
+ * What the scan cannot see is a statement whose column name is not in the source: a name built
+ * from a variable, or a whole statement assembled at runtime, passes it. Closing that needs a
+ * different instrument than a text scan, and the residual is recorded against the arming
+ * decision rather than papered over here.
  */
 const WINDOW = 600;
-const MUTATIONS = [/UPDATE\s+publication_control/gi, /INSERT\s+INTO\s+publication_control/gi];
+const MUTATIONS = [
+  /UPDATE\s+publication_control/gi,
+  /INSERT\s+INTO\s+publication_control/gi,
+  /REPLACE\s+INTO\s+publication_control/gi,
+];
 
 function writesColumn(source: string, column: string): boolean {
   for (const pattern of MUTATIONS) {
@@ -83,6 +97,16 @@ describe('the eviction compatibility capability is not armed by any production w
   it('scans every production TypeScript source under packages', () => {
     expect(files.length).toBeGreaterThan(100);
     expect(files.every((file) => file.endsWith('.ts'))).toBe(true);
+  });
+
+  it('catches every statement form a writer could take', () => {
+    const reaching = (statement: string): string =>
+      [`db.prepare(\`${statement}`, `  SET ${CAPABILITY_COLUMN} = 1`, '`);'].join('\n');
+
+    expect(writesTheCapability(reaching('UPDATE publication_control'))).toBe(true);
+    expect(writesTheCapability(reaching('INSERT INTO publication_control'))).toBe(true);
+    expect(writesTheCapability(reaching('REPLACE INTO publication_control'))).toBe(true);
+    expect(writesTheCapability(reaching('INSERT OR REPLACE INTO publication_control'))).toBe(true);
   });
 
   it('catches a multi-line template-literal write, which the statements here are', () => {
