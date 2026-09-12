@@ -76,6 +76,15 @@ export function latestLedgerEntry(db: SqliteHandle, prefix: string): OpsLedgerEn
   return row === undefined ? undefined : toOpsLedgerEntry(row);
 }
 
+/**
+ * There is no delete here, on purpose. A ledger row is the record that something ran, and the two
+ * writers that hold a position in one clear the position rather than removing the row: a cleared
+ * candidate cursor is one row per family that ever needed one, and the un-versioned key a key
+ * migration leaves behind is one row per migrated family. Both populations are bounded by families
+ * rather than by anything that grows with use, and both carry an empty summary. Exporting a delete
+ * would let a caller destroy the record of a run to reclaim rows that were never the cost.
+ */
+
 /** Idempotent: re-marking the same key updates appliedAt/summary rather than erroring. */
 export function markLedgerApplied(db: SqliteHandle, key: string, summary?: unknown): void {
   db.prepare(

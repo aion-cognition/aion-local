@@ -235,6 +235,12 @@ async function closeExtraRevisions(
  * position would be overwritten by whichever family came last in the page, and the family it
  * belonged to would restart at the head every time. The row is cleared, not moved, when the
  * history runs out — a position is only a position while there is something below it.
+ *
+ * A cleared row stays, and that is the retention rule rather than an omission. The population is
+ * one row per family that ever carried duplicate standing revisions, so it is bounded by the
+ * number of families rather than by the history walked, and each one costs an empty summary. A
+ * sweep would need a delete the ledger deliberately does not export, and it would buy back a
+ * bounded number of empty rows at the price of a walk resuming from the head.
  */
 function candidateCursorKey(chunkId: string): string {
   return `narrative_cleanup:candidate_cursor:${chunkId}`;
