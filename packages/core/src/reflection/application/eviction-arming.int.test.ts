@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
 
+import { armEvictionOnStart } from './eviction-arming-start.js';
 import {
   armingPreconditions,
   disarmPreconditions,
@@ -31,6 +32,9 @@ import { readCoverageState } from '../../recall/application/coverage-state.js';
 
 /**
  * Arming, through the coordinator that owns it, on a substrate that is not otherwise armed.
+ *
+ * The arm is the service start's act (`armEvictionOnStart`) rather than a command's, so these
+ * cases publish it the way boot does; the stop is still an operator's and is published directly.
  *
  * Order matters in this file. The refusals run first, against a substrate whose coverage contract
  * is still preparing, and the arming act runs last, because arming is not reversible from inside
@@ -79,6 +83,17 @@ it('refuses while the coverage contract has not been activated', async () => {
   expect(armedRevision()).toBe(0);
 });
 
+it('leaves the fence shut at a start whose preconditions do not hold, and names the one that failed', async () => {
+  // A boot on a substrate that has not activated coverage yet. The substrate serves; the fence
+  // stays shut with the refusal readable, and the next start asks again.
+  expect(await armEvictionOnStart(publications, store.db)).toEqual({
+    state: 'unarmed',
+    reason: 'coverage_capability_not_established',
+  });
+  expect(armedRevision()).toBe(0);
+  expect(readCoverageState(store.db).evictionGate).toBe('unarmed');
+});
+
 it('refuses a composition that did not install every declared kind', async () => {
   // The kinds come from the coordinator's own map, so a caller cannot state a set it does not
   // have. A process that composed a smaller one cannot recover a pending operation of a kind it
@@ -109,19 +124,26 @@ it('refuses a composition that did not install every declared kind', async () =>
   expect(armedRevision()).toBe(0);
 });
 
-it('arms the fence once, and refuses a later attempt that finds it already armed', async () => {
+it('arms the fence at start once coverage is active, and reads it back on the next start', async () => {
   await activateCoverage();
 
-  const armed = await arm(
-    evictionArmingOperationId('arm', EVICTION_COMPATIBILITY_REVISION, epoch(), NOW),
-  );
-  expect(armed).toMatchObject({ status: 'acknowledged' });
-  expect(armedRevision()).toBe(EVICTION_COMPATIBILITY_REVISION);
-  expect(readCoverageState(store.db)).toMatchObject({
-    evictionGate: 'armed',
-    evictionCompatibilityRevision: EVICTION_COMPATIBILITY_REVISION,
+  expect(await armEvictionOnStart(publications, store.db)).toEqual({
+    state: 'armed',
+    revision: EVICTION_COMPATIBILITY_REVISION,
   });
+  expect(armedRevision()).toBe(EVICTION_COMPATIBILITY_REVISION);
+  expect(readCoverageState(store.db).evictionGate).toBe('armed');
 
+  // The second start. Nothing to do, nothing published, and the same answer.
+  expect(await armEvictionOnStart(publications, store.db)).toEqual({
+    state: 'armed',
+    revision: EVICTION_COMPATIBILITY_REVISION,
+  });
+  expect(armedRevision()).toBe(EVICTION_COMPATIBILITY_REVISION);
+});
+
+it('refuses a later attempt that finds it already armed', async () => {
+  expect(armedRevision()).toBe(EVICTION_COMPATIBILITY_REVISION);
   // A second act under its own identity, which is what a re-arm after a coverage change would
   // take. The fence is where it is, so there is nothing for it to do.
   expect(await arm('arming:again')).toMatchObject({
@@ -154,6 +176,16 @@ it('stops eviction with a stamp of its own, leaving the revision where it stands
     status: 'pinned',
     reason: 'compatibility_disarmed',
   });
+});
+
+it('does not re-arm a stopped substrate at the next start', async () => {
+  // The whole point of keeping `disarm` an operator's command once arming became automatic: a
+  // restart is not a retraction. The stop stands and the start says which of the two it found.
+  expect(disarmedAt()).not.toBeNull();
+
+  expect(await armEvictionOnStart(publications, store.db)).toMatchObject({ state: 'disarmed' });
+  expect(readCoverageState(store.db).evictionGate).toBe('disarmed');
+  expect(armedRevision()).toBe(EVICTION_COMPATIBILITY_REVISION);
 });
 
 it('refuses a second stop, and lets a deliberate re-arm clear the one that stands', async () => {

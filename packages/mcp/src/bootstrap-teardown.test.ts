@@ -137,6 +137,12 @@ vi.mock('@aion/core', async (importOriginal) => {
       calls.push('coverage.activate');
       return { state: 'active', historySince: '2026-09-11T06:00:00.000Z' };
     },
+    // The other boot-time act on the same record, faked for the same reason and recorded in the
+    // same list: the fence arms itself at start, and the order it happens in is what this asserts.
+    armEvictionOnStart: async () => {
+      calls.push('eviction.arm');
+      return { state: 'armed', revision: 1 };
+    },
     // The shape the real report returns when routing has nothing to unload, `evicted` included:
     // boot reads that list to decide whether the run is worth recording.
     reconcileResidentModels: async () => ({ checked: false, evicted: [] }),
@@ -169,6 +175,9 @@ describe('bootstrapService failing partway through construction', () => {
     expect(calls).toEqual([
       'publications.initialize',
       'coverage.activate',
+      // Arming follows activation and precedes the recovery loop: it refuses against a contract
+      // that is not active, and one actor asks for the guard at boot.
+      'eviction.arm',
       'publicationRecovery.start',
       'idleNarratives.start',
       'introspector.start',

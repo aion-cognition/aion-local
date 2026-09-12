@@ -596,16 +596,23 @@ substrate somebody stopped reads apart from one nobody ever opened.
 ## The eviction fence
 
 ```
-aion evict [status | arm | disarm] [--yes]
+aion evict [status | disarm] [--yes]
 ```
 
 Eviction is built and fenced on every substrate. While the fence is closed, eligibility answers
 `compatibility_not_established` for every source and the `episode_evict` operation removes
-nothing. Nothing opens the fence on its own: not `aion init`, not the service start, not the
-maintenance catalog. A person runs `arm`.
+nothing.
 
-`status` prints the fence, the coverage contract behind it, each precondition arming checks, and
-each thing arming does not check.
+**The service arms it at start**, after it activates the coverage contract, through the same
+audited operation and against the same precondition table a person used to run by hand. The
+manual step was removed on 2026-09-12. A fresh substrate therefore comes up armed on its first
+start once the checks below pass; a substrate where one of them fails comes up unarmed with that
+refusal readable in `aion evict status` and `aion doctor`, and the next start asks again. Nothing
+else reaches the act: not `aion init`, not the maintenance catalog, and no command.
+
+`aion evict status` prints the fence, the coverage contract behind it, each precondition the
+arming checks, and each thing arming does not check. It is the only surface that prints the
+second list.
 
 What it checks:
 
@@ -627,9 +634,11 @@ What it does not check, and no check can:
   writer respects
 - whether anything on this substrate is worth keeping that eviction would be allowed to remove
 
-`arm` prints both lists, refuses if any checked precondition fails, asks a question that repeats
-the unverified half, and then publishes the act through the coordinator, so it leaves a receipt
-like any other decision.
+The second list did not shrink when the manual step went away, and none of it became checkable.
+What changed is who reads it: it is a standing disclosure on `aion evict status` rather than a
+question somebody answered once. The act itself still goes through the coordinator, so an arming
+leaves a receipt like any other decision, and the receipt is what makes it recoverable if the
+process dies mid-act.
 
 ### Stopping it again
 
@@ -643,17 +652,22 @@ pending eviction and nothing removed, ends refused with `compatibility_disarmed`
 its source still resident.
 
 It is not the inverse of arming. The compatibility revision is left where it is, so the
-capability this substrate established stays on the record and a later `arm` cannot be mistaken
-for a first one. A substrate whose stop was **recorded** is re-armable at the same revision:
-arming is what clears the stamp, in the same act.
+capability this substrate established stays on the record and a later arming cannot be mistaken
+for a first one.
+
+**A stop holds through a restart.** The service does not arm over a standing stamp: a disarm is a
+statement an operator made, and a restart is not a retraction of it. The start reports the
+substrate as disarmed and leaves it alone. Lifting a stop is therefore a deliberate act of its
+own, and today that means clearing the stamp in the database or resetting the substrate; the
+re-arm path the old `aion evict arm` gave is gone with the command.
 
 A stop that was asked for and never recorded is different. `aion evict disarm` claims it durably
 before the guard settles anything, so an attempt that dies after the claim and before its
 acknowledgment leaves the substrate stopped with a claim nobody finished. `aion doctor` and
 `/health` name the operation that owes it. **Running `aion evict disarm` again is what resolves
-it**: the next stop adopts the standing claim and its own acknowledgment records it. `aion evict
-arm` refuses with `eviction_stop_owed` and says so, because clearing an unrecorded stop would lose
-the record that somebody asked for one.
+it**: the next stop adopts the standing claim and its own acknowledgment records it. The service's
+own arm refuses with `eviction_stop_owed` and reports it, because clearing an unrecorded stop
+would lose the record that somebody asked for one.
 
 **It stops future evictions and cannot undo one that already happened.** An eviction that reached
 its acknowledgment removed a projection under a receipt, and nothing puts it back.

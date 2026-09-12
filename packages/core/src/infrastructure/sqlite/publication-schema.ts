@@ -21,9 +21,9 @@ export const PUBLICATION_SCHEMA_STATEMENTS: readonly string[] = [
    * `activation_capability_revision`: it is the coverage capability the substrate has
    * established, and the activation publication names it so a request cannot claim a capability
    * nothing recorded. Eviction reads `eviction_compatibility_revision`: it is the destructive
-   * capability's arming fence, and one audited operation an operator publishes by hand is the
-   * only thing that writes it. An active coverage contract therefore says nothing about whether
-   * eviction may remove anything.
+   * capability's arming fence, and one audited operation is the only thing that writes it. The
+   * service publishes that operation at each start, after coverage activation and never over a
+   * standing stop. An active coverage contract is a precondition of arming and is not the arming.
    *
    * `eviction_disarmed_at` is the stop, and it is its own fact rather than a lower revision. A
    * revision that could move down would let a later reader mistake a deliberate stop for a

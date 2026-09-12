@@ -56,9 +56,9 @@ export const INSTALLED_PUBLICATION_HANDLERS: readonly PublicationHandler[] = [
   // staleness scan and the survivor repair all recompute the same served property, and a
   // process composing a smaller set would meet one of them pending and refuse.
   contextVectorSyncPublication,
-  // Installed like any other, and reached from nowhere but the operator's command. A pending
-  // arming act has to be recoverable by whatever process finds it, which is what installing it
-  // in the one shared set is for; nothing here starts it.
+  // Installed like any other, and reached from two places: the service start arms, an operator
+  // stops. A pending act of either kind has to be recoverable by whatever process finds it,
+  // which is what installing it in the one shared set is for.
   evictionArmingPublication,
 ];
 

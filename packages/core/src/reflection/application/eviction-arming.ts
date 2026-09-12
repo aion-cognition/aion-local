@@ -23,19 +23,20 @@ import {
  *
  * Every substrate is built with eviction fenced rather than absent. `durableEligibility` answers
  * `compatibility_not_established` for every source while the compatibility revision reads zero,
- * and nothing in the service, the worker, initialization or the maintenance catalog moves it.
- * The only thing that does is an operator running the command, which publishes this.
+ * and two paths move it: the service arms the fence at start (`eviction-arming-start.ts`), and an
+ * operator stops it again with `aion evict disarm`. Nothing in initialization, the worker or the
+ * maintenance catalog reaches either act.
  *
- * It is an audited operation because of what it enables. A substrate that can remove memory is a
- * substrate somebody deliberately said could, and a decision of that size has to leave the same
- * durable record every other decision leaves: one receipt, recoverable if the process dies
- * mid-act, discarded whole if a precondition moved under it.
+ * It stays an audited operation now that the arm is automatic, and for the same reason it was one
+ * when it was manual. A substrate that can remove memory has to say when it became one, and a
+ * decision of that size leaves the same durable record every other decision leaves: one receipt,
+ * recoverable if the process dies mid-act, discarded whole if a precondition moved under it.
  *
  * What the check can verify is not the whole of what the fence exists for. The fence was raised
  * because a large body of writers still mutates the graph outside the publication protocol, and
  * no code can look at a substrate and tell whether that body has been converted. So the check
- * takes the conditions that ARE derivable and refuses on any of them, `ARMING_NOT_VERIFIED` names
- * the rest, and the command prints both so the passing checks are never read alone.
+ * takes the conditions that ARE derivable and refuses on any of them, and `ARMING_NOT_VERIFIED`
+ * names the rest. `aion evict status` prints both, so the passing checks are never read alone.
  *
  * Stopping goes through the same operation and the same receipt, because a decision to stop
  * removing memory deserves the record a decision to start does. It is not the inverse of arming:
@@ -67,8 +68,9 @@ const Result = z.strictObject({
  * The fence exists because a large body of writers still mutates the graph outside the
  * publication protocol, and no code can look at a substrate and tell whether that work has been
  * done. Everything the check CAN derive is in the table below; everything it cannot is here, and
- * the command prints both, because six passing checks in a row read as full assurance unless the
- * gaps are printed beside them in the same breath.
+ * `aion evict status` prints both, because passing checks in a row read as full assurance unless
+ * the gaps are printed beside them in the same breath. One export, one renderer: this list is
+ * what the automatic arm does not verify, and the surface that reports the fence says so.
  */
 export const ARMING_NOT_VERIFIED: readonly string[] = [
   'the writer audit itself: the reflection stage writers, plasticity flush and decay, entity ' +

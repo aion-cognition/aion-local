@@ -7,10 +7,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { evictionFence } from './doctor-checks.js';
 import {
-  ARM_CONFIRMATION,
   parseEvictFlags,
   runEvict,
-  runEvictAct,
+  runEvictDisarm,
   writeNotVerified,
   writePreconditions,
 } from './evict.js';
@@ -19,7 +18,7 @@ describe('parseEvictFlags', () => {
   it('reads status by default and takes either subcommand', () => {
     expect(parseEvictFlags([])).toEqual({ action: 'status', yes: false });
     expect(parseEvictFlags(['status'])).toEqual({ action: 'status', yes: false });
-    expect(parseEvictFlags(['arm', '--yes'])).toEqual({ action: 'arm', yes: true });
+    expect(parseEvictFlags(['disarm', '--yes'])).toEqual({ action: 'disarm', yes: true });
   });
 
   it('reads a bare flag as status, so the destructive act always has to be named', () => {
@@ -28,7 +27,13 @@ describe('parseEvictFlags', () => {
 
   it('rejects an unknown subcommand and an unknown option', () => {
     expect(() => parseEvictFlags(['unarm'])).toThrow();
-    expect(() => parseEvictFlags(['arm', '--force'])).toThrow("unknown option '--force'");
+    expect(() => parseEvictFlags(['disarm', '--force'])).toThrow("unknown option '--force'");
+  });
+
+  it('refuses `arm`, which the service now does at start, and says what it takes instead', () => {
+    // Not silently accepted and not silently ignored: somebody who learned the manual step reads
+    // the supported list here rather than watching a command exit 0 having armed nothing.
+    expect(() => parseEvictFlags(['arm'])).toThrow('status, disarm');
   });
 });
 
@@ -59,7 +64,9 @@ describe('which set the tables are measured against', () => {
   it('hands the precondition table the set the command composes', () => {
     const source = readFileSync(fileURLToPath(new URL('./evict.ts', import.meta.url)), 'utf8');
     const calls = [...source.matchAll(/armingPreconditions\(\s*db,\s*([A-Za-z_]+)/g)];
-    expect(calls.length).toBeGreaterThan(1);
+    // One call site since the arm act left this file: the status read. The other reader of the
+    // table is the operation's own check, which takes the set from the coordinator holding it.
+    expect(calls.length).toBeGreaterThan(0);
     expect(calls.map((match) => match[1])).toEqual(calls.map(() => 'INSTALLED_PUBLICATION_KINDS'));
     // And the set is a real answer about this build rather than the declared list renamed.
     expect(INSTALLED_PUBLICATION_KINDS.length).toBeGreaterThan(0);
@@ -77,9 +84,11 @@ describe('the honest-gaps section', () => {
     expect(said.join(' ')).toContain('writer audit');
   });
 
-  it('carries the same warning into the question the operator answers', () => {
-    // The last thing read before the answer has to be the gap, not the passing table above it.
-    expect(ARM_CONFIRMATION).toContain('unverified');
+  it('has exactly one renderer, which is the status read', () => {
+    // The list used to be printed twice: on a status read and again above the arming question.
+    // With no arming question left, a second caller would be a second place for it to drift.
+    const source = readFileSync(fileURLToPath(new URL('./evict.ts', import.meta.url)), 'utf8');
+    expect(source.split('writeNotVerified(write)')).toHaveLength(2);
   });
 });
 
@@ -164,19 +173,20 @@ describe('what `aion evict` actually prints', () => {
     expect(said.join('\n')).toContain('writer audit');
   });
 
-  async function armTable(): Promise<{ said: string[]; prompts: string[] }> {
+  async function disarmTable(): Promise<{ said: string[]; prompts: string[] }> {
     const said: string[] = [];
     const prompts: string[] = [];
     const store = new SqliteStore({ filePath: join(dir, 'act.sqlite') });
     try {
-      // The end state a bootstrapped, coverage-active substrate is in, written directly: what is
-      // under test here is what the command prints and asks, and the fence's own semantics have
-      // their own batteries in core.
+      // The end state a bootstrapped, coverage-active, armed substrate is in, written directly:
+      // what is under test here is what the command prints and asks, and the fence's own
+      // semantics have their own batteries in core.
       store.db
         .prepare(
           `INSERT INTO publication_control
-             (substrate_id, bootstrap_state, protocol_version, activation_capability_revision)
-           VALUES ('s1', 'initialized', 1, 1)`,
+             (substrate_id, bootstrap_state, protocol_version, activation_capability_revision,
+              eviction_compatibility_revision)
+           VALUES ('s1', 'initialized', 1, 1, 1)`,
         )
         .run();
       store.db
@@ -186,21 +196,20 @@ describe('what `aion evict` actually prints', () => {
            VALUES ('epoch-1', '2026-09-12T00:00:00.000Z', '2026-09-12T00:00:00.000Z', 1, 'active')`,
         )
         .run();
-      await runEvictAct(
-        'arm',
+      await runEvictDisarm(
         store.db,
         () =>
           Promise.resolve({
-            status: 'deferred',
+            status: 'deferred' as const,
             operationId: 'op-1',
             sequence: '1',
-            reason: 'substrate_not_initialized',
+            reason: 'already_disarmed',
           }),
-        (prompt) => {
+        (prompt: string) => {
           prompts.push(prompt);
           return Promise.resolve(true);
         },
-        (line) => said.push(line),
+        (line: string) => said.push(line),
       );
     } finally {
       store.close();
@@ -208,22 +217,20 @@ describe('what `aion evict` actually prints', () => {
     return { said, prompts };
   }
 
-  it('carries the gaps before the question on the pre-arm table', async () => {
-    const { said } = await armTable();
+  it('prints the stop table and says the stop survives a restart', async () => {
+    const { said } = await disarmTable();
 
-    const heading = said.indexOf('not verified here, and nothing below can be:');
-    expect(heading).toBeGreaterThan(0);
-    expect(said.findIndex((line) => line.startsWith('  ['))).toBeLessThan(heading);
-    expect(said.join('\n')).toContain('writer audit');
+    expect(said.some((line) => line.startsWith('  ['))).toBe(true);
+    // The one thing an operator has to know now that the service arms on its own: this is not
+    // undone by the next boot.
+    expect(said.join('\n')).toContain('does not re-arm a substrate you stopped');
   });
 
-  it('asks with the unverified half in the question, and only after printing it', async () => {
-    const { said, prompts } = await armTable();
+  it('asks once, and does not restate the unverified list the status read owns', async () => {
+    const { said, prompts } = await disarmTable();
 
-    // The question the operator answers is the question the command assembled, and it names the
-    // half no check covered.
     expect(prompts).toHaveLength(1);
-    expect(prompts[0]).toContain('unverified');
-    expect(said.indexOf('not verified here, and nothing below can be:')).toBeGreaterThan(-1);
+    expect(prompts[0]).toContain('stop eviction on this substrate?');
+    expect(said.join('\n')).not.toContain('not verified here');
   });
 });

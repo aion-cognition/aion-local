@@ -225,7 +225,7 @@ are shared with the workstream that owns each area (`floors.fixtures.ts`,
 - A root that boots the service under a key unloads the local generation tags on its way up,
   and the daemon those tags live in is the whole machine's. `reconcileModels`
   (`packages/mcp/src/boot-models.ts`) unloads what a remote-routed role no longer needs, so
-  `mcp/service.int` and `cli/last.int` under `AION_ANTHROPIC_API_KEY` pull `qwen3:8b` out from
+  `mcp/service.int` and `cli/last.int` under `AION_ANTHROPIC_API_KEY` pull the local reflect tag out from
   under any local-route file running abreast of them, and the `integration` project runs files
   in parallel. Neither root claims anything about residency, which is why nothing there fails:
   the file that breaks is the other one. Run keyed service-boot roots in a selection of their
@@ -276,7 +276,9 @@ Integration tests that drive enrichment call `testGenerationProvider(options)`
 not `local`, generation runs on Anthropic (`claude-haiku-4-5`, override with
 `AION_ANTHROPIC_MODEL`) and returns in a second or two; embedding always stays on Ollama, since
 the substrate has one embedding space. With no key, or `TEST_AION_GENERATION=local`, generation
-runs on qwen3:8b instead, 35 to 100 seconds an episode.
+runs on the local reflect model instead (`qwen3:4b-instruct-2507` by default), which measured
+12.2s at 1,772 input tokens and 46.8s at 12,488 on 2026-09-08; the previous default `qwen3:8b`
+took 35 to 100 seconds an episode.
 
 The key needs no export. The `integration` and `integration-ollama` projects run a setup file
 (`infrastructure/config/test-support/load-env.fixture.ts`) that reads `AION_ANTHROPIC_API_KEY`

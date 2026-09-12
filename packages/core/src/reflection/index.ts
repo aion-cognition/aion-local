@@ -34,8 +34,11 @@ export {
 } from './application/source-suppression.js';
 
 /**
- * The arming act. Exported for the one command that takes it, which is the only caller anywhere:
- * nothing in initialization, the service or the maintenance catalog reaches this.
+ * The two acts on the fence, and they are reached from different places on purpose. Arming is the
+ * service start's, through `armEvictionOnStart` below; the stop is an operator's, through
+ * `aion evict disarm`, and nothing in initialization or the maintenance catalog reaches either.
+ * The precondition tables and the unverified list are exported for `aion evict status`, which is
+ * where the fence is read.
  */
 export {
   ARMING_NOT_VERIFIED,
@@ -46,6 +49,9 @@ export {
   evictionArmingPublication,
 } from './application/eviction-arming.js';
 export type { ArmingPrecondition } from './application/eviction-arming.js';
+
+/** The start-time arm, published once per substrate and never over a standing stop. */
+export { armEvictionOnStart } from './application/eviction-arming-start.js';
 
 export { LaneAssigner } from './application/lanes.js';
 

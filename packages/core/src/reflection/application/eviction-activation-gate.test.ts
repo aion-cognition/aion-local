@@ -6,19 +6,19 @@ import { describe, expect, it } from 'vitest';
 /**
  * The line between a destructive capability existing and being reachable.
  *
- * No writer the compatibility audit marks unknown may be enabled while the contract is being
- * activated, and the audit still carries a large owed body: the reflection stage writers,
- * plasticity, merge and unmerge, and the introspection operations all mutate the graph outside
- * the publication protocol today. Eviction is therefore built and fenced rather than built and
- * live, and the fence is one positively verified fact: the eviction compatibility revision on
- * the publication control record.
+ * The fence is one positively verified fact: the eviction compatibility revision on the
+ * publication control record. Exactly one production path sets that revision, through one audited
+ * operation, and as of 2026-09-12 the caller of that operation is the service start rather than an
+ * operator's command — the manual arming step was removed. What that changes is who publishes it;
+ * what it does not change is that a substrate answers `compatibility_not_established` for every
+ * source until the operation's own preconditions pass, that the operation is the only way through,
+ * and that the writer behind it has one caller.
  *
- * Exactly one production path sets that revision, and it is an audited operation an operator
- * publishes by hand. Nothing in initialization, the service start or the maintenance catalog
- * reaches it, so every substrate answers `compatibility_not_established` for every source until
- * somebody deliberately arms it. This test is what keeps that true: a second writer would arm
- * the capability silently, and the change that adds one has to change these lists and be
- * reviewed for doing so.
+ * So the pins move rather than relax. The arm act is published from exactly one place and this
+ * test names it, initialization and the maintenance catalog still reach neither act, the stop and
+ * its claim stay an operator's, and the CLI no longer carries an arm at all. A second publisher, a
+ * second writer, or an arm reappearing in the catalog is a change to these lists, and the change
+ * that makes one has to be reviewed for it.
  *
  * Coverage activation is a different gate on the same row, because a substrate that cannot state
  * what it covers is unusable while a substrate that cannot evict is merely full. The last cases
@@ -32,6 +32,8 @@ const COVERAGE_COLUMN = 'activation_capability_revision';
 const ARMING_WRITER = 'establishEvictionCompatibility';
 const DISARM_WRITER = 'recordEvictionDisarm';
 const CLAIM_WRITER = 'claimEvictionStop';
+/** The one path that publishes the arm act, now that no command does. */
+const START_ARM = 'armEvictionOnStart';
 
 /**
  * A write is an UPDATE, an INSERT or a REPLACE reaching this column; a read of it is not one.
@@ -172,9 +174,11 @@ describe('the eviction compatibility capability is not armed by any production w
     ]);
   });
 
-  it('finds no act and no claim called from initialization, the service or the catalog', () => {
-    // Every one of these is an operator's. A caller here would make it a side effect of starting
-    // up, and the claim belongs on the list because taking it stops eviction on its own.
+  it('finds no writer of the row called from initialization, the service or the catalog', () => {
+    // The service start publishes the arm act; it does not write the row. The row's writers stay
+    // inside the operation's own acknowledgment on every path, which is what keeps the receipt
+    // ahead of the permission. The claim is on the list because taking it stops eviction on its
+    // own, and initialization and the catalog reach nothing here at all.
     const forbidden = ['cli/src/init.ts', 'mcp/src/bootstrap.ts', 'introspection/application'];
     const writers = [ARMING_WRITER, DISARM_WRITER, CLAIM_WRITER, 'releaseEvictionStopClaim'];
     const reached = files.filter((file) => {
@@ -185,6 +189,48 @@ describe('the eviction compatibility capability is not armed by any production w
       );
     });
     expect(reached.map((file) => relative(REPO_ROOT, file))).toEqual([]);
+  });
+
+  it('finds the arm act published from one place, and it is the service start', () => {
+    // `armEvictionOnStart` is the whole arming path now, so the set of files that call it is the
+    // set of things that can arm a substrate. One entry, and it is the boot sequence.
+    const definition = join(
+      PACKAGES_DIR,
+      'core',
+      'src',
+      'reflection',
+      'application',
+      'eviction-arming-start.ts',
+    );
+    const callers = files.filter(
+      (file) => file !== definition && readFileSync(file, 'utf8').includes(`${START_ARM}(`),
+    );
+    expect(callers.map((file) => relative(REPO_ROOT, file))).toEqual([
+      join('packages', 'mcp', 'src', 'bootstrap.ts'),
+    ]);
+  });
+
+  it('finds the start arm refusing to publish over a stop, before it reads the revision', () => {
+    const start = readFileSync(
+      join(PACKAGES_DIR, 'core', 'src', 'reflection', 'application', 'eviction-arming-start.ts'),
+      'utf8',
+    );
+    // A restart is not a retraction of a disarm. The stop resolves through the same shared reader
+    // the fence uses, and it is asked before the revision, so a disarmed substrate that restarts
+    // stays disarmed rather than being re-armed as if it had never been stopped.
+    expect(start.indexOf('evictionStopStands(db, pairing)')).toBeGreaterThan(0);
+    expect(start.indexOf('evictionStopStands(db, pairing)')).toBeLessThan(
+      start.indexOf('evictionCompatibilityRevision >='),
+    );
+  });
+
+  it('finds no arm act left in the CLI, which is where it used to be', () => {
+    // The manual step is gone rather than hidden behind a flag: `aion evict` takes status and
+    // disarm, and the payload it publishes only ever says disarm.
+    const evict = readFileSync(join(PACKAGES_DIR, 'cli', 'src', 'evict.ts'), 'utf8');
+    expect(evict).toContain("subcommands: ['status', 'disarm']");
+    expect(evict).not.toContain("act: 'arm'");
+    expect(evict).not.toContain("'arm',");
   });
 
   it('still finds the stop read before the revision, which is what makes it fail-closed', () => {
