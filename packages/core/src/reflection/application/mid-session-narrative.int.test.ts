@@ -3,19 +3,21 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { INSTALLED_PUBLICATION_HANDLERS } from './installed-publications.js';
+import { handleReflection, type ReflectionIntakeDeps } from './intake.js';
+import { LaneAssigner } from './lanes.js';
 import { closeSessionNarrative, SessionNarrativeStage, type NarrativeDeps } from './narratives.js';
-import { BITEMPORAL_PROPERTIES, writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
-import { upsertEdge } from '../../infrastructure/graph/edges.js';
-import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
+import { publishPipelineReadinessPolicy } from './readiness.js';
+import { activatedCoordinator } from './test-support/publication-substrate.fixture.js';
+import { durableRoleScope } from '../../evidence/domain/scopes.js';
+import { establishScope } from '../../evidence/test-support/evidence.fixture.js';
+import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
+import { NARRATIVE_PROPERTIES } from '../../infrastructure/graph/narrative-queries.js';
 import {
-  findSessionNarratives,
-  NARRATIVE_PROPERTIES,
-} from '../../infrastructure/graph/narrative-queries.js';
-import {
-  edgeTargetId,
+  narrativeIdsInSession,
   nodeProperties,
+  supersedingNodeIds,
 } from '../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   startNeo4jHarness,
@@ -24,39 +26,58 @@ import {
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
-import { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
+import type { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
+import { listChunkMembers } from '../../infrastructure/sqlite/chunk-manifest.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { readSourceRecord } from '../../infrastructure/sqlite/source-identity.js';
+import { SessionManager } from '../../session/session-manager.js';
+import { CHUNK_BOUNDARY_POLICY } from '../domain/chunk-boundary.js';
 import type { StageContext } from '../domain/stage.js';
 import { PIPELINE_VERSION } from '../domain/version.js';
 
 /**
- * A session long enough to be worth compressing before it ends. The stage runs while the
- * session is still open, the pause inside it crosses the boundary, and the close that comes
- * later versions over what the boundary wrote rather than writing a second story beside it.
+ * When a still-open session gets a narrative, and which boundary decides.
  *
- * Real Neo4j because that is where the versioning lives: which episodes the session holds, what
- * the standing version covers, and the supersession that links the two.
+ * **Re-subjected to the chunk family.** What this file was always about is the timing: the
+ * narrative a running session gets before anybody closes it, and the rule that decides when.
+ * That rule was the legacy mid-session boundary — a silence gap inside a session, measured
+ * against the whole session's coverage — and it is not the chunk family's. The chunk family
+ * decides on its own tail: `decideChunkSeal` seals when the unsealed members cross a bound they
+ * carry themselves, and `max_span` is the one that fires on elapsed time alone
+ * (`reflection/domain/chunk-boundary.ts`). So the cases below are the same four questions asked
+ * of that bound.
+ *
+ * The retirements are named rather than quietly dropped, because two of the old assertions have
+ * no chunk equivalent by design:
+ *
+ * - **The old boundary's kill switch.** The silence-gap decision was consulted only on the
+ *   legacy branch, and the chunk route never reads its option. The chunk equivalent of "off, a
+ *   running session waits for its close" is structural instead of a switch: the stage dispatches
+ *   with `sessionClosing: false`, so a tail inside every bound waits whatever anyone configured.
+ *   That is the first case here.
+ * - **"supersedes the mid-session version into the one the close writes".** The chunk family
+ *   does not version over membership growth — a grown session gets ANOTHER chunk, and both heads
+ *   stand. The no-supersession-between-chunks claim is covered directly at
+ *   `chunk-narrative.int.test.ts` ('two chunks of one session, and no supersession between
+ *   them'); the last case here asserts the half this file is responsible for, which is that the
+ *   close seals the tail the stage left rather than rewriting what it already sealed.
  */
 
 const EMBED_DIMENSION = 8;
-const SESSION_ID = 'mid-session-boundary';
-const QUIET_SESSION_ID = 'mid-session-boundary-switched-off';
 
-/** Three episodes, then twenty minutes of silence, which is past the ten-minute boundary. */
-const EPISODES = [
-  { id: 'mid-e1', at: '2026-04-02T09:00:00.000Z' },
-  { id: 'mid-e2', at: '2026-04-02T09:05:00.000Z' },
-  { id: 'mid-e3', at: '2026-04-02T09:25:00.000Z' },
-];
+/** Arrival is what `sealAge` measures the span from, so intake's clock is the one that matters. */
+const ARRIVED_AT = new Date('2026-04-02T09:00:00.000Z');
+/** Inside the span bound below: the tail is young and the session is open. */
+const INSIDE_THE_SPAN = new Date('2026-04-02T09:05:00.000Z');
+/** Past it, with nothing closed and nothing added. */
+const PAST_THE_SPAN = new Date('2026-04-02T09:45:00.000Z');
+const SECOND_ARRIVAL = new Date('2026-04-02T09:50:00.000Z');
+const CLOSE_AT = new Date('2026-04-02T09:55:00.000Z');
 
-const LATE_EPISODES = [
-  { id: 'mid-e4', at: '2026-04-02T09:40:00.000Z' },
-  { id: 'mid-e5', at: '2026-04-02T09:45:00.000Z' },
-];
+/** Thirty minutes rather than the shipped day, so the bound is reachable inside one fixture. */
+const SPAN_POLICY = { ...CHUNK_BOUNDARY_POLICY, maxSpanMs: 30 * 60 * 1000 };
 
-/** Still inside the thirty-minute idle window, so nothing here is an idle close. */
-const MID_SESSION_NOW = new Date('2026-04-02T09:30:00.000Z');
-const CLOSE_NOW = new Date('2026-04-02T09:50:00.000Z');
+const SESSION_IDENTITY = 'mid-session-boundary';
 
 let harness: Neo4jHarness;
 let db: SqliteHandle;
@@ -64,6 +85,19 @@ let logger: Logger;
 let dataDir: string;
 let deps: NarrativeDeps;
 let publications: PublicationCoordinator;
+let intake: ReflectionIntakeDeps;
+let sessionId: string;
+let firstEpisodeId: string;
+
+/**
+ * The coordinator's clock, moved by hand.
+ *
+ * A chunk's span bound is measured from ARRIVAL, and arrival is `source_records.created_at`,
+ * which the intake publication stamps from the coordinator's clock and not from the `now` the
+ * caller passed (`intake-publication.ts`, `acceptedAt: context.now`). Left at the wall clock
+ * this file would be measuring a fixture interval against a real one.
+ */
+let coordinatorNow = ARRIVED_AT;
 
 function stubProvider(): Provider {
   return {
@@ -81,40 +115,23 @@ function stubProvider(): Provider {
   };
 }
 
-async function seedSession(sessionId: string): Promise<void> {
-  await writeStampedNode(harness.driver, {
-    label: 'Session',
-    id: sessionId,
-    now: new Date(EPISODES[0]!.at),
-  });
+/** One episode, accepted the way an episode arrives, with the census a chunk's planner asks for. */
+async function accept(marker: string, at: Date): Promise<string> {
+  coordinatorNow = at;
+  const stored = await handleReflection(
+    intake,
+    { observations: [`The pair moved the Ariadne rollout along in ${marker}.`] },
+    { identity: SESSION_IDENTITY, now: at },
+  );
+  const sourceId = stored.episode_id;
+  for (const role of ['stated_correction', 'stated_confirmation'] as const) {
+    establishScope(db, sourceId, durableRoleScope(role, 'in'), at);
+  }
+  establishScope(db, sourceId, durableRoleScope('stated_derivation', 'out'), at);
+  return sourceId;
 }
 
-async function seedEpisode(episode: { id: string; at: string }, sessionId: string): Promise<void> {
-  const at = new Date(episode.at);
-  await writeStampedNode(harness.driver, {
-    label: 'Episode',
-    id: episode.id,
-    now: at,
-    occurredAt: at,
-    properties: {
-      [MEMORY_PROPERTIES.text]: `The pair moved the Ariadne rollout along in ${episode.id}.`,
-      [MEMORY_PROPERTIES.sessionId]: sessionId,
-    },
-  });
-  await upsertEdge(harness.driver, {
-    type: CONTAINMENT_TYPE,
-    sourceId: episode.id,
-    targetId: sessionId,
-    strength: 1,
-    confidence: 1,
-    signals: ['episodic'],
-    provenance: ['test'],
-    count: 0,
-    now: at,
-  });
-}
-
-function stageContext(sessionId: string, episodeId: string, now: Date): StageContext {
+function stageContext(episodeId: string, now: Date): StageContext {
   return {
     driver: harness.driver,
     db,
@@ -129,30 +146,49 @@ function stageContext(sessionId: string, episodeId: string, now: Date): StageCon
   };
 }
 
+/** The stage as the worker composes it, carrying the span bound this file measures. */
+function stage(): SessionNarrativeStage {
+  return new SessionNarrativeStage({ chunkPolicy: SPAN_POLICY });
+}
+
 beforeAll(async () => {
   harness = await startNeo4jHarness();
   dataDir = mkdtempSync(join(tmpdir(), 'aion-mid-session-'));
   db = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
   logger = openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'error' });
   await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
-  // Narration publishes; without the coordinator and its SQLite side it fails closed and the
-  // mid-session assertions below read a narrative that was never attempted. The stage cases
-  // reach it through their own context, so it is held for both.
-  publications = new PublicationCoordinator({
+  const backbone = await bootstrapBackbone(harness.driver, { memberName: 'Mid Session' });
+  publications = await activatedCoordinator(
+    { driver: harness.driver, db, logger, now: () => coordinatorNow },
+    'mid-session',
+  );
+  publishPipelineReadinessPolicy(
+    db,
+    [{ name: 'entities', run: () => Promise.resolve({ status: 'ok', summary: '' }) }],
+    ARRIVED_AT,
+  );
+
+  intake = {
     driver: harness.driver,
     db,
+    sessions: new SessionManager(harness.driver, {
+      memberId: backbone.member.id,
+      workspaceId: backbone.workspace.id,
+    }),
+    provider: stubProvider(),
     logger,
-    handlers: [...INSTALLED_PUBLICATION_HANDLERS],
-  });
-  await publications.initialize();
+    entropyThreshold: DEFAULTS.redaction.entropyThreshold,
+    lanes: new LaneAssigner(DEFAULTS.lanes),
+    workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
+    publications,
+    acceptHookCapture: true,
+  };
   deps = { driver: harness.driver, db, provider: stubProvider(), logger, publications };
 
-  for (const sessionId of [SESSION_ID, QUIET_SESSION_ID]) {
-    await seedSession(sessionId);
-    for (const episode of EPISODES) {
-      await seedEpisode({ ...episode, id: `${sessionId}-${episode.id}` }, sessionId);
-    }
-  }
+  firstEpisodeId = await accept('mid-e1', ARRIVED_AT);
+  await accept('mid-e2', ARRIVED_AT);
+  sessionId = readSourceRecord(db, firstEpisodeId)?.sessionId ?? '';
+  expect(sessionId).not.toBe('');
 }, 300_000);
 
 afterAll(async () => {
@@ -161,71 +197,74 @@ afterAll(async () => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
-describe('the mid-session boundary against a live substrate', () => {
-  let midSessionNarrativeId: string;
+describe('the chunk boundary against a live substrate', () => {
+  let firstChunkId: string;
 
-  it('waits for the close while the boundary is switched off', async () => {
-    const outcome = await new SessionNarrativeStage({ midSession: false }).run(
-      stageContext(QUIET_SESSION_ID, `${QUIET_SESSION_ID}-mid-e3`, MID_SESSION_NOW),
-    );
+  it('leaves a tail inside every bound to wait, while the session is open', async () => {
+    const outcome = await stage().run(stageContext(firstEpisodeId, INSIDE_THE_SPAN));
 
     expect(outcome.status).toBe('skipped');
-    expect(outcome.summary).toBe('the session is still active');
-    expect(await findSessionNarratives(harness.driver, QUIET_SESSION_ID)).toEqual([]);
+    expect(outcome.summary).toBe('2 members are inside every bound and the session is open');
+    // Read across families: the legacy reader selects `scope = 'session'` by predicate and would
+    // report nothing here whether or not anything had been written.
+    expect(await narrativeIdsInSession(harness.driver, sessionId)).toEqual([]);
   });
 
-  it('compresses a running session that has paused, before any close', async () => {
-    const outcome = await new SessionNarrativeStage().run(
-      stageContext(SESSION_ID, `${SESSION_ID}-mid-e3`, MID_SESSION_NOW),
-    );
+  it('seals and narrates a still-open session once its tail crosses the span bound', async () => {
+    const outcome = await stage().run(stageContext(firstEpisodeId, PAST_THE_SPAN));
 
     expect(outcome.status).toBe('ok');
     expect(outcome.counts).toEqual({ narratives: 1 });
+    // No close happened and none was needed: elapsed time alone is what sealed this tail, which
+    // is the property the legacy mid-session gap carried and the chunk family carries here.
+    expect(outcome.summary).toBe('chunk over 2 sources');
 
-    const versions = await findSessionNarratives(harness.driver, SESSION_ID);
-    expect(
-      versions.map((version) => [version.version, version.open, version.coverageCount]),
-    ).toEqual([[1, true, 3]]);
-    midSessionNarrativeId = versions[0]!.id;
-
-    const properties = await nodeProperties(harness.driver, midSessionNarrativeId);
-    expect(properties[NARRATIVE_PROPERTIES.scope]).toBe('session');
+    const written = await narrativeIdsInSession(harness.driver, sessionId);
+    expect(written).toHaveLength(1);
+    const properties = await nodeProperties(harness.driver, written[0]!);
+    expect(properties[NARRATIVE_PROPERTIES.family]).toBe('chunk');
+    expect(properties[NARRATIVE_PROPERTIES.revisionNo]).toBe(1);
     expect((properties[NARRATIVE_PROPERTIES.citations] as string[]).length).toBeGreaterThan(0);
+
+    firstChunkId = properties[NARRATIVE_PROPERTIES.chunkId] as string;
+    expect(listChunkMembers(db, firstChunkId)).toHaveLength(2);
   });
 
-  it('leaves the boundary alone while the session adds nothing and does not pause again', async () => {
-    const outcome = await new SessionNarrativeStage().run(
-      stageContext(SESSION_ID, `${SESSION_ID}-mid-e3`, MID_SESSION_NOW),
-    );
+  it('leaves the boundary alone while the session adds nothing', async () => {
+    const outcome = await stage().run(stageContext(firstEpisodeId, PAST_THE_SPAN));
 
     expect(outcome.status).toBe('skipped');
-    expect(outcome.summary).toBe(
-      'the session is still active: the standing narrative covers every episode',
-    );
+    // Membership is frozen and the tail behind it is empty, so there is no second reading to
+    // take. The legacy boundary said the same thing by counting the whole session's coverage.
+    expect(outcome.summary).toBe('the session has no unsealed members');
+    expect(await narrativeIdsInSession(harness.driver, sessionId)).toHaveLength(1);
   });
 
-  it('supersedes the mid-session version into the one the close writes', async () => {
-    for (const episode of LATE_EPISODES) {
-      await seedEpisode({ ...episode, id: `${SESSION_ID}-${episode.id}` }, SESSION_ID);
+  it('closes over the tail the stage left rather than rewriting what it sealed', async () => {
+    const late = await accept('mid-e3', SECOND_ARRIVAL);
+
+    const result = await closeSessionNarrative(deps, sessionId, {
+      now: CLOSE_AT,
+      chunkPolicy: SPAN_POLICY,
+    });
+
+    expect(result).toMatchObject({ status: 'created' });
+    const written = await narrativeIdsInSession(harness.driver, sessionId);
+    expect(written).toHaveLength(2);
+
+    // A second chunk, not a second revision of the first: the close seals what arrived after the
+    // seal and leaves the frozen membership where it was.
+    const second = written.find((id) => id !== firstChunkId);
+    const properties = await nodeProperties(harness.driver, result.narrativeId!);
+    const secondChunkId = properties[NARRATIVE_PROPERTIES.chunkId] as string;
+    expect(secondChunkId).not.toBe(firstChunkId);
+    expect(listChunkMembers(db, secondChunkId)).toEqual([late]);
+    expect(listChunkMembers(db, firstChunkId)).toHaveLength(2);
+    expect(second).toBeDefined();
+
+    // Both heads stand. Nothing supersedes anything, in either direction.
+    for (const id of written) {
+      expect(await supersedingNodeIds(harness.driver, id)).toEqual([]);
     }
-
-    const result = await closeSessionNarrative(deps, SESSION_ID, { now: CLOSE_NOW });
-
-    expect(result.status).toBe('created');
-    expect(result.version).toBe(2);
-
-    const versions = await findSessionNarratives(harness.driver, SESSION_ID);
-    expect(
-      versions.map((version) => [version.version, version.open, version.coverageCount]),
-    ).toEqual([
-      [2, true, 5],
-      [1, false, 3],
-    ]);
-
-    expect(await edgeTargetId(harness.driver, 'SUPERSEDES', result.narrativeId!)).toBe(
-      midSessionNarrativeId,
-    );
-    const closed = await nodeProperties(harness.driver, midSessionNarrativeId);
-    expect(closed[BITEMPORAL_PROPERTIES.validUntil]).toBeInstanceOf(Date);
   });
 });

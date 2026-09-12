@@ -24,6 +24,15 @@ export type PublicationSubstrate = {
   readonly driver: Driver;
   readonly db: SqliteHandle;
   readonly logger: Logger;
+  /**
+   * The coordinator's own clock, where a root needs one it can move.
+   *
+   * It is not a convenience. Several durable facts are stamped from it and nowhere else — the
+   * intake manifest's `created_at`, which is the arrival clock a chunk's span bound is measured
+   * from — so a root reasoning about elapsed time on fixture clocks and leaving this at the wall
+   * clock is comparing two different axes and will read a negative span.
+   */
+  readonly now?: () => Date;
 };
 
 export async function activatedCoordinator(
@@ -36,6 +45,7 @@ export async function activatedCoordinator(
     db: substrate.db,
     logger: substrate.logger,
     handlers: [...INSTALLED_PUBLICATION_HANDLERS],
+    ...(substrate.now === undefined ? {} : { now: substrate.now }),
   });
   await publications.initialize();
   substrate.db.prepare('UPDATE publication_control SET activation_capability_revision = 1').run();

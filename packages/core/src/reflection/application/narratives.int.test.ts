@@ -3,10 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { INSTALLED_PUBLICATION_HANDLERS } from './installed-publications.js';
 import { handleReflection, type ReflectionIntakeDeps } from './intake.js';
 import { LaneAssigner } from './lanes.js';
-import { closeSuperseded } from './narrative-write.js';
 import {
   closeSessionNarrative,
   DEFAULT_SESSION_IDLE_MS,
@@ -14,16 +12,19 @@ import {
   type NarrativeDeps,
   type NarrativeOptions,
 } from './narratives.js';
+import { publishPipelineReadinessPolicy } from './readiness.js';
+import { activatedCoordinator } from './test-support/publication-substrate.fixture.js';
+import { findPendingVectorNodes } from './vectors.js';
+import { durableRoleScope } from '../../evidence/domain/scopes.js';
+import { establishScope } from '../../evidence/test-support/evidence.fixture.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
-import { BITEMPORAL_PROPERTIES } from '../../infrastructure/graph/bitemporal.js';
 import { writeCognitiveNode } from '../../infrastructure/graph/cognitive-queries.js';
 import { MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import {
   DERIVES_FROM_TYPE,
   findIdleSessions,
-  findSessionNarratives,
   loadSessionEpisodes,
   loadSessionSourceNodes,
   NARRATIVE_PROPERTIES,
@@ -40,9 +41,10 @@ import {
   countOutgoingEdges,
   edgeTargetId,
   edgeValidUntil,
-  episodeIdsInSession,
+  narrativeIdsInSession,
   nodeLabels,
   nodeProperties,
+  supersedingNodeIds,
 } from '../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   startNeo4jHarness,
@@ -52,12 +54,13 @@ import {
 import { openLogger } from '../../infrastructure/logging/logger.js';
 import { testGenerationProvider } from '../../infrastructure/providers/test-support/generation-provider.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
-import { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
+import type { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
+import { listChunkMembers } from '../../infrastructure/sqlite/chunk-manifest.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { SessionManager } from '../../session/session-manager.js';
-import { directIntakePublisher } from '../test-support/direct-intake.fixture.js';
+import { CHUNK_BOUNDARY_POLICY } from '../domain/chunk-boundary.js';
 
-// The structural describes (versioning, provenance edges, idle-sweep bookkeeping) prove
+// The structural describes (membership, provenance edges, idle-sweep bookkeeping) prove
 // Cypher and orchestration, not prose quality, and the suite must never depend on model
 // output quality. A live pass occasionally grounds zero sentences, which reads as
 // status 'failed' and would hold those structural assertions hostage, so they run on a
@@ -100,9 +103,47 @@ async function closeWithGroundingRetry(
 
 /**
  * The whole boundary against a live substrate: episodes pushed through a session, the close
- * compressing them with the reflect model, and the narrative that results reachable by both
- * retrieval legs. What only a real server proves here is the Cypher: the idle-session
- * aggregation, the version read, and `content_fts` actually covering `Narrative`.
+ * sealing them into a chunk and compressing it with the reflect model, and the narrative that
+ * results reachable by both retrieval legs. What only a real server proves here is the Cypher:
+ * the idle-session aggregation, the membership read, and `content_fts` actually covering
+ * `Narrative`.
+ *
+ * **Re-subjected to the chunk family.** Narration resolves to chunks for any session with no
+ * legacy history (`family-cutover.ts`: `initialize` picks `chunk` unless
+ * `hasLegacyNarrativeHistory` finds a whole-session node), which every session here is. Most of
+ * what this file proved is family-neutral and is asserted unchanged. Three things were the legacy
+ * whole-session writer's own shape and are retired by name rather than quietly dropped:
+ *
+ * - **Session-scoped versioning: "mints version 2 and supersedes version 1 once the session
+ *   grew".** The chunk family deliberately does not version over membership growth — a sealed
+ *   chunk's membership is frozen and the tail that follows it is another chunk, so a grown
+ *   session gets a SECOND HEAD rather than a second revision. That is asserted below
+ *   ('a session that grew gets another chunk…'). The revision series the chunk family does keep
+ *   — allocation, publication, closing the prior head, the spent number staying spent — is
+ *   covered at `infrastructure/sqlite/narrative-revisions.test.ts` (parameterized over both
+ *   families), and end to end at `chunk-narrative.int.test.ts` ('replaces a head whose
+ *   dependency versions moved').
+ * - **"closes the summarization edges into the version it replaced"**, and **"leaves the
+ *   replaced version's own provenance edge open"**. Both describe a supersession between two
+ *   whole-session narratives. The chunk family's equivalent — the replaced head's
+ *   `SUMMARIZED_BY` edges closed and the new head's open — is asserted directly at
+ *   `chunk-narrative.int.test.ts` ('records the gap a suppressed member leaves…'), over a
+ *   revision replacement rather than a session growth. The provenance half had no coverage in
+ *   either family, so it is asserted here instead of retired.
+ * - **"converges on a retry rather than moving the stamps it already wrote"**, which reached into
+ *   the legacy writer's supersession half directly. That path is the legacy repair, it refuses
+ *   without a run-start fence, and it goes with the family; the standing operation for a graph
+ *   that disagrees with its manifest is the `narrative_family_repair` kind. The chunk family's
+ *   own convergence claim — asking again over an unchanged head writes nothing — is the re-close
+ *   case below.
+ *
+ * Also retired: **the two keyed-window describes** ('the keyed route narrates past the local
+ * window', 'a session past the window narrates in chunks'). Both measured the LEGACY renderer's
+ * one-call window and its internal chunking — whether a session longer than the window still
+ * recorded coverage 1. The chunk family has no window to overflow: it partitions the session at
+ * `CHUNK_MAX_MEMBERS` and each chunk renders whole, so full coverage is the ordinary case and a
+ * partial one is a recorded gap. The partition claim replaces them below, on the deterministic
+ * provider, which also takes two live-model-gated cases out of the keyed set.
  */
 
 const SESSION_IDENTITY = 'mcp-transport-session-narratives';
@@ -167,24 +208,49 @@ const THIN_EPISODE = {
   ],
 };
 
-/** The realistic planning session: decisions the narrative has to name rather than invent. */
+/**
+ * The realistic planning session: decisions the narrative has to name rather than invent.
+ *
+ * Two episodes, not one. The chunk render's sentence budget is `min(maxSentences, members,
+ * bySize)` (`narrativeSentenceBudget`), so a one-member chunk is allowed exactly one sentence
+ * and could not name four decisions whatever the model did. The legacy renderer counted the
+ * session's extracted nodes as its sources and so had a wider budget from one episode; the chunk
+ * renderer counts members and reaches the extracted nodes as citable enrichment
+ * (`chunk-enrichment.ts`). Splitting the session is what asks the same question of it.
+ */
 const PLANNING_SESSION_IDENTITY = 'mcp-transport-session-narratives-planning';
-const PLANNING_EPISODE = {
-  summary:
-    'planning the Meridian rollout: four decisions taken and two alternative approaches rejected',
-  turns: [
-    {
-      role: 'user',
-      text: 'walk through the rollout decisions we settled on for Meridian this afternoon',
-      occurred_at: '2026-04-03T09:00:00Z',
-    },
-    {
-      role: 'assistant',
-      text: 'four decisions: the orders table stays unsharded, session state moves to signed cookies, Meridian ships behind a flag with two weeks of shadow reads, and this service never writes to the finops-owned billing table',
-      occurred_at: '2026-04-03T09:01:00Z',
-    },
-  ],
-};
+const PLANNING_EPISODES = [
+  {
+    summary: 'planning the Meridian rollout: the four decisions taken',
+    turns: [
+      {
+        role: 'user',
+        text: 'walk through the rollout decisions we settled on for Meridian this afternoon',
+        occurred_at: '2026-04-03T09:00:00Z',
+      },
+      {
+        role: 'assistant',
+        text: 'four decisions: the orders table stays unsharded, session state moves to signed cookies, Meridian ships behind a flag with two weeks of shadow reads, and this service never writes to the finops-owned billing table',
+        occurred_at: '2026-04-03T09:01:00Z',
+      },
+    ],
+  },
+  {
+    summary: 'planning the Meridian rollout: the two approaches we rejected',
+    turns: [
+      {
+        role: 'user',
+        text: 'and the two approaches we turned down, so the record has them',
+        occurred_at: '2026-04-03T09:20:00Z',
+      },
+      {
+        role: 'assistant',
+        text: 'we rejected sharding the orders table now, and we rejected a direct cutover without shadow reads, because neither could be compared against the current path without user-visible risk',
+        occurred_at: '2026-04-03T09:21:00Z',
+      },
+    ],
+  },
+];
 
 const PLANNING_DECISIONS = [
   'Do not shard the orders table; the write volume does not justify the operational cost yet',
@@ -197,9 +263,8 @@ const PLANNING_INSIGHT =
   'Shadow reads are the only way to compare Meridian against the current path without user-visible risk';
 
 /**
- * A session longer than the local window and shorter than the keyed one. Fifty short episodes
- * in one arc: at the local scale the render keeps the last forty and the opening ten never
- * reach the model at all.
+ * A session longer than one chunk holds. Fifty short episodes against the twenty-four-member
+ * bound: the tail cannot be one chunk, and what the close does about that is the subject.
  */
 const WIDE_SESSION_IDENTITY = 'mcp-transport-session-narratives-wide';
 
@@ -272,21 +337,29 @@ let harness: Neo4jHarness;
 let db: SqliteHandle;
 let dataDir: string;
 let intake: ReflectionIntakeDeps;
+let publications: PublicationCoordinator;
 let deps: NarrativeDeps;
 let structuralDeps: NarrativeDeps;
 let firstNarrativeId: string;
-let secondNarrativeId: string;
-
-/** Well past every close in this file, so a retry that moved a stamp would be obvious. */
-const RETRY_AT = new Date('2026-09-01T00:00:00.000Z');
+let firstChunkId: string;
 
 function provider(): Provider {
   return testGenerationProvider({ baseUrl: OLLAMA_URL, embedModel: DEFAULTS.models.embed });
 }
 
+/**
+ * One episode accepted, plus the incoming-statement census a chunk's input planner asks of every
+ * member before it will admit one. At scale the cohort seal establishes it; here it is per push.
+ */
 async function push(payload: unknown, identity: string): Promise<string> {
   const stored = await handleReflection(intake, payload, { identity });
-  return stored.episode_id;
+  const sourceId = stored.episode_id;
+  const at = new Date();
+  for (const role of ['stated_correction', 'stated_confirmation'] as const) {
+    establishScope(db, sourceId, durableRoleScope(role, 'in'), at);
+  }
+  establishScope(db, sourceId, durableRoleScope('stated_derivation', 'out'), at);
+  return sourceId;
 }
 
 /** The sweep measures idleness against its own clock, so a session written seconds ago looks quiet from here. */
@@ -294,10 +367,16 @@ function afterTheIdleWindow(): Date {
   return new Date(Date.now() + DEFAULT_SESSION_IDLE_MS + 60_000);
 }
 
-/** In the order the session happened, which is the order the versions covered them in. */
+/** In the order the session happened, which is the order its chunks cover them in. */
 async function orderedEpisodeIds(): Promise<string[]> {
   const episodes = await loadSessionEpisodes(harness.driver, SESSION_IDENTITY);
   return episodes.map((episode) => episode.id);
+}
+
+/** The chunk a published narrative belongs to, read off the node it wrote. */
+async function chunkIdOf(narrativeId: string): Promise<string> {
+  const properties = await nodeProperties(harness.driver, narrativeId);
+  return properties[NARRATIVE_PROPERTIES.chunkId] as string;
 }
 
 beforeAll(async () => {
@@ -309,19 +388,16 @@ beforeAll(async () => {
   const backbone = await bootstrapBackbone(harness.driver, { memberName: 'Test User' });
   const logger = openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' });
 
-  // Narration publishes, so both deps sets carry the coordinator and its SQLite side; without
-  // them `narrateSession` fails closed ahead of every assertion in this file.
-  //
-  // Initialized before the direct intake publisher is built. That publisher stands a pairing row
-  // up by hand to skip the protocol, and a pairing already marked initialized makes the
-  // coordinator report a guard node nothing ever minted.
-  const publications = new PublicationCoordinator({
-    driver: harness.driver,
+  // Narration publishes, so every deps set carries the coordinator and its SQLite side; without
+  // them `narrateSession` fails closed ahead of every assertion in this file. Intake publishes
+  // through the same coordinator rather than through the direct publisher, because a chunk's
+  // members are the source records intake writes and they have to be real.
+  publications = await activatedCoordinator({ driver: harness.driver, db, logger }, 'narratives');
+  publishPipelineReadinessPolicy(
     db,
-    logger,
-    handlers: [...INSTALLED_PUBLICATION_HANDLERS],
-  });
-  await publications.initialize();
+    [{ name: 'entities', run: () => Promise.resolve({ status: 'ok', summary: '' }) }],
+    new Date(),
+  );
 
   intake = {
     driver: harness.driver,
@@ -335,7 +411,7 @@ beforeAll(async () => {
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
-    publications: directIntakePublisher(harness.driver, db),
+    publications,
     acceptHookCapture: true,
   };
   deps = { driver: harness.driver, db, provider: provider(), logger, publications };
@@ -368,13 +444,14 @@ describe('session close against a live substrate', () => {
     expect(episodes[0]?.writtenAt).toBeInstanceOf(Date);
   });
 
-  it('compresses the session into a narrative with provenance and a vector', async () => {
+  it('seals the session into a chunk narrative with provenance and a vector', async () => {
     const result = await closeSessionNarrative(structuralDeps, SESSION_IDENTITY);
 
     expect(result.status).toBe('created');
     expect(result.version).toBe(1);
     expect(result.episodes).toBe(3);
     firstNarrativeId = result.narrativeId!;
+    firstChunkId = await chunkIdOf(firstNarrativeId);
 
     expect(await nodeLabels(harness.driver, firstNarrativeId)).toEqual([
       'AionNode',
@@ -383,8 +460,11 @@ describe('session close against a live substrate', () => {
     ]);
 
     const properties = await nodeProperties(harness.driver, firstNarrativeId);
-    expect(properties[NARRATIVE_PROPERTIES.scope]).toBe('session');
-    expect(properties[NARRATIVE_PROPERTIES.version]).toBe(1);
+    // Named rather than inferred: a legacy node reaching this case would carry `scope: 'session'`
+    // and no `chunk_id`, and would fail here instead of reading as a chunk revision.
+    expect(properties[NARRATIVE_PROPERTIES.family]).toBe('chunk');
+    expect(properties[NARRATIVE_PROPERTIES.scope]).toBe('chunk');
+    expect(properties[NARRATIVE_PROPERTIES.revisionNo]).toBe(1);
     expect(properties[NARRATIVE_PROPERTIES.coverageCount]).toBe(3);
     expect(properties[NARRATIVE_PROPERTIES.coverage]).toBe(1);
     expect(
@@ -393,16 +473,22 @@ describe('session close against a live substrate', () => {
     expect(
       ((properties[MEMORY_PROPERTIES.text] as string | undefined) ?? '').length,
     ).toBeGreaterThan(0);
-    expect(properties[MEMORY_PROPERTIES.contentVector]).toHaveLength(
-      DEFAULTS.models.embedDimension,
+    // No vector on the node, and that is the chunk publication's shape rather than an omission:
+    // `narrativeProperties` writes text and never embeds, so a revision lands in the
+    // pending-vector population and the backfill drain gives it its `content_vec`. The legacy
+    // writer embedded inline, which is why this case used to read a dimension here.
+    expect(properties[MEMORY_PROPERTIES.contentVector]).toBeUndefined();
+    expect(await findPendingVectorNodes(harness.driver, 50)).toContainEqual(
+      expect.objectContaining({ id: firstNarrativeId }),
     );
 
-    const episodeIds = await episodeIdsInSession(harness.driver, SESSION_IDENTITY);
-    expect(episodeIds).toHaveLength(3);
-    for (const episodeId of episodeIds) {
-      expect(
-        await countEdges(harness.driver, SUMMARIZED_BY_TYPE, episodeId, firstNarrativeId),
-      ).toBe(1);
+    // Membership is the chunk's own record, and the structural edges follow it.
+    const members = listChunkMembers(db, firstChunkId);
+    expect(members).toEqual(await orderedEpisodeIds());
+    for (const memberId of members) {
+      expect(await countEdges(harness.driver, SUMMARIZED_BY_TYPE, memberId, firstNarrativeId)).toBe(
+        1,
+      );
     }
     expect(await countOutgoingEdges(harness.driver, DERIVES_FROM_TYPE, firstNarrativeId)).toBe(1);
     expect(await edgeTargetId(harness.driver, DERIVES_FROM_TYPE, firstNarrativeId)).toBe(
@@ -439,105 +525,27 @@ describe('session close against a live substrate', () => {
     expect(byText.map((seed) => seed.id)).toContain(firstNarrativeId);
   }, 120_000);
 
-  it('writes nothing on a re-close over the same episodes', async () => {
+  it('writes nothing on a re-close over a session that added nothing', async () => {
     const result = await closeSessionNarrative(structuralDeps, SESSION_IDENTITY);
 
     expect(result.status).toBe('skipped');
-    expect(await findSessionNarratives(harness.driver, SESSION_IDENTITY)).toHaveLength(1);
+    // The sealed membership is frozen and nothing arrived behind it, so there is no tail to seal
+    // and no dependency version has moved: the standing head is current.
+    expect(result.summary).toBe('the session has no unsealed members');
+    expect(await narrativeIdsInSession(harness.driver, SESSION_IDENTITY)).toHaveLength(1);
   });
 
-  it('mints version 2 and supersedes version 1 once the session grew', async () => {
-    await push(LATE_EPISODE, SESSION_IDENTITY);
-
-    const result = await closeSessionNarrative(structuralDeps, SESSION_IDENTITY);
-
-    expect(result.status).toBe('created');
-    expect(result.version).toBe(2);
-
-    const versions = await findSessionNarratives(harness.driver, SESSION_IDENTITY);
-    expect(
-      versions.map((version) => [version.version, version.open, version.coverageCount]),
-    ).toEqual([
-      [2, true, 4],
-      [1, false, 3],
-    ]);
-
-    expect(await edgeTargetId(harness.driver, 'SUPERSEDES', result.narrativeId!)).toBe(
-      firstNarrativeId,
-    );
-    const closed = await nodeProperties(harness.driver, firstNarrativeId);
-    expect(closed[BITEMPORAL_PROPERTIES.validUntil]).toBeInstanceOf(Date);
-    expect(closed[BITEMPORAL_PROPERTIES.txUntil]).toBeInstanceOf(Date);
-
-    secondNarrativeId = result.narrativeId!;
-  }, 120_000);
-
-  it('closes the summarization edges into the version it replaced, and stores them still', async () => {
-    const episodeIds = await orderedEpisodeIds();
-
-    for (const episodeId of episodeIds.slice(0, 3)) {
+  it('leaves the standing head’s summarization and provenance edges open', async () => {
+    for (const memberId of listChunkMembers(db, firstChunkId)) {
       expect(
-        await edgeValidUntil(harness.driver, SUMMARIZED_BY_TYPE, episodeId, firstNarrativeId),
-      ).toBeInstanceOf(Date);
-      // Closed, not removed: the row is what a read pinned before the close still walks.
-      expect(
-        await countEdges(harness.driver, SUMMARIZED_BY_TYPE, episodeId, firstNarrativeId),
-      ).toBe(1);
-    }
-
-    for (const episodeId of episodeIds) {
-      expect(
-        await edgeValidUntil(harness.driver, SUMMARIZED_BY_TYPE, episodeId, secondNarrativeId),
+        await edgeValidUntil(harness.driver, SUMMARIZED_BY_TYPE, memberId, firstNarrativeId),
       ).toBeUndefined();
     }
-  });
-
-  it('leaves the replaced version’s own provenance edge open', async () => {
+    // The provenance edge, which no supersession closes in either family and which nothing
+    // asserted for the chunk family before this.
     expect(
       await edgeValidUntil(harness.driver, DERIVES_FROM_TYPE, firstNarrativeId, SESSION_IDENTITY),
     ).toBeUndefined();
-  });
-
-  it('converges on a retry rather than moving the stamps it already wrote', async () => {
-    const episodeIds = (await orderedEpisodeIds()).slice(0, 3);
-    const before = await Promise.all(
-      episodeIds.map(async (episodeId) =>
-        edgeValidUntil(harness.driver, SUMMARIZED_BY_TYPE, episodeId, firstNarrativeId),
-      ),
-    );
-    const nodeBefore = await nodeProperties(harness.driver, firstNarrativeId);
-
-    // The shape a crashed close leaves behind: the same work, asked for a second time, against
-    // a much later clock. Everything it touches is already closed, so nothing may move.
-    await closeSuperseded(
-      structuralDeps,
-      {
-        action: 'skip',
-        reason: 'a retry of an interrupted close',
-        coverageKey: '',
-        version: 2,
-        episodeIds,
-        supersedes: [firstNarrativeId],
-      },
-      secondNarrativeId,
-      RETRY_AT,
-      RETRY_AT,
-    );
-
-    const after = await Promise.all(
-      episodeIds.map(async (episodeId) =>
-        edgeValidUntil(harness.driver, SUMMARIZED_BY_TYPE, episodeId, firstNarrativeId),
-      ),
-    );
-    expect(after).toEqual(before);
-
-    const nodeAfter = await nodeProperties(harness.driver, firstNarrativeId);
-    expect(nodeAfter[BITEMPORAL_PROPERTIES.validUntil]).toEqual(
-      nodeBefore[BITEMPORAL_PROPERTIES.validUntil],
-    );
-    expect(nodeAfter[BITEMPORAL_PROPERTIES.txUntil]).toEqual(
-      nodeBefore[BITEMPORAL_PROPERTIES.txUntil],
-    );
   });
 });
 
@@ -553,20 +561,102 @@ describe('idle sweep against a live substrate', () => {
     expect(idle[0]?.lastActivityAt).toBeInstanceOf(Date);
   });
 
-  it('narrates it, and then stops offering it', async () => {
-    const results = await sweepIdleSessions(structuralDeps, { now: afterTheIdleWindow() });
+  /**
+   * The sweep's clock and the chunk's span bound are two different windows, and the second one
+   * decides. `sweepIdleSessions` dispatches with `sessionClosing: false`, so a quiet session's
+   * tail seals on `max_span` and nothing else — and the shipped span is a day
+   * (`CHUNK_MAX_SPAN_MS`) against a session idle window of minutes. So a sweep at the idle
+   * window answers `skipped` and comes back, which is a real misalignment between two knobs
+   * that used to be one decision. The bound is passed explicitly here so the case measures the
+   * seal rather than the default's distance from it.
+   */
+  it('narrates it once the span bound passes, and then stops offering it', async () => {
+    const atTheIdleWindow = await sweepIdleSessions(structuralDeps, { now: afterTheIdleWindow() });
+    expect(atTheIdleWindow.map((result) => [result.sessionId, result.status])).toEqual([
+      [IDLE_SESSION_IDENTITY, 'skipped'],
+    ]);
+
+    const results = await sweepIdleSessions(structuralDeps, {
+      now: afterTheIdleWindow(),
+      chunkPolicy: { ...CHUNK_BOUNDARY_POLICY, maxSpanMs: 60_000 },
+    });
 
     expect(results.map((result) => [result.sessionId, result.status])).toEqual([
       [IDLE_SESSION_IDENTITY, 'created'],
     ]);
 
-    const covered = await findSessionNarratives(harness.driver, IDLE_SESSION_IDENTITY);
+    // Read across families: the legacy reader selects `scope = 'session'` by predicate and
+    // returns nothing for a chunk-family session whether or not anything was written.
+    const covered = await narrativeIdsInSession(harness.driver, IDLE_SESSION_IDENTITY);
     expect(covered).toHaveLength(1);
-    expect(covered[0]?.open).toBe(true);
+    expect(
+      await edgeValidUntil(harness.driver, DERIVES_FROM_TYPE, covered[0]!, IDLE_SESSION_IDENTITY),
+    ).toBeUndefined();
 
-    const again = await sweepIdleSessions(structuralDeps, { now: afterTheIdleWindow() });
+    // Offered no more: one chunk covers the session's one episode, so the aggregation's
+    // coverage test is satisfied and the session leaves the list.
+    const again = await sweepIdleSessions(structuralDeps, {
+      now: afterTheIdleWindow(),
+      chunkPolicy: { ...CHUNK_BOUNDARY_POLICY, maxSpanMs: 60_000 },
+    });
     expect(again).toEqual([]);
   }, 120_000);
+});
+
+/**
+ * What replaces the two keyed-window describes.
+ *
+ * The legacy renderer read a session in one call and recorded the fraction it saw, so a session
+ * longer than the window lost its opening. The chunk family answers that by partitioning: the
+ * tail seals at `CHUNK_MAX_MEMBERS` and each chunk renders whole. So the question is no longer
+ * "did the window hold the session" but "does every episode end up in exactly one chunk", and
+ * that is structural — no model window is involved, and the deterministic provider answers it.
+ */
+describe('a session longer than one chunk holds', () => {
+  const wideEpisodeIds: string[] = [];
+
+  beforeAll(async () => {
+    for (const line of WIDE_EPISODES) {
+      // Intake refuses a payload of summary alone, and the render reads the summary, so the
+      // observation carries the same line rather than a second one nothing sees.
+      wideEpisodeIds.push(
+        await push({ summary: line, observations: [line] }, WIDE_SESSION_IDENTITY),
+      );
+    }
+  }, 300_000);
+
+  it('partitions it into chunks that cover every episode exactly once', async () => {
+    expect(wideEpisodeIds).toHaveLength(50);
+    expect(wideEpisodeIds.length).toBeGreaterThan(CHUNK_BOUNDARY_POLICY.maxMembers);
+
+    // One close seals one chunk, so the session drains over as many closes as it holds chunks.
+    // Bounded rather than looped forever: a close that stops creating is the end of the tail.
+    const members: string[] = [];
+    for (let pass = 0; pass < 10; pass += 1) {
+      const result = await closeSessionNarrative(structuralDeps, WIDE_SESSION_IDENTITY);
+      if (result.status !== 'created') {
+        expect(result.summary).toBe('the session has no unsealed members');
+        break;
+      }
+      const chunkId = await chunkIdOf(result.narrativeId!);
+      const sealed = listChunkMembers(db, chunkId);
+      expect(sealed.length).toBeLessThanOrEqual(CHUNK_BOUNDARY_POLICY.maxMembers);
+      expect(sealed).toHaveLength(result.episodes);
+      members.push(...sealed);
+    }
+
+    // Exactly once each, and all of them: no episode fell between two chunks and none is a
+    // member of two. This is what the legacy coverage fraction was standing in for.
+    expect([...members].sort()).toEqual([...wideEpisodeIds].sort());
+    expect(new Set(members).size).toBe(members.length);
+
+    // Every chunk rendered whole. A partial render is a recorded gap on the revision, which is
+    // `chunk-narrative.int.test.ts`'s subject, not a silently smaller coverage number.
+    for (const narrativeId of await narrativeIdsInSession(harness.driver, WIDE_SESSION_IDENTITY)) {
+      const properties = await nodeProperties(harness.driver, narrativeId);
+      expect(properties[NARRATIVE_PROPERTIES.coverage]).toBe(1);
+    }
+  }, 300_000);
 });
 
 /**
@@ -576,17 +666,19 @@ describe('idle sweep against a live substrate', () => {
  */
 describe('grounding against a live substrate', () => {
   let thinEpisodeId: string;
-  let planningEpisodeId: string;
+  const planningEpisodeIds: string[] = [];
   const decisionIds: string[] = [];
 
   beforeAll(async () => {
     thinEpisodeId = await push(THIN_EPISODE, THIN_SESSION_IDENTITY);
-    planningEpisodeId = await push(PLANNING_EPISODE, PLANNING_SESSION_IDENTITY);
+    for (const payload of PLANNING_EPISODES) {
+      planningEpisodeIds.push(await push(payload, PLANNING_SESSION_IDENTITY));
+    }
 
     const now = new Date();
     for (const text of PLANNING_DECISIONS) {
       const written = await writeCognitiveNode(harness.driver, {
-        episodeId: planningEpisodeId,
+        episodeId: planningEpisodeIds[0]!,
         label: 'Decision',
         text,
         occurredAt: now,
@@ -595,7 +687,7 @@ describe('grounding against a live substrate', () => {
       decisionIds.push(written.node.id);
     }
     await writeCognitiveNode(harness.driver, {
-      episodeId: planningEpisodeId,
+      episodeId: planningEpisodeIds[1]!,
       label: 'Insight',
       text: PLANNING_INSIGHT,
       occurredAt: now,
@@ -616,7 +708,24 @@ describe('grounding against a live substrate', () => {
     expect(citations.every((id) => id === thinEpisodeId)).toBe(true);
   }, 180_000);
 
-  it('names the decisions the planning session actually took', async () => {
+  /**
+   * The re-subject's sharpest change, and the one worth reading.
+   *
+   * The legacy renderer read a session's extracted nodes straight off the graph
+   * (`loadSessionSourceNodes`) and offered every one of them as a citable source, so the case
+   * this replaces could write four `Decision` nodes by hand and expect the narrative to name
+   * them. The chunk family will not: `resolveChunkEnrichment` fences each node against the
+   * RECORDS before nomination — a committed `extraction` incidence for the member, and a
+   * verified node-state and `extraction` scope on the node — and a node it cannot certify at
+   * both ends of that interval is OMITTED and named in `uncertified`.
+   *
+   * So the claim becomes the contract rather than the wish. These decisions exist in the graph
+   * and nowhere in the records, which is exactly the shape a hand-seeded node has, and the
+   * narrative must not cite one. The certified path is the pipeline's own — the extraction stages
+   * commit that incidence — and proving a citation through it needs a run of those stages, which
+   * is `chunk-enrichment`'s own subject rather than this file's.
+   */
+  it('cites only what the records certify, and omits an extracted node they do not', async () => {
     const sources = await loadSessionSourceNodes(harness.driver, PLANNING_SESSION_IDENTITY);
     expect(sources.map((source) => source.id).sort()).toEqual(
       [...decisionIds].concat(sources.filter((s) => s.kind === 'insight').map((s) => s.id)).sort(),
@@ -627,142 +736,59 @@ describe('grounding against a live substrate', () => {
     expect(result.status).toBe('created');
     const properties = await nodeProperties(harness.driver, result.narrativeId!);
     const citations = properties[NARRATIVE_PROPERTIES.citations] as string[];
-    const sourceIds = new Set([planningEpisodeId, ...sources.map((source) => source.id)]);
 
-    expect(citations.every((id) => sourceIds.has(id))).toBe(true);
-    expect(citations.filter((id) => decisionIds.includes(id)).length).toBeGreaterThan(0);
+    // Every citation is one of the chunk's own members, and not one of the uncertified nodes the
+    // graph offers beside them.
+    expect(citations.length).toBeGreaterThan(0);
+    expect(citations.every((id) => planningEpisodeIds.includes(id))).toBe(true);
+    expect(citations.some((id) => decisionIds.includes(id))).toBe(false);
+    // Two members, so the sentence budget allows more than the one a single-member chunk gets:
+    // `min(maxSentences, members, bySize)`.
     expect(Number(properties[NARRATIVE_PROPERTIES.sentenceCount])).toBeGreaterThan(1);
   }, 180_000);
 });
 
 /**
- * The keyed profile's wider window, against the model it was sized for. The local scale renders
- * a session's last forty episodes and records the fraction it saw; this session holds fifty, so
- * a narrative that cites its opening ten is a narrative the local clip could not have written.
- *
- * Written out rather than imported: this is the read the gate batteries make, and `core` does
- * not import from `mcp`, where that constant lives.
+ * A session that grew after its first chunk sealed. Declared last, and on a session of its own,
+ * because the idle sweep above cannot read a multi-chunk session as covered: `findIdleSessions`
+ * compares `max(coverage_count)` against the episode count, which is the whole-session notion,
+ * and a session partitioned into chunks has no single revision covering all of it. That is a
+ * production gap in the sweep's predicate, recorded rather than worked around — nothing here
+ * depends on it, and a session with two chunks sits in the sweep's offer list for good.
  */
-const REMOTE_JUDGE_ABSENT =
-  (process.env.AION_ANTHROPIC_API_KEY ?? '').trim() === '' ||
-  process.env.TEST_AION_GENERATION === 'local';
+const GROWN_SESSION_IDENTITY = 'mcp-transport-session-narratives-grown';
 
-describe.skipIf(REMOTE_JUDGE_ABSENT)('the keyed route narrates past the local window', () => {
-  const wideEpisodeIds: string[] = [];
+describe('a session that grew after its chunk sealed', () => {
+  it('gets another chunk rather than a second version of the first', async () => {
+    const first = await push(EPISODES[0], GROWN_SESSION_IDENTITY);
+    const opening = await closeSessionNarrative(structuralDeps, GROWN_SESSION_IDENTITY);
+    expect(opening.status).toBe('created');
+    const openingChunkId = await chunkIdOf(opening.narrativeId!);
+    expect(listChunkMembers(db, openingChunkId)).toEqual([first]);
 
-  beforeAll(async () => {
-    for (const line of WIDE_EPISODES) {
-      // Intake refuses a payload of summary alone, and the render reads the summary, so the
-      // observation carries the same line rather than a second one nothing sees.
-      wideEpisodeIds.push(
-        await push({ summary: line, observations: [line] }, WIDE_SESSION_IDENTITY),
-      );
-    }
-  }, 300_000);
-
-  it('reads all fifty episodes and cites both ends of the session', async () => {
-    expect(wideEpisodeIds).toHaveLength(50);
-
-    const result = await closeWithGroundingRetry(deps, WIDE_SESSION_IDENTITY);
+    const late = await push(LATE_EPISODE, GROWN_SESSION_IDENTITY);
+    const result = await closeSessionNarrative(structuralDeps, GROWN_SESSION_IDENTITY);
 
     expect(result.status).toBe('created');
-    const properties = await nodeProperties(harness.driver, result.narrativeId!);
-    expect(properties[NARRATIVE_PROPERTIES.coverageCount]).toBe(50);
-    // The fraction the model saw. At the local scale this reads 0.8, and the ten episodes the
-    // clip dropped are the ones the citations below reach.
-    expect(properties[NARRATIVE_PROPERTIES.coverage]).toBe(1);
+    // Revision 1 again, of a different chunk: the number is per chunk, not per session.
+    expect(result.version).toBe(1);
+    expect(result.episodes).toBe(1);
 
-    const citations = properties[NARRATIVE_PROPERTIES.citations] as string[];
-    const opening = wideEpisodeIds.slice(0, 10);
-    const closing = wideEpisodeIds.slice(-10);
+    const secondChunkId = await chunkIdOf(result.narrativeId!);
+    expect(secondChunkId).not.toBe(openingChunkId);
+    expect(listChunkMembers(db, secondChunkId)).toEqual([late]);
+    // Frozen: the first chunk did not grow to take the late episode in.
+    expect(listChunkMembers(db, openingChunkId)).toEqual([first]);
 
-    expect(citations.every((id) => wideEpisodeIds.includes(id))).toBe(true);
-    expect(citations.some((id) => opening.includes(id))).toBe(true);
-    expect(citations.some((id) => closing.includes(id))).toBe(true);
-  }, 180_000);
-});
-
-/**
- * The session no window holds. It is read in consecutive chunks, one call each, and the chunk
- * texts are compressed once more, so its opening reaches the narrative rather than falling off
- * the front of a single call.
- *
- * The keyed window is 120 episodes, so ninety of them would be one chunk and would exercise
- * nothing. The close below runs at the local window of forty instead, which splits this session
- * into three chunks of thirty, while generation still routes to the keyed provider, which is
- * what keeps four calls to seconds rather than minutes.
- */
-const CHUNKED_SESSION_IDENTITY = 'mcp-transport-session-narratives-chunked';
-
-const CHUNKED_SCALE = {
-  ...DEFAULTS.reflection,
-  keyedNarrativeEpisodes: DEFAULTS.reflection.maxNarrativeEpisodes,
-};
-
-const CHUNKED_TABLES = [
-  'orders',
-  'invoices',
-  'payments',
-  'refunds',
-  'ledger entry',
-  'payout',
-  'dispute',
-  'credit',
-  'adjustment',
-  'statement',
-];
-
-/**
- * Ninety short episodes in three phases of thirty, which is one phase per chunk at the window
- * above. Each phase carries its own vocabulary, so a final pass reading one text per chunk has
- * something of its own to say about each.
- */
-const CHUNKED_EPISODES = Array.from({ length: 90 }, (_, slot) => {
-  const table = CHUNKED_TABLES[slot % CHUNKED_TABLES.length] ?? 'orders';
-  const step = String(slot + 1);
-  if (slot < 30) {
-    return `Halcyon audit step ${step}: the ${table} table was read end to end and its row count written down`;
-  }
-  if (slot < 60) {
-    return `Halcyon backfill step ${step}: the ${table} rows were rewritten into cents on the copy`;
-  }
-  return `Halcyon cutover step ${step}: the ${table} table was switched over and its check query came back empty`;
-});
-
-describe.skipIf(REMOTE_JUDGE_ABSENT)('a session past the window narrates in chunks', () => {
-  const chunkedEpisodeIds: string[] = [];
-
-  beforeAll(async () => {
-    for (const line of CHUNKED_EPISODES) {
-      chunkedEpisodeIds.push(
-        await push({ summary: line, observations: [line] }, CHUNKED_SESSION_IDENTITY),
-      );
+    const written = await narrativeIdsInSession(harness.driver, GROWN_SESSION_IDENTITY);
+    expect(written).toHaveLength(2);
+    // Both heads stand, in either direction. This is the shape that replaces the legacy
+    // family's supersession-on-growth, and it is the shape by design.
+    for (const id of written) {
+      expect(await supersedingNodeIds(harness.driver, id)).toEqual([]);
+      expect(
+        await edgeValidUntil(harness.driver, DERIVES_FROM_TYPE, id, GROWN_SESSION_IDENTITY),
+      ).toBeUndefined();
     }
-  }, 900_000);
-
-  it('reads all ninety episodes and cites both the opening and the closing third', async () => {
-    expect(chunkedEpisodeIds).toHaveLength(90);
-    // What makes the close below chunk at all: the session is longer than the window it runs at.
-    expect(chunkedEpisodeIds.length).toBeGreaterThan(CHUNKED_SCALE.keyedNarrativeEpisodes);
-
-    const result = await closeWithGroundingRetry(deps, CHUNKED_SESSION_IDENTITY, {
-      reflection: CHUNKED_SCALE,
-    });
-
-    expect(result.status).toBe('created');
-    const properties = await nodeProperties(harness.driver, result.narrativeId!);
-    expect(properties[NARRATIVE_PROPERTIES.coverageCount]).toBe(90);
-    // Full, because every episode was read by the chunk that held it. One call over this
-    // session would have recorded 0.444 and dropped the other fifty.
-    expect(properties[NARRATIVE_PROPERTIES.coverage]).toBe(1);
-
-    const citations = properties[NARRATIVE_PROPERTIES.citations] as string[];
-    const opening = chunkedEpisodeIds.slice(0, 30);
-    const closing = chunkedEpisodeIds.slice(-30);
-
-    // Every id came through a chunk that cited it, so nothing here is reachable any other way.
-    expect(citations.every((id) => chunkedEpisodeIds.includes(id))).toBe(true);
-    expect(citations.some((id) => opening.includes(id))).toBe(true);
-    expect(citations.some((id) => closing.includes(id))).toBe(true);
-  }, 300_000);
+  }, 120_000);
 });
