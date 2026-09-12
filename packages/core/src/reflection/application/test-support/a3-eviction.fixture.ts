@@ -9,6 +9,7 @@ import { durableRoleScope } from '../../../evidence/domain/scopes.js';
 import { establishScope } from '../../../evidence/test-support/evidence.fixture.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../../infrastructure/graph/backbone.js';
+import { inWriteTransaction } from '../../../infrastructure/graph/connection.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import {
   startRehearsalSubstrate,
@@ -38,6 +39,8 @@ import {
   evictionArmingOperationId,
   evictionArmingPublication,
 } from '../eviction-arming.js';
+import { durableEligibility, type EvictionCandidate } from '../eviction-eligibility.js';
+import { planRemoval, type PlannedRemoval } from '../eviction-plan.js';
 import { INSTALLED_PUBLICATION_HANDLERS } from '../installed-publications.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../intake.js';
 import { LaneAssigner } from '../lanes.js';
@@ -343,4 +346,77 @@ export async function eligibleSource(
   finishReadiness(sourceId);
   await indexSource(sourceId);
   return sourceId;
+}
+
+/**
+ * Where a second process reaches this substrate.
+ *
+ * A real file in WAL mode and a real container, both this file's own. Nothing here is shared with
+ * anything outside the run, which is what makes handing the address to a forked child safe.
+ */
+export function substrateAddress(): {
+  readonly uri: string;
+  readonly password: string;
+  readonly sqlitePath: string;
+  readonly isolated: boolean;
+} {
+  return {
+    uri: substrate.harness.uri,
+    password: substrate.harness.password,
+    sqlitePath: substrate.sqlitePath,
+    isolated: substrate.verdict.status === 'isolated' && substrate.sqlitePath !== ':memory:',
+  };
+}
+
+export type EvictionNomination = {
+  readonly candidate: EvictionCandidate;
+  readonly plan: PlannedRemoval;
+};
+
+/** The removal set derived outside the guard, which is what an attempt binds and the guard rechecks. */
+export async function nominateEviction(
+  sourceId: string,
+  policy: { readonly now: Date; readonly minAgeMs: number },
+): Promise<EvictionNomination> {
+  const verdict = durableEligibility(store.db, sourceId, policy);
+  if (verdict.status !== 'eligible') {
+    throw new Error(`fixture source is not eligible: ${verdict.reason}`);
+  }
+  const planned = await inWriteTransaction(driver, (tx) =>
+    planRemoval(store.db, tx, verdict.candidate),
+  );
+  if (planned.status !== 'planned') {
+    throw new Error(`fixture source could not be planned: ${planned.reason}`);
+  }
+  return { candidate: verdict.candidate, plan: planned.plan };
+}
+
+/**
+ * The payload one attempt binds. Every durable version travels with it, because the guard compares
+ * what the run READ against what it finds and a field left out is a field nothing can compare on.
+ */
+export function evictionPayload(nomination: EvictionNomination): Record<string, unknown> {
+  const { candidate, plan } = nomination;
+  return {
+    sourceId: candidate.sourceId,
+    sessionId: candidate.sessionId,
+    observedAt: NOW.toISOString(),
+    coverageEpoch: candidate.coverageEpoch,
+    chunkId: candidate.chunkId,
+    publishedRevisionNo: candidate.publishedRevisionNo,
+    processingGeneration: candidate.processingGeneration,
+    operationalRevision: candidate.operationalRevision,
+    readinessPolicyRevision: candidate.readinessPolicyRevision,
+    projectionGeneration: candidate.projectionGeneration,
+    acceptedReferenceVersion: candidate.acceptedReferenceVersion,
+    qualifiedAt: candidate.qualifiedAt,
+    nodeIds: [...plan.nodeIds],
+    relationIds: [...plan.relationIds],
+    nodeDigest: plan.nodeDigest,
+    categoryDigest: plan.categoryDigest,
+    survivors: plan.survivors.map((entry) => ({ ...entry })),
+    contentDigests: { ...candidate.contentDigests },
+    searchCoverageProof: { ...candidate.searchCoverageProof },
+    dependencies: candidate.dependencies.map((entry) => ({ ...entry })),
+  };
 }

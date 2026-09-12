@@ -1,25 +1,26 @@
 import { randomUUID } from 'node:crypto';
 import { beforeAll, expect, it } from 'vitest';
 
-import { durableEligibility, type EvictionCandidate } from './eviction-eligibility.js';
-import { planRemoval, type PlannedRemoval } from './eviction-plan.js';
+import { durableEligibility } from './eviction-eligibility.js';
 import {
   acceptEpisode,
   activateCoverage,
   armEviction,
   driver,
   eligibleSource,
+  evictionPayload,
   finishReadiness,
   forgetSource,
   indexSource,
+  nominateEviction,
   NOW,
   publications,
   republishChunk,
   sealAndPublish,
   sessionOf,
   store,
+  type EvictionNomination,
 } from './test-support/a3-eviction.fixture.js';
-import { inWriteTransaction } from '../../infrastructure/graph/connection.js';
 import {
   moveEdgeStrength,
   nodeExists,
@@ -73,53 +74,15 @@ import { CHUNK_BOUNDARY_POLICY } from '../domain/chunk-boundary.js';
 
 const POLICY = { now: NOW, minAgeMs: 0 };
 
-type Nomination = { readonly candidate: EvictionCandidate; readonly plan: PlannedRemoval };
-
-async function nominate(sourceId: string): Promise<Nomination> {
-  const verdict = durableEligibility(store.db, sourceId, POLICY);
-  if (verdict.status !== 'eligible') {
-    throw new Error(`fixture source is not eligible: ${verdict.reason}`);
-  }
-  const planned = await inWriteTransaction(driver, (tx) =>
-    planRemoval(store.db, tx, verdict.candidate),
-  );
-  if (planned.status !== 'planned') {
-    throw new Error(`fixture source could not be planned: ${planned.reason}`);
-  }
-  return { candidate: verdict.candidate, plan: planned.plan };
+async function nominate(sourceId: string): Promise<EvictionNomination> {
+  return await nominateEviction(sourceId, POLICY);
 }
 
-function payloadOf(nomination: Nomination): Record<string, unknown> {
-  const { candidate, plan } = nomination;
-  return {
-    sourceId: candidate.sourceId,
-    sessionId: candidate.sessionId,
-    observedAt: NOW.toISOString(),
-    coverageEpoch: candidate.coverageEpoch,
-    chunkId: candidate.chunkId,
-    publishedRevisionNo: candidate.publishedRevisionNo,
-    processingGeneration: candidate.processingGeneration,
-    operationalRevision: candidate.operationalRevision,
-    readinessPolicyRevision: candidate.readinessPolicyRevision,
-    projectionGeneration: candidate.projectionGeneration,
-    acceptedReferenceVersion: candidate.acceptedReferenceVersion,
-    qualifiedAt: candidate.qualifiedAt,
-    nodeIds: [...plan.nodeIds],
-    relationIds: [...plan.relationIds],
-    nodeDigest: plan.nodeDigest,
-    categoryDigest: plan.categoryDigest,
-    survivors: plan.survivors.map((entry) => ({ ...entry })),
-    contentDigests: { ...candidate.contentDigests },
-    searchCoverageProof: { ...candidate.searchCoverageProof },
-    dependencies: candidate.dependencies.map((entry) => ({ ...entry })),
-  };
-}
-
-async function publishEviction(nomination: Nomination, operationId = randomUUID()) {
+async function publishEviction(nomination: EvictionNomination, operationId = randomUUID()) {
   return publications.publish({
     kind: 'episode_eviction',
     operationId,
-    payload: payloadOf(nomination),
+    payload: evictionPayload(nomination),
   });
 }
 
