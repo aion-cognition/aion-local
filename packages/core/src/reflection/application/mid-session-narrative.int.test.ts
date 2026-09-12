@@ -57,10 +57,10 @@ import { PIPELINE_VERSION } from '../domain/version.js';
  *   That is the first case here.
  * - **"supersedes the mid-session version into the one the close writes".** The chunk family
  *   does not version over membership growth — a grown session gets ANOTHER chunk, and both heads
- *   stand. The no-supersession-between-chunks claim is covered directly at
- *   `chunk-narrative.int.test.ts` ('two chunks of one session, and no supersession between
- *   them'); the last case here asserts the half this file is responsible for, which is that the
- *   close seals the tail the stage left rather than rewriting what it already sealed.
+ *   stand. The no-supersession-between-chunks claim is covered at
+ *   `chunk-narrative.int.test.ts`, 'serves two chunks of one session at once, and supersedes
+ *   neither across them'; the last case here asserts the half this file is responsible for,
+ *   which is that the close seals the tail the stage left rather than rewriting what it sealed.
  */
 
 const EMBED_DIMENSION = 8;

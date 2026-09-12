@@ -4,7 +4,7 @@ import {
   findEdgeTouchedNeighborIds,
 } from '../../../infrastructure/graph/context-vector-queries.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
-import { publishContextVectorSync } from '../context-vector-sync.js';
+import { publishContextVectorSync } from '../context-vector-demand.js';
 
 /**
  * The pipeline's last stage: recompute `context_vec` on every `:Memory` node this run's
@@ -80,14 +80,14 @@ export class ContextVectorStage implements ReflectionStage {
           summary: `context vector recomputation was refused: ${outcome.reason}`,
         };
       }
-      const { recomputed, cleared, stamped, holds } = outcome.result;
-      const written = recomputed.length + cleared.length + stamped.length;
+      const { recomputed, cleared, holds } = outcome.result;
+      const written = recomputed.length + cleared.length;
       return {
         status: 'ok',
         summary:
           `recomputed context_vec for ${String(recomputed.length)} of ` +
           `${String(recomputeIds.length)} affected node(s), ${String(cleared.length)} cleared, ` +
-          `${String(stamped.length)} unweighted, ${String(holds.length)} held`,
+          `${String(holds.length)} held`,
         counts: { contextVectors: written },
       };
     } catch (error) {

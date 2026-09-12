@@ -3,14 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import {
-  ABSENT_AT_BINDING,
-  contextVectorSyncPublication,
-  publishContextVectorSync,
-  type ContextVectorSyncResult,
-} from './context-vector-sync.js';
+import { publishContextVectorSync, type ContextVectorSyncResult } from './context-vector-demand.js';
+import { ABSENT_AT_BINDING, contextVectorSyncPublication } from './context-vector-sync.js';
 import { activatedCoordinator } from './test-support/publication-substrate.fixture.js';
 import { writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
+import { findStaleContextVectorNodes } from '../../infrastructure/graph/context-vector-sync.js';
 import { upsertEdge } from '../../infrastructure/graph/edges.js';
 import { readNeighborhoodRevisionsOf } from '../../infrastructure/graph/episode-eviction.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
@@ -104,6 +101,7 @@ const MEMBERS = [
   'cvs-early',
   'cvs-garbled',
   'cvs-weightless',
+  'cvs-dimensionless',
   'cvs-plain',
   'cvs-nowhere',
 ] as const;
@@ -134,9 +132,15 @@ beforeAll(async () => {
   await vectored('cvs-unreadable', ['not', 'numbers']);
   await link('cvs-garbled', 'cvs-unreadable', 1);
 
-  // A readable neighbourhood carrying no weight: examined, and nothing to compute from.
+  // A readable neighbourhood carrying no weight: a complete reading of nothing.
   await vectored('cvs-weightless', PEER_VECTOR, STALE_VECTOR);
   await link('cvs-weightless', 'cvs-hub', 0);
+
+  // Weighted, stored, and unusable: an empty list coerces, so this reads as a present vector of
+  // no dimension rather than as an absent one.
+  await vectored('cvs-dimensionless', PEER_VECTOR, STALE_VECTOR);
+  await vectored('cvs-empty-vector', []);
+  await link('cvs-dimensionless', 'cvs-empty-vector', 1);
 
   // Present, and outside `:Memory`: `Session` is the one label with no `Memory` companion.
   await writeStampedNode(harness.driver, {
@@ -179,7 +183,7 @@ describe('context_vector_sync over one batch of every shape', () => {
   }, 120_000);
 
   it('accounts for every member it bound, exactly once', () => {
-    const named = [...result.recomputed, ...result.cleared, ...result.stamped]
+    const named = [...result.recomputed, ...result.cleared]
       .concat(result.holds.map((hold) => hold.id))
       .sort();
 
@@ -195,10 +199,18 @@ describe('context_vector_sync over one batch of every shape', () => {
     expect(await contextVectorSyncedAt(harness.driver, 'cvs-hub')).toBeInstanceOf(Date);
   });
 
-  it('clears only the node the guard proved has no neighbour, and stamps the clear', async () => {
-    expect(result.cleared).toEqual(['cvs-lonely']);
-    expect(await contextVector(harness.driver, 'cvs-lonely')).toBeUndefined();
-    expect(await contextVectorSyncedAt(harness.driver, 'cvs-lonely')).toBeInstanceOf(Date);
+  /**
+   * One semantic, two readings. A node with no current neighbour and a node whose every
+   * neighbour was readable and carried no weight both come out CLEARED, because both are "this
+   * node has no context now" and a stored vector left behind goes on being served.
+   */
+  it('clears both readings the guard could certify as no context, and stamps them', async () => {
+    expect(result.cleared).toEqual(['cvs-lonely', 'cvs-weightless']);
+
+    for (const id of ['cvs-lonely', 'cvs-weightless']) {
+      expect(await contextVector(harness.driver, id)).toBeUndefined();
+      expect(await contextVectorSyncedAt(harness.driver, id)).toBeInstanceOf(Date);
+    }
   });
 
   it('holds an early neighbourhood instead of clearing it, and leaves the vector alone', async () => {
@@ -215,10 +227,50 @@ describe('context_vector_sync over one batch of every shape', () => {
     expect(await contextVectorSyncedAt(harness.driver, 'cvs-garbled')).toBeUndefined();
   });
 
-  it('stamps an unweighted neighbourhood as examined without touching the vector', async () => {
-    expect(result.stamped).toEqual(['cvs-weightless']);
-    expect(await contextVector(harness.driver, 'cvs-weightless')).toEqual(STALE_VECTOR);
-    expect(await contextVectorSyncedAt(harness.driver, 'cvs-weightless')).toBeInstanceOf(Date);
+  /**
+   * `weightedMeanVector` returns nothing for two unlike reasons, and only one of them is a
+   * statement about the neighbourhood. A neighbour carrying weight 1 and a zero-length vector is
+   * a provider defect, so it holds as a defect — it must not read as "carries no weight" and be
+   * cleared and stamped out of the scan's reach on a receipt that says the wrong thing.
+   */
+  it('holds a weighted neighbourhood whose vectors have no usable dimension', async () => {
+    expect(holdFor(result, 'cvs-dimensionless')).toBe('neighbor_vector_unreadable');
+    expect(await contextVector(harness.driver, 'cvs-dimensionless')).toEqual(STALE_VECTOR);
+    expect(await contextVectorSyncedAt(harness.driver, 'cvs-dimensionless')).toBeUndefined();
+  });
+
+  /**
+   * The claim that used to sit in `context-vector-currency.int.test.ts` against the driver-scoped
+   * stamp writer, asserted at the surface that owns every write of the property now — and its
+   * other half, which is the whole argument for holding rather than stamping.
+   *
+   * A held member is left with `context_vec_synced_at` NULL, and that is what makes the scan
+   * reach it later. The scan needs BOTH an unmoved stamp and a vectored neighbour, so a member
+   * waiting on an embedding is outside the scan's population until the embedding lands — at
+   * which point the NULL stamp puts it straight in. Stamping it would have required an edge to
+   * move afterwards, and no edge moves when a vector arrives.
+   */
+  it('takes what it wrote out of the staleness scan, and leaves a held member reachable by it', async () => {
+    const stale = await findStaleContextVectorNodes(harness.driver, 50);
+    for (const id of [...result.recomputed, ...result.cleared]) {
+      expect(stale).not.toContain(id);
+    }
+    // Not yet in the scan: its one neighbour carries no vector, so the scan cannot see the pair.
+    expect(stale).not.toContain('cvs-early');
+    expect(await contextVectorSyncedAt(harness.driver, 'cvs-early')).toBeUndefined();
+
+    // The embedding arrives, moving no edge.
+    await writeStampedNode(harness.driver, {
+      label: 'Entity',
+      id: 'cvs-unembedded',
+      now: NOW,
+      occurredAt: NOW,
+      properties: {},
+      mergeProperties: { content_vec: PEER_VECTOR },
+    });
+
+    // And the held member is in the scan, on the strength of the stamp the hold did not write.
+    expect(await findStaleContextVectorNodes(harness.driver, 50)).toContain('cvs-early');
   });
 
   it('names a node it cannot write and a node that is not there', () => {

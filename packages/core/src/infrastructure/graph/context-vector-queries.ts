@@ -76,6 +76,15 @@ export async function findAffectedNodeIds(
  * this closure has to catch; the maintenance scan in `context-vector-sync.ts` reads the decay
  * and prune stamps too, because those move between runs and no reflection pass sees them.
  *
+ * **`valid_until IS NULL` keeps that division honest, and it is load-bearing now that the
+ * recomputation is destructive.** A run that CLOSES an edge — a supersession, a prune — also
+ * moves its `updated_at`, so without the predicate the far endpoint of a closed edge entered
+ * this population, and the guarded read excludes closed edges, so the node arrived with a
+ * certified-empty neighbourhood and left with its context vector cleared. The node does need
+ * recomputing, and the pass that owns it is the maintenance scan: `valid_until` is one of the
+ * three movement stamps that scan reads, exactly because closures are not a reflection run's to
+ * catch. The stage's closure is about the edges it wrote and left standing.
+ *
  * `:Memory` is required of the far endpoint because that is what the write below matches on: a
  * backbone node with no vector index behind it is not a node this stage can store a context for.
  */
@@ -88,7 +97,8 @@ function edgeTouchedNeighborsStatement(
   const cypher = [
     'UNWIND $nodeIds AS nodeId',
     `MATCH (n:${BASE_NODE_LABEL} { id: nodeId })-[r]-(m:${BASE_NODE_LABEL}:${MEMORY_LABEL})`,
-    `WHERE m.id <> nodeId AND r.updated_at >= $since AND ${fragment.where}`,
+    `WHERE m.id <> nodeId AND r.updated_at >= $since`,
+    `  AND r.${BITEMPORAL_PROPERTIES.validUntil} IS NULL AND ${fragment.where}`,
     'RETURN DISTINCT m.id AS id',
   ].join('\n');
 

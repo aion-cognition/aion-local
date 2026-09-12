@@ -159,7 +159,7 @@ function detailOf(
     `${String(tally.deferred)} deferred, ${String(tally.pinned)} pinned under the guard ` +
     `over ${String(examined)} source(s) examined; ` +
     `${String(repaired.recomputed)} survivor vector(s) recomputed, ` +
-    `${String(repaired.cleared)} cleared, ${String(repaired.stamped)} unweighted, ` +
+    `${String(repaired.cleared)} cleared, ` +
     `${String(repaired.classified)} carrying none, ` +
     `${String(repaired.deferred)} left owed ` +
     `of ${String(repaired.attempted)} attempted, ` +
@@ -170,7 +170,7 @@ function detailOf(
 
 /** The graph writes the repair published: a stamp is a write, and a hold is not. */
 function repairedCount(repaired: SurvivorRepairReport): number {
-  return repaired.recomputed + repaired.cleared + repaired.stamped + repaired.classified;
+  return repaired.recomputed + repaired.cleared + repaired.classified;
 }
 
 async function runEvict(ctx: OperationContext, scales: EvictScales): Promise<OperationOutcome> {

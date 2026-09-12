@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { beforeAll, expect, it } from 'vitest';
 
+import { SURVIVOR_RETRY_DELAY_MS } from './context-vector-sync.js';
 import { durableEligibility } from './eviction-eligibility.js';
 import { planRemoval } from './eviction-plan.js';
 import {
@@ -26,6 +27,7 @@ import {
   seedVectoredEntity,
   storedVectors,
 } from '../../infrastructure/graph/test-support/a3-eviction-graph.fixture.js';
+import { renameNodeId } from '../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   listRunnableSurvivorWork,
   readEvictionManifest,
@@ -357,3 +359,165 @@ it('settles a survivor that carries no context vector instead of retrying it for
     listRunnableSurvivorWork(store.db, NOW, 8).filter((task) => task.nodeId === survivorId),
   ).toEqual([]);
 });
+
+/**
+ * The other half of the survivor contract under the guard: the recomputation itself interrupted.
+ *
+ * Adopted from the review's own probe. `interruptAt` with no operation id matches whatever
+ * identity the operation mints for itself, which is what lets a case reach a publication it does
+ * not name. What it pins is the ordering: the graph write is durable before the obligation is
+ * settled, the recovery settles it exactly once, and a second recovery has nothing to do.
+ */
+it('finishes a context_vector_sync interrupted before its acknowledgment', async () => {
+  const survivorId = 'survivor-interrupted-sync';
+  const sourceId = await sourceWithSurvivor('recover-interrupted-sync', survivorId);
+  expect((await storedVectors(driver, survivorId)).context).toBeDefined();
+
+  const operationId = randomUUID();
+  expect(
+    (
+      await publications.publish({
+        kind: 'episode_eviction',
+        operationId,
+        payload: await payloadFor(sourceId),
+      })
+    ).status,
+  ).toBe('acknowledged');
+  expect(
+    listRunnableSurvivorWork(store.db, NOW, 8).filter((task) => task.nodeId === survivorId).length,
+  ).toBe(1);
+
+  interruptAt('before_ack');
+  await expect(
+    repairSurvivors({ driver, db: store.db, publications, now: NOW }, 8),
+  ).rejects.toThrow();
+
+  // The clear committed with the graph; the obligation has not been settled by it.
+  expect((await storedVectors(driver, survivorId)).context).toBeUndefined();
+  expect(survivorWorkOf(store.db, operationId).map((task) => task.state)).not.toEqual([
+    'completed',
+  ]);
+
+  expect(await publications.recover()).toMatchObject({ status: 'acknowledged' });
+  expect(survivorWorkOf(store.db, operationId).map((task) => task.state)).toEqual(['completed']);
+  expect(
+    listRunnableSurvivorWork(store.db, NOW, 8).filter((task) => task.nodeId === survivorId),
+  ).toEqual([]);
+  expect(await publications.recover()).toBeUndefined();
+}, 120_000);
+
+/**
+ * A batch in which every nominated survivor is gone, which is the case that regressed.
+ *
+ * `node_absent` is a TERMINAL outcome — nothing a recomputation could ever deliver — so the
+ * receipt that names it is what finishes the obligation. `check` therefore has to let such a
+ * batch commit: counting an absent member as a moved binding refuses the publication, settles
+ * nothing, and re-offers the same work on every tick for ever. The pre-conversion pass settled
+ * it directly, so this is the one property the rewiring could lose silently.
+ *
+ * The node is moved out from under its id rather than deleted, which is the workspace's
+ * reversible technique for producing exactly this state: an obligation whose node the revision
+ * read cannot find.
+ */
+it('settles a survivor whose node is gone rather than refusing the batch for ever', async () => {
+  const survivorId = 'survivor-vanished';
+  const sourceId = await sourceWithSurvivor('recover-vanished', survivorId);
+  const operationId = randomUUID();
+  expect(
+    (
+      await publications.publish({
+        kind: 'episode_eviction',
+        operationId,
+        payload: await payloadFor(sourceId),
+      })
+    ).status,
+  ).toBe('acknowledged');
+  expect(
+    listRunnableSurvivorWork(store.db, NOW, 8).filter((task) => task.nodeId === survivorId).length,
+  ).toBe(1);
+
+  await renameNodeId(driver, survivorId, `${survivorId}-moved`);
+  expect(await nodeExists(driver, survivorId)).toBe(false);
+
+  const repaired = await repairSurvivors({ driver, db: store.db, publications, now: NOW }, 8);
+
+  // The publication committed a receipt of nothing but a terminal hold, rather than refusing.
+  expect(repaired.refusal).toBeUndefined();
+  expect(repaired.classified).toBeGreaterThanOrEqual(1);
+  expect(survivorWorkOf(store.db, operationId).map((task) => task.state)).toEqual(['completed']);
+  expect(
+    listRunnableSurvivorWork(store.db, NOW, 8).filter((task) => task.nodeId === survivorId),
+  ).toEqual([]);
+
+  // And a second pass finds nothing owed, which is what "for ever" would have broken.
+  const again = await repairSurvivors({ driver, db: store.db, publications, now: NOW }, 8);
+  expect(again.attempted).toBe(0);
+
+  await renameNodeId(driver, `${survivorId}-moved`, survivorId);
+}, 120_000);
+
+/**
+ * A hold does not make the obligation runnable again immediately.
+ *
+ * The pre-conversion pass deferred a moved neighbourhood by fifteen minutes with the reason
+ * stated at its constant: it comes back on the ordinary cadence, not immediately and not never.
+ * Deferring to the acknowledgment instant instead leaves `due_at <= now` true, so the next tick
+ * re-binds and re-publishes the same member against the same unmoved neighbourhood. The driving
+ * operation's bucket happens to be the same quarter-hour today, which is exactly why the floor
+ * has to be asserted here rather than assumed from the schedule.
+ */
+it('leaves a held survivor owed, and not runnable again until its retry delay', async () => {
+  const survivorId = 'survivor-held';
+  const sourceId = await sourceWithSurvivor('recover-held', survivorId);
+  const operationId = randomUUID();
+  expect(
+    (
+      await publications.publish({
+        kind: 'episode_eviction',
+        operationId,
+        payload: await payloadFor(sourceId),
+      })
+    ).status,
+  ).toBe('acknowledged');
+
+  // The neighbourhood moves between the binding and the guard, which is what a hold is for: the
+  // hook runs after the check and before the graph write, under the guard this attempt holds. A
+  // NEW neighbour rather than the evicted source, which no longer exists to link to.
+  await seedVectoredEntity(driver, {
+    id: 'survivor-held-latecomer',
+    name: 'a neighbour that arrives mid-attempt',
+    vector: VECTOR,
+    now: NOW,
+  });
+  atBoundary(
+    'prepared',
+    async () => {
+      await upsertEdge(driver, {
+        type: 'CO_OCCURS',
+        sourceId: survivorId,
+        targetId: 'survivor-held-latecomer',
+        strength: 0.75,
+        confidence: 1,
+        signals: ['co_occurrence'],
+        provenance: ['reflection_associations'],
+        count: 2,
+        now: NOW,
+      });
+    },
+    '',
+  );
+
+  const repaired = await repairSurvivors({ driver, db: store.db, publications, now: NOW }, 8);
+  expect(repaired.deferred).toBeGreaterThanOrEqual(1);
+
+  // Owed, and out of reach at the ack moment: the delay, not the bucket, is what spaces it.
+  const [held] = survivorWorkOf(store.db, operationId);
+  expect(held?.state).toBe('retryable');
+  expect(listRunnableSurvivorWork(store.db, NOW, 8).map((task) => task.nodeId)).not.toContain(
+    survivorId,
+  );
+  const afterTheDelay = new Date(NOW.getTime() + SURVIVOR_RETRY_DELAY_MS + 1_000);
+  expect(listRunnableSurvivorWork(store.db, afterTheDelay, 8).map((task) => task.nodeId)).toContain(
+    survivorId,
+  );
+}, 120_000);

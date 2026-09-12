@@ -5,9 +5,11 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { ReflectionOrchestrator } from './orchestrator.js';
+import { reflectionStages } from './pipeline.js';
 import { replayExperiences, type ReplayDeps } from './replay.js';
 import { CognitiveExtractionStage } from './stages/cognitive.js';
 import { ENTITY_STAGE_NAME, EntityExtractionStage } from './stages/entities.js';
+import { activatedCoordinator } from './test-support/publication-substrate.fixture.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
@@ -30,6 +32,7 @@ import { fromGraphDateTime } from '../../infrastructure/graph/values.js';
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import { testGenerationProvider } from '../../infrastructure/providers/test-support/generation-provider.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
+import type { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   ARCHIVE_SCHEMA_VERSION,
@@ -94,6 +97,7 @@ let db: SqliteHandle;
 let dataDir: string;
 let logger: Logger;
 let provider: Provider;
+let publications: PublicationCoordinator;
 let deps: ReplayDeps;
 /** Driver calls that can write, counted since the last reset. */
 let writeCalls = 0;
@@ -187,6 +191,7 @@ beforeAll(async () => {
   const backbone = await bootstrapBackbone(harness.driver, { memberName: 'Replay Acceptance' });
 
   const driver = countingDriver(harness.driver);
+  publications = await activatedCoordinator({ driver, db, logger }, 'replay');
   deps = {
     driver,
     db,
@@ -195,7 +200,12 @@ beforeAll(async () => {
       workspaceId: backbone.workspace.id,
     }),
     logger,
-    runner: new ReflectionOrchestrator({ driver, db, provider, logger }, [
+    // The coordinator is part of the composition, the way it is in every production one: two
+    // stages in the shipped list write through the protocol and nowhere else. This root's own
+    // subject is the replay DRIVER over two stages, so it names those two — and the case at the
+    // end of this file runs the shipped list through the same composition, which is what stops a
+    // third protocol-writing stage from being unexercised here.
+    runner: new ReflectionOrchestrator({ driver, db, provider, logger, publications }, [
       new EntityExtractionStage(),
       new CognitiveExtractionStage(),
     ]),
@@ -342,5 +352,53 @@ describe('an archived row whose identity resolves to a session that already has 
     expect((await episodeIdsInSession(harness.driver, IDENTITY)).sort()).toEqual(
       episodesBefore.sort(),
     );
+  }, 600_000);
+});
+
+/** A version no earlier case wrote a ledger under, so every shipped stage genuinely runs. */
+const SHIPPED_COMPOSITION_VERSION = 'replay-shipped-composition';
+
+/**
+ * The composition, run over the list production actually ships.
+ *
+ * The two-stage list above is this file's subject — the replay driver's re-entry, dedupe and
+ * write-count behaviour — and narrowing it is deliberate. What that narrowing cannot catch is the
+ * break `aion replay` shipped with: a stage in `reflectionStages` that writes through the
+ * publication protocol, composed without a coordinator, refusing on every episode while nothing
+ * goes red. So the shipped list runs here too, through the same composition, and the assertion is
+ * the one that break would have failed.
+ *
+ * Under its own pipeline version, because the earlier describes left ledger keys for two of these
+ * stage names and a recovered run would report those rather than this one. Bounded to one
+ * episode: this is about the composition, not about extraction quality.
+ */
+describe('the shipped stage list under the replay composition', () => {
+  it('enters every shipped stage, and none refuses for want of the publication guard', async () => {
+    const [episodeId] = await episodeIdsInSession(harness.driver, IDENTITY);
+    expect(episodeId).toBeDefined();
+
+    const shipped = reflectionStages(DEFAULTS);
+    const run = await new ReflectionOrchestrator(
+      { driver: harness.driver, db, provider, logger, publications },
+      shipped,
+    ).run(episodeId!, {
+      now: REPLAYED_AGAIN_AT,
+      pipelineVersion: SHIPPED_COMPOSITION_VERSION,
+    });
+
+    expect(run.status).toBe('completed');
+    expect(run.summary.stages.map((stage) => stage.name)).toEqual(
+      shipped.map((stage) => stage.name),
+    );
+
+    // A stage may legitimately skip or fail on this substrate — it carries no chunk census, and
+    // extraction quality is not this file's subject. "Not composed" is the one outcome that is a
+    // composition defect rather than a reading, and it is what the shipped break reported on
+    // every episode of every replay.
+    expect(
+      run.summary.stages
+        .filter((stage) => stage.summary.includes('not composed'))
+        .map((stage) => stage.name),
+    ).toEqual([]);
   }, 600_000);
 });

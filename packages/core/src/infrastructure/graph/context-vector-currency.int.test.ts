@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { writeStampedNode } from './bitemporal.js';
 import { runWrite } from './connection.js';
 import { findNeighborContentVectors } from './context-vector-queries.js';
-import { findStaleContextVectorNodes, markContextVectorSynced } from './context-vector-sync.js';
+import { findStaleContextVectorNodes } from './context-vector-sync.js';
 import { upsertEdge } from './edges.js';
 import { runGraphMigrations } from './migrations.js';
 import {
@@ -143,12 +143,10 @@ describe('the neighborhood a context vector is computed from', () => {
   });
 });
 
-describe('a stale node the pass computed nothing for', () => {
-  it('leaves the scan once it is marked examined', async () => {
-    expect(await findStaleContextVectorNodes(harness.driver, 50)).toContain('quiet-peer');
-
-    await markContextVectorSynced(harness.driver, ['quiet-peer'], SWEPT_AT);
-
-    expect(await findStaleContextVectorNodes(harness.driver, 50)).not.toContain('quiet-peer');
-  });
-});
+/**
+ * The "a node the pass examined leaves the scan" case used to sit here and call
+ * `markContextVectorSynced` off the driver. That writer is gone: every write of the property is
+ * the guarded operation's, so the claim is asserted at the operation's own surface instead, in
+ * `reflection/application/context-vector-sync.int.test.ts` ('takes the nodes it wrote out of the
+ * staleness scan it was nominated from'). What stays here is the scan's own predicate.
+ */

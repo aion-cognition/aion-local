@@ -9,7 +9,7 @@ import {
 import {
   publishContextVectorSync,
   type ContextVectorSyncResult,
-} from '../../../reflection/application/context-vector-sync.js';
+} from '../../../reflection/application/context-vector-demand.js';
 
 /**
  * The work an acknowledged eviction left behind: retained neighbours whose stored context was
@@ -49,9 +49,11 @@ export type SurvivorRepairDeps = {
 export type SurvivorRepairReport = {
   readonly attempted: number;
   readonly recomputed: number;
+  /**
+   * Cleared: a certified guarded reading found this survivor no context. Covers both an empty
+   * neighbourhood and one that carries no weight — one semantic for the served property.
+   */
   readonly cleared: number;
-  /** Stamped as examined over a neighbourhood carrying no positive weight; the vector is untouched. */
-  readonly stamped: number;
   /** Settled without a recomputation: the survivor is gone, or carries no context vector at all. */
   readonly classified: number;
   /** Left owed under a named hold. */
@@ -66,7 +68,6 @@ const NOTHING = {
   attempted: 0,
   recomputed: 0,
   cleared: 0,
-  stamped: 0,
   classified: 0,
   deferred: 0,
   lapsed: 0,
@@ -85,7 +86,6 @@ function reportOf(
     attempted,
     recomputed: result.recomputed.length,
     cleared: result.cleared.length,
-    stamped: result.stamped.length,
     classified: settled,
     deferred: result.holds.length - settled,
     lapsed,

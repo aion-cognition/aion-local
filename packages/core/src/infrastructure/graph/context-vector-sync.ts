@@ -1,7 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
-import { runRead, runWrite, type GraphStatement, type GraphTransaction } from './connection.js';
+import { runRead, type GraphStatement, type GraphTransaction } from './connection.js';
 import { CONTEXT_VECTOR_PROPERTY } from './context-vector-queries.js';
 import { DECAYED_AT_PROPERTY } from './edge-weights.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
@@ -26,10 +26,11 @@ import type { ComputedContextVector } from '../../reflection/domain/context-vect
  * three different ways. The stamp is what tells a later tick "already looked at" from "never
  * looked at", and one of the three wrote the vector without it.
  *
- * Now all three publish `context_vector_sync` and land here. The transaction-scoped statements
- * below are the ones that operation uses; the driver-scoped ones above them serve the run-start
- * binding, which is taken before any guard is held. `context-vector-queries.ts` keeps the
- * unguarded READS the reflection stage nominates its population from.
+ * Now all three publish `context_vector_sync`, and the only writes that exist are the two
+ * transaction-scoped ones below — reachable from inside a caller's transaction and from nowhere
+ * else, so the fence is structural rather than a convention about which function to call.
+ * `context-vector-queries.ts` keeps the unguarded READS the reflection stage nominates its
+ * population from, and the driver-scoped read of the staleness scan stays here.
  */
 
 export const CONTEXT_VECTOR_SYNCED_AT_PROPERTY = 'context_vec_synced_at';
@@ -90,26 +91,6 @@ const WRITE_CONTEXT_VECTOR_SYNC = [
   'RETURN n.id AS id',
 ].join('\n');
 
-/** The ids actually written, fewer than the batch when a stale node was forgotten between the two reads. */
-export async function writeContextVectorSync(
-  driver: Driver,
-  entries: readonly ComputedContextVector[],
-  now: Date,
-): Promise<string[]> {
-  if (entries.length === 0) {
-    return [];
-  }
-  return runWrite(
-    driver,
-    WRITE_CONTEXT_VECTOR_SYNC,
-    {
-      entries: entries.map((entry) => ({ id: entry.id, vector: toGraphVector(entry.vector) })),
-      now: toGraphDateTime(now),
-    },
-    (row: Row) => row.id as string,
-  );
-}
-
 const CLEAR_CONTEXT_VECTOR = [
   'UNWIND $ids AS nodeId',
   `MATCH (n:${BASE_NODE_LABEL}:${MEMORY_LABEL} { id: nodeId })`,
@@ -118,63 +99,13 @@ const CLEAR_CONTEXT_VECTOR = [
 ].join('\n');
 
 /**
- * Removes a retained node's context vector and stamps the sync that removed it.
+ * The two writes, and they are only reachable inside a caller's transaction.
  *
- * The one caller is the deletion repair: a node whose last vectored neighbor was removed has a
- * stored context computed from a neighborhood that no longer exists, and the timestamp scan above
- * structurally cannot see that — it looks for an edge that moved, and the edge is gone. Only a
- * CERTIFIED COMPLETE reading of the current neighborhood may call this. `content_vec` is never
- * touched: what the node itself says is unchanged by what stopped standing next to it.
- */
-export async function clearContextVectorSync(
-  driver: Driver,
-  ids: readonly string[],
-  now: Date,
-): Promise<string[]> {
-  const unique = [...new Set(ids)];
-  if (unique.length === 0) {
-    return [];
-  }
-  return runWrite(
-    driver,
-    CLEAR_CONTEXT_VECTOR,
-    { ids: unique, now: toGraphDateTime(now) },
-    (row: Row) => row.id as string,
-  );
-}
-
-const MARK_CONTEXT_VECTOR_SYNCED = [
-  'UNWIND $ids AS nodeId',
-  `MATCH (n:${BASE_NODE_LABEL}:${MEMORY_LABEL} { id: nodeId })`,
-  `SET n.${CONTEXT_VECTOR_SYNCED_AT_PROPERTY} = $now`,
-  'RETURN n.id AS id',
-].join('\n');
-
-/**
- * The stamp without the vector, for a stale node the pass looked at and computed nothing for:
- * a neighborhood whose every edge sits at zero strength, or whose stored vectors will not
- * coerce. The scan is ordered by this stamp, so a node left unstamped comes back at the head of
- * every later tick and the backlog behind it never drains.
- */
-export async function markContextVectorSynced(
-  driver: Driver,
-  ids: readonly string[],
-  now: Date,
-): Promise<string[]> {
-  const unique = [...new Set(ids)];
-  if (unique.length === 0) {
-    return [];
-  }
-  return runWrite(
-    driver,
-    MARK_CONTEXT_VECTOR_SYNCED,
-    { ids: unique, now: toGraphDateTime(now) },
-    (row: Row) => row.id as string,
-  );
-}
-
-/**
- * The same three writes inside a caller's transaction, for the guarded operation.
+ * There is no driver-scoped twin of either, deliberately. Three of them used to sit here with
+ * no production caller left after the conversion, documented as though they had live ones, and
+ * an exported, documented writer that bypasses the guard is an invitation: the next pass that
+ * needs to stamp finds it and reintroduces exactly the half-fenced property this module's
+ * header calls worse than none. The fence is structural now — there is nothing to call.
  *
  * Each returns the ids the statement matched. Under the guard that set is not a count to
  * compare loosely: the operation matched the same predicate a moment earlier in the same
@@ -215,24 +146,8 @@ export async function clearContextVectorsInTransaction(
   );
 }
 
-export async function stampContextVectorsInTransaction(
-  tx: GraphTransaction,
-  ids: readonly string[],
-  now: Date,
-): Promise<string[]> {
-  const unique = [...new Set(ids)];
-  if (unique.length === 0) {
-    return [];
-  }
-  return tx.run(
-    MARK_CONTEXT_VECTOR_SYNCED,
-    { ids: unique, now: toGraphDateTime(now) },
-    (row: Row) => row.id as string,
-  );
-}
-
 /**
- * Exactly the predicate the three writes above match on, asked as a question.
+ * Exactly the predicate the two writes above match on, asked as a question.
  *
  * A bound id can be present in the graph and still be unwritable here: every context-vector
  * statement requires `:Memory`, and a retained neighbour outside that label has no context

@@ -1,6 +1,6 @@
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { findStaleContextVectorNodes } from '../../../infrastructure/graph/context-vector-sync.js';
-import { publishContextVectorSync } from '../../../reflection/application/context-vector-sync.js';
+import { publishContextVectorSync } from '../../../reflection/application/context-vector-demand.js';
 import {
   attachContentVectors,
   findPendingVectorNodes,
@@ -60,11 +60,12 @@ type RefreshTally = { processed: number; affected: number; refusal?: string };
  * The staleness scan nominates; `context_vector_sync` writes.
  *
  * The scan's own answer used to be stamped whatever it found, on the argument that a node left
- * unstamped comes back at the head of every later tick. That argument still holds and the
- * operation still stamps for it — but only over a neighbourhood the guard could read whole. A
- * node whose neighbours have no embeddings yet is now a named hold rather than a stamp, because
- * stamping it would take it out of the scan's ordering before anything computed its context, and
- * no edge has to move for its neighbour's vector to arrive.
+ * unstamped comes back at the head of every later tick. That argument still holds, and the
+ * operation still stamps — but only over a neighbourhood the guard could read whole, and a
+ * complete reading that yields no context clears the vector rather than leaving a stale one
+ * where the resonance search will read it. A node whose neighbours have no embeddings yet is a
+ * named hold instead: stamping it would take it out of the scan's ordering before anything
+ * computed its context, and no edge has to move for its neighbour's vector to arrive.
  */
 async function refreshContextVectors(ctx: OperationContext): Promise<RefreshTally> {
   const publications = ctx.narratives?.publications;
@@ -90,11 +91,8 @@ async function refreshContextVectors(ctx: OperationContext): Promise<RefreshTall
   if (outcome.status !== 'published') {
     return { processed: staleIds.length, affected: 0, refusal: outcome.reason };
   }
-  const { recomputed, cleared, stamped } = outcome.result;
-  return {
-    processed: staleIds.length,
-    affected: recomputed.length + cleared.length + stamped.length,
-  };
+  const { recomputed, cleared } = outcome.result;
+  return { processed: staleIds.length, affected: recomputed.length + cleared.length };
 }
 
 /**

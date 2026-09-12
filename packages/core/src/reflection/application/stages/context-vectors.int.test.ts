@@ -10,6 +10,7 @@ import { upsertEdge } from '../../../infrastructure/graph/edges.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import { resonantNodes } from '../../../infrastructure/graph/resonance-queries.js';
 import {
+  closeEdge,
   contextVector,
   contextVectorSyncedAt,
   vectorIndexNeighbors,
@@ -40,6 +41,8 @@ const NOW = new Date('2026-08-28T12:00:00.000Z');
 const BEFORE_RUN = new Date('2026-08-28T09:00:00.000Z');
 /** A second run over the same episode, after a later stage wrote one more edge. */
 const SECOND_RUN = new Date('2026-08-28T15:00:00.000Z');
+/** A third run, in which an earlier stage CLOSES an edge rather than writing one. */
+const THIRD_RUN = new Date('2026-08-28T18:00:00.000Z');
 
 /**
  * A one-hot-shaped vector, but never a bare `0`/`1`: the vector index property is `FLOAT`-
@@ -287,6 +290,56 @@ describe('ContextVectorStage against a live graph', () => {
     // stops before it.
     const entityC = await contextVector(harness.driver, 'entity-c');
     expect(entityC).toBeUndefined();
+  });
+
+  /**
+   * The population the stage nominates must not include the far endpoint of an edge THIS run
+   * closed, and the reason is that the write is destructive now.
+   *
+   * A supersession or a prune closes an edge and moves its `updated_at` in the same write. The
+   * closure read selects on `updated_at >= since`; the guarded neighbourhood read excludes closed
+   * edges. Without `valid_until IS NULL` on the closure read, a node whose last standing edge this
+   * run closed therefore arrives with a certified-empty neighbourhood and leaves with its context
+   * vector CLEARED — which the pre-conversion stage never did, because it only ever wrote what it
+   * computed. The node does need recomputing; the pass that owns it is the maintenance scan, which
+   * reads `valid_until` as one of its three movement stamps for exactly this reason.
+   *
+   * entity-c is the node for it: one edge, to entity-a, and nothing else in the graph. Giving it
+   * a context vector and then closing that edge at this run's clock is exactly the shape.
+   */
+  it('leaves the far endpoint of an edge this run closed to the maintenance scan', async () => {
+    await writeStampedNode(harness.driver, {
+      label: 'Entity',
+      id: 'entity-c',
+      now: NOW,
+      occurredAt: NOW,
+      properties: {},
+      mergeProperties: { context_vec: ENTITY_A_VECTOR },
+    });
+    expect(await contextVector(harness.driver, 'entity-c')).toEqual(ENTITY_A_VECTOR);
+
+    // The run touches the edge and then closes it, which is what a supersession or a prune does.
+    await upsertEdge(harness.driver, {
+      type: 'SIMILAR',
+      sourceId: 'entity-a',
+      targetId: 'entity-c',
+      strength: 0.5,
+      confidence: 0.7,
+      signals: ['semantic'],
+      provenance: ['test-fixture'],
+      count: 1,
+      now: THIRD_RUN,
+    });
+    await closeEdge(harness.driver, 'SIMILAR', 'entity-a', 'entity-c', THIRD_RUN);
+
+    const outcome = await new ContextVectorStage().run(buildContext(THIRD_RUN));
+
+    expect(outcome.status).toBe('ok');
+    expect(outcome.summary).toContain('0 cleared');
+    // Untouched, and still unstamped: this run never had an opinion about it. Without the
+    // predicate the context vector here is gone and the stamp is set.
+    expect(await contextVector(harness.driver, 'entity-c')).toEqual(ENTITY_A_VECTOR);
+    expect(await contextVectorSyncedAt(harness.driver, 'entity-c')).toBeUndefined();
   });
 
   it('hands the refreshed far endpoint to the context resonance search', async () => {

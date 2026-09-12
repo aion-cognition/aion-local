@@ -212,7 +212,6 @@ describe('ContextVectorStage', () => {
           acknowledged({
             recomputed: [EPISODE_ID],
             cleared: [],
-            stamped: [],
             holds: [{ id: 'entity-a', reason: 'neighbor_vector_pending' }],
           }),
         ),
@@ -228,7 +227,7 @@ describe('ContextVectorStage', () => {
     // Reported from the receipt, not from the nomination: the stage nominated two and the
     // operation wrote one, and a summary counted off the nomination would claim both.
     expect(outcome.summary).toBe(
-      'recomputed context_vec for 1 of 2 affected node(s), 0 cleared, 0 unweighted, 1 held',
+      'recomputed context_vec for 1 of 2 affected node(s), 0 cleared, 1 held',
     );
     expect(outcome.counts).toEqual({ contextVectors: 1 });
   });
@@ -256,7 +255,6 @@ describe('ContextVectorStage', () => {
           acknowledged({
             recomputed: [EPISODE_ID, 'entity-far'],
             cleared: [],
-            stamped: [],
             holds: [],
           }),
         ),

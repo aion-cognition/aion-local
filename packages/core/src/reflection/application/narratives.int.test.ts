@@ -117,19 +117,21 @@ async function closeWithGroundingRetry(
  * - **Session-scoped versioning: "mints version 2 and supersedes version 1 once the session
  *   grew".** The chunk family deliberately does not version over membership growth — a sealed
  *   chunk's membership is frozen and the tail that follows it is another chunk, so a grown
- *   session gets a SECOND HEAD rather than a second revision. That is asserted below
- *   ('a session that grew gets another chunk…'). The revision series the chunk family does keep
- *   — allocation, publication, closing the prior head, the spent number staying spent — is
- *   covered at `infrastructure/sqlite/narrative-revisions.test.ts` (parameterized over both
- *   families), and end to end at `chunk-narrative.int.test.ts` ('replaces a head whose
- *   dependency versions moved').
+ *   session gets a SECOND HEAD rather than a second revision. That is asserted below, in
+ *   'gets another chunk rather than a second version of the first'. The revision series the chunk
+ *   family does keep — allocation, publication, closing the prior head, the spent number staying
+ *   spent — is `infrastructure/sqlite/narrative-revisions.test.ts`, whose
+ *   '%s: an abandoned allocation is spent, and the head moves only when a publication lands'
+ *   runs over both families from its own `families` tuple. End to end, a revision replacing a standing head is
+ *   `chunk-narrative.int.test.ts`, 'omits a forgotten member with its gap while its neighbours
+ *   are submitted whole'.
  * - **"closes the summarization edges into the version it replaced"**, and **"leaves the
  *   replaced version's own provenance edge open"**. Both describe a supersession between two
  *   whole-session narratives. The chunk family's equivalent — the replaced head's
- *   `SUMMARIZED_BY` edges closed and the new head's open — is asserted directly at
- *   `chunk-narrative.int.test.ts` ('records the gap a suppressed member leaves…'), over a
- *   revision replacement rather than a session growth. The provenance half had no coverage in
- *   either family, so it is asserted here instead of retired.
+ *   `SUMMARIZED_BY` edges closed and the new head's open — is asserted at
+ *   `chunk-narrative.int.test.ts`, 'omits a forgotten member with its gap while its neighbours
+ *   are submitted whole', over a revision replacement rather than a session growth. The
+ *   provenance half had no coverage in either family, so it is asserted here instead of retired.
  * - **"converges on a retry rather than moving the stamps it already wrote"**, which reached into
  *   the legacy writer's supersession half directly. That path is the legacy repair, it refuses
  *   without a run-start fence, and it goes with the family; the standing operation for a graph
