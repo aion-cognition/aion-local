@@ -5,6 +5,92 @@ matter when you run the sharper commands, plus the knobs an operator actually tu
 command list itself is in the top-level README; `aion <command> --help` prints each one's
 flags.
 
+## Install profiles
+
+Two substrates, one substrate code. `AION_INSTALL_PROFILE` says which one this install runs on,
+`aion init` records it, and `aion doctor` and `aion status` read it back so they check the right
+thing without being told again.
+
+| | `docker` (default) | `native` |
+|---|---|---|
+| Neo4j | the `neo4j` compose service | a server on the host, installed by init if it is missing |
+| MCP server | the `aion-mcp` compose service | a launchd job, `com.aion.mcp` |
+| CLI | `./bin/aion` (runs in `aion-cli`) | `./bin/aion-native` (host node, sources `.env`) |
+| Both stores | the `aion_aion-data` and `aion_aion-neo4j` volumes | directories under `~/.aion` and Neo4j's own data directory |
+| Ollama | on the host either way, reached at `host.docker.internal` | on the host, reached at `127.0.0.1` |
+
+Either way it is one command to running:
+
+```
+./bin/aion init              # docker
+./bin/aion-native init --profile native
+```
+
+`init` is idempotent on both. A re-run against a healthy install reports what is already there
+and changes nothing: no container is recreated, no launchd job is bounced, and no configuration
+file is rewritten.
+
+### Bringing up the native profile
+
+Prerequisites: [Ollama](https://ollama.com) running on the host, and a host build, because the
+server and the CLI run from `packages/*/dist` rather than from an image.
+
+```
+npm ci && npm run build
+./bin/aion-native init --profile native
+```
+
+That one command does all of it. In order:
+
+1. Records the profile and its five addresses in `.env` (`AION_INSTALL_PROFILE`,
+   `AION_NEO4J_URI`, `AION_OLLAMA_URL`, `AION_DATA_DIR`, `AION_SQLITE_PATH`, `AION_LOG_FILE`).
+   An address you set yourself is kept rather than converted, and init says which it kept.
+2. Generates the Neo4j password into `.env` if there is not one there already.
+3. Brings up Neo4j. A server that already answers is left alone. Otherwise: `brew install neo4j`
+   if it is not installed, the matching graph-data-science jar fetched and checked against a
+   digest recorded in `packages/cli/src/gds-releases.ts`, the substrate's settings written into
+   `neo4j.conf` (the two `gds.*` procedure lines, heap 512m/1G, pagecache 512m, transaction-log
+   retention `1 days 256M`, Bolt on loopback), the initial password set, and the service started.
+4. Pulls and verifies the Ollama models the routing needs.
+5. Applies the graph schema and the migrations, creates the Member, Workspace and Substrate
+   backbone nodes, and records the substrate's birth.
+6. Writes `~/Library/LaunchAgents/com.aion.mcp.plist`, loads it with `launchctl bootstrap`, and
+   waits for `/health`. The job carries `KeepAlive`, `RunAtLoad`, and `ExitTimeOut` 20 seconds,
+   which is the drain the compose service had as `stop_grace_period`.
+7. Prints the `aion doctor` report, which is where the coverage contract, the eviction fence and
+   the Ollama tuning flags are reported.
+
+Then register the server with your harness, which `init` prints at the end, and the install is
+done.
+
+**What the launchd job does not do.** It reads `.env` as it was when init ran, because a launchd
+job inherits almost nothing and nothing in this build loads `.env` on the host. After editing
+`.env`, run init again (which rewrites and reloads the job) or
+`launchctl kickstart -k gui/$(id -u)/com.aion.mcp` if the file itself has not changed. Its
+`StandardOutPath` is `/dev/null`: the service's own logger writes the durable JSONL, and nothing
+rotates a launchd file. Its `StandardErrorPath` catches a failure that happens before the logger
+opens.
+
+**Where init stops, and what to run.** Every step that changes the machine names the command that
+finishes it by hand. These are the ones worth knowing in advance:
+
+| Refusal | What to run |
+|---|---|
+| no Neo4j and no Homebrew | install Homebrew, or install Neo4j and `export NEO4J_HOME` to its directory |
+| `brew install neo4j` failed | the same command, with brew's own error in front of you |
+| no measured plugin digest for the installed server's series | download the matching graph-data-science jar into the plugins directory yourself, or record its digest in `gds-releases.ts`; the refusal prints the URL |
+| the plugin download did not match its digest | nothing was installed and the file was deleted; check the network before retrying |
+| the server refused the password in `.env` | put the server's real password in `AION_NEO4J_PASSWORD`, or stop it and run `neo4j-admin dbms set-initial-password` |
+| Bolt never answered | `neo4j console` in the foreground, and the server log the refusal names |
+| `launchctl` could not load the job | the three `launchctl` commands the refusal prints |
+| the job loaded and `/health` never answered | the two log files and the `launchctl print` the refusal names |
+
+**The server version.** `compose.yaml` pins the pairing the substrate was measured against, Neo4j
+`2026.07.x` with graph-data-science `2026.07.0`. A native install takes whatever Neo4j it finds or
+Homebrew installs, and pairs the plugin to it. `aion doctor` reports which you have: a matched
+pair on a later series is a warning, since nobody has run the procedure census on it, and a
+mismatched pair is a failure, because the plugin is compiled against the kernel it ships beside.
+
 ## API costs
 
 Run `aion costs [--days N]` to group billed API responses by UTC day and calling surface.
@@ -453,12 +539,33 @@ running service, and a CLI run holds none, the same as `curiosity` and its intak
 A reset deletes everything the substrate holds, so it is a documented procedure rather than a
 command.
 
+**Both stores go, or neither.** A substrate is the graph and the database together, and the half
+that survives cannot be adopted by a new one: with the database dropped and the graph kept, the
+service throws `publication_foreign_graph_pairing` at its next start, and the other way round it
+throws `publication_guard_missing_or_ambiguous`. `aion init` and `aion doctor` both check the pair
+(check `store-pairing`) and refuse a half reset with the two drops printed, rather than leaving it
+to surface as a boot failure.
+
+On the docker profile:
+
 1. Stop the service: `docker compose --profile mcp down`.
 2. Optional, if you want a way back: take a cold copy of the two volumes while nothing is
    running.
 3. Drop them: `docker volume rm aion_aion-neo4j aion_aion-data`. This deletes the graph, the
    SQLite database, and the experience archive. Nothing survives it.
 4. `aion init full` (or `local`).
+
+On the native profile the same two drops are two directories:
+
+1. Stop the server: `launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.aion.mcp.plist`.
+2. Stop Neo4j: `brew services stop neo4j`, or however it runs.
+3. Drop the substrate's own directory: `rm -rf ~/.aion` (`$AION_DATA_DIR` if you moved it). That
+   is the SQLite database, the experience archive and the log.
+4. Drop the graph. Community Edition cannot replace its default database from Cypher, so it is a
+   file drop: with the server stopped, remove the `databases/neo4j` and `transactions/neo4j`
+   directories under Neo4j's data directory. `SHOW SETTINGS 'server.directories.data'` on a
+   running server names it, and on a Homebrew install it is `$(brew --prefix)/var/neo4j`.
+5. Start Neo4j again, then `./bin/aion-native init --profile native`.
 
 The next init is then the fresh-substrate case, so the first thing the new substrate remembers
 is being initialized.
@@ -563,9 +670,11 @@ ever opened, `disarmed` is one somebody opened and then stopped, and both remove
 
 ## Logs
 
-Everything writes structured JSONL to one file on the data volume, `/data/logs/aion.jsonl` by
-default. The service tees the same records to stdout, which `docker logs aion-aion-mcp-1`
-reads. A CLI run does not tee: stdout is where a command writes its answer, so a log record
+Everything writes structured JSONL to one file, `/data/logs/aion.jsonl` on the data volume by
+default and `~/.aion/logs/aion.jsonl` on the native profile. The service tees the same records to
+stdout, which `docker logs aion-aion-mcp-1` reads on the docker profile; the launchd job sends
+that copy to `/dev/null`, since nothing rotates a launchd file and the JSONL is the durable copy.
+A native install's pre-logger crash output lands in `aion-mcp.launchd.err.log` beside the JSONL. A CLI run does not tee: stdout is where a command writes its answer, so a log record
 there would break the single JSON object `--json` promises. The service logs under the name
 `aion-mcp`, and every CLI run under its command's name. `AION_LOG_LEVEL` moves the level
 (`debug` through `fatal`); writes are synchronous, so a crash keeps the tail that explains it.

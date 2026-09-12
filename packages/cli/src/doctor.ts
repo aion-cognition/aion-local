@@ -14,7 +14,6 @@ import {
   remoteRoutes,
   resolveProviderRouting,
   scanRedactionResidue,
-  verifyGdsAvailable,
   verifyOllamaChatModel,
   type Config,
   type GraphConnection,
@@ -28,9 +27,13 @@ import { parseArgs, type ArgSpec } from './args.js';
 import { mcpBaseUrl } from './compose.js';
 import {
   coverageCheck,
+  graphPairingCheck,
   hooksKeyedOnlyCheck,
+  installProfileCheck,
+  ollamaRuntimeProbe,
   queueLagCheck,
   readingHorizonCheck,
+  storePairingCheck,
 } from './doctor-checks.js';
 import { stdoutWriter, type Writer } from './output.js';
 import { withSubstrate } from './substrate.js';
@@ -178,13 +181,16 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
         return { ok: true, detail: `${connection.uri} (${health.agent ?? 'neo4j'})` };
       },
     },
+    { name: 'install-profile', run: () => Promise.resolve(installProfileCheck(config)) },
     {
       name: 'neo4j-gds',
       dependsOn: NEO4J_BOLT,
-      run: async () => {
-        const version = await verifyGdsAvailable(connection.driver, connection.uri);
-        return { ok: true, detail: `graph-data-science ${version}` };
-      },
+      run: () => graphPairingCheck(connection.driver, connection.uri),
+    },
+    {
+      name: 'store-pairing',
+      dependsOn: NEO4J_BOLT,
+      run: () => storePairingCheck(connection.driver, db, config),
     },
     {
       name: 'mcp-http',
@@ -390,6 +396,7 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
       name: 'coverage-state',
       run: () => Promise.resolve(coverageCheck(db)),
     },
+    { name: 'ollama-runtime', run: () => ollamaRuntimeProbe(config.ollama.url) },
     {
       name: 'hooks-keyed-only',
       run: () => Promise.resolve(hooksKeyedOnlyCheck(config, env)),

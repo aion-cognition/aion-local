@@ -102,7 +102,7 @@ export {
   readServedItems,
 } from './sqlite/served-items.js';
 
-export { DEFAULTS, envFileValue, loadConfig, ConfigError } from './config/index.js';
+export { DEFAULTS, envFileValue, loadConfig, parseEnvFile, ConfigError } from './config/index.js';
 export type { Config } from './config/index.js';
 
 export {
@@ -110,7 +110,20 @@ export {
   seedEnvFromTemplate,
   isManagedNeo4jUri,
   validateNeo4jEndpoint,
-  verifyGdsAvailable,
+  waitForBoltReady,
+} from './graph/provision.js';
+
+/**
+ * The server-and-plugin pairing check, which is also the GDS presence check `aion doctor` runs:
+ * `verifyGdsAvailable` is reached through these rather than named on its own. The native install
+ * profile is what needs the pairing half, since no image pins the two versions there.
+ * `readNeo4jPairing` reports; `verifyNeo4jPairing` refuses, and its error carries the remedy.
+ */
+export {
+  describePairing,
+  Neo4jPairingError,
+  readNeo4jPairing,
+  verifyNeo4jPairing,
 } from './graph/provision.js';
 
 export { latestAppliedGraphMigration, runGraphMigrations } from './graph/migrations.js';
@@ -211,6 +224,7 @@ export {
   checkOllamaReachable,
   listOllamaModels,
   provisionOllama,
+  readOllamaVersion,
   verifyOllamaChatModel,
 } from './providers/provisioning.js';
 export type { ProvisionEvent } from './providers/provisioning.js';

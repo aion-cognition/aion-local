@@ -1,7 +1,11 @@
 import {
   acceptsHookCapture,
+  describePairing,
+  Neo4jPairingError,
   queueLagSnapshot,
   readCoverageState,
+  readNeo4jPairing,
+  readOllamaVersion,
   resolveProviderRouting,
   scanHorizonIntegrity,
   type Config,
@@ -9,15 +13,162 @@ import {
   type HorizonIntegrity,
   type SqliteHandle,
 } from '@aion/core';
+import { runningInContainer } from '@aion/mcp';
 import type { Driver } from 'neo4j-driver';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 import type { CheckResult } from './doctor.js';
+import {
+  describeInstallProfile,
+  readStorePairing,
+  storeDropCommands,
+  type StorePairing,
+} from './install-profile.js';
 
 /**
  * The checks that read a substrate and answer with a verdict, kept apart from the file that
  * orders them and prints the report. `doctor.ts` composes; each function here owns one
  * invariant and the sentence it reports it in.
  */
+
+const execFileAsync = promisify(execFile);
+
+/** Which substrate this install runs on. Informational, and the first thing a report needs. */
+export function installProfileCheck(config: Config): CheckResult {
+  return { ok: true, detail: describeInstallProfile(config) };
+}
+
+/**
+ * Server version, plugin version and the verdict on the pairing. The docker profile pins both
+ * through the image, so this only ever warns where somebody assembled the server themselves;
+ * missing GDS fails on either profile, and the failure prints the install steps, because a
+ * substrate without gds procedures loses community detection and node similarity outright.
+ */
+export async function graphPairingCheck(driver: Driver, uri: string): Promise<CheckResult> {
+  try {
+    const pairing = await readNeo4jPairing(driver, uri);
+    const detail = describePairing(pairing);
+    if (!pairing.matched) {
+      return { ok: false, detail };
+    }
+    return pairing.verified ? { ok: true, detail } : { ok: true, warn: true, detail };
+  } catch (err) {
+    if (!(err instanceof Neo4jPairingError)) {
+      throw err;
+    }
+    return { ok: false, detail: [err.message, ...err.remedy].join('\n        ') };
+  }
+}
+
+/** The verdict in one sentence, with the drops named for the profile that owns the stores. */
+export function storePairingDetail(pairing: StorePairing, config: Config): CheckResult {
+  if (pairing === 'paired') {
+    return { ok: true, detail: 'graph backbone and schema history are the same substrate' };
+  }
+  if (pairing === 'fresh') {
+    return { ok: true, warn: true, detail: 'no substrate in either store yet; run `aion init`' };
+  }
+  const kept = pairing === 'graph-without-database' ? 'the graph' : 'the database';
+  return {
+    ok: false,
+    detail: [
+      `only ${kept} holds a substrate: this is a half reset, and the service refuses at its next`,
+      'start rather than serving a graph its receipts do not describe. Drop both, then init:',
+      ...storeDropCommands(config.install.profile, config.operational.dataDir).map(
+        (line) => `  ${line}`,
+      ),
+    ].join('\n        '),
+  };
+}
+
+/** The same verdict over a live substrate, which is how `aion doctor` reaches it. */
+export async function storePairingCheck(
+  driver: Driver,
+  db: SqliteHandle,
+  config: Config,
+): Promise<CheckResult> {
+  return storePairingDetail(await readStorePairing(driver, db), config);
+}
+
+/**
+ * The two daemon-level settings the local generation route was measured with. Neither is an
+ * Ollama config setting: they are environment variables of the `ollama serve` process, so the
+ * HTTP API cannot report them and a restart or an upgrade of the daemon silently drops them —
+ * which is the whole reason this check exists rather than a note in a runbook.
+ */
+export const OLLAMA_TUNING_VARS = ['OLLAMA_FLASH_ATTENTION', 'OLLAMA_KV_CACHE_TYPE'] as const;
+
+/** What an operator runs where this process cannot see the daemon's process table. */
+export const OLLAMA_ENV_PROBE = 'ps eww $(pgrep -f "ollama serve")';
+
+function daemonSetting(daemonEnv: string, name: string): string | undefined {
+  const token = daemonEnv
+    .split(/\s+/)
+    .find((entry) => entry.startsWith(`${name}=`) && entry.length > name.length + 1);
+  return token?.slice(name.length + 1);
+}
+
+export type OllamaRuntime = {
+  readonly version: string;
+  /** The daemon's process environment as one blob, or undefined where it cannot be read. */
+  readonly daemonEnv: string | undefined;
+};
+
+export function ollamaRuntimeCheck(runtime: OllamaRuntime): CheckResult {
+  const version = `ollama ${runtime.version}`;
+  if (runtime.daemonEnv === undefined) {
+    return {
+      ok: true,
+      detail: `${version}; ${OLLAMA_TUNING_VARS.join(' and ')} are process environment and are not visible from here: ${OLLAMA_ENV_PROBE}`,
+    };
+  }
+  const readings = OLLAMA_TUNING_VARS.map((name) => ({
+    name,
+    value: daemonSetting(runtime.daemonEnv ?? '', name),
+  }));
+  const missing = readings.filter((reading) => reading.value === undefined);
+  const set = readings
+    .filter((reading) => reading.value !== undefined)
+    .map((reading) => `${reading.name}=${reading.value ?? ''}`);
+  if (missing.length === 0) {
+    return { ok: true, detail: `${version}, ${set.join(' ')}` };
+  }
+  return {
+    ok: true,
+    warn: true,
+    detail:
+      `${version}; ${missing.map((reading) => reading.name).join(', ')} unset on the running ` +
+      `daemon (an upgrade or a service restart drops them)${set.length === 0 ? '' : `, ${set.join(' ')}`}`,
+  };
+}
+
+/**
+ * Reads the daemon's environment from the process table, which is the only place it is written
+ * down. A CLI run inside the container is asking about a process on another machine as far as
+ * the kernel is concerned, so it does not ask.
+ */
+export async function readOllamaDaemonEnv(): Promise<string | undefined> {
+  if (runningInContainer()) {
+    return undefined;
+  }
+  try {
+    const { stdout } = await execFileAsync('/bin/sh', ['-c', OLLAMA_ENV_PROBE]);
+    return stdout.trim() === '' ? undefined : stdout;
+  } catch {
+    // No pgrep, no daemon of its own on this host, or a process table this user cannot read.
+    return undefined;
+  }
+}
+
+/** The same verdict over a live daemon, which is how `aion doctor` reaches it. */
+export async function ollamaRuntimeProbe(baseUrl: string): Promise<CheckResult> {
+  const [version, daemonEnv] = await Promise.all([
+    readOllamaVersion(baseUrl),
+    readOllamaDaemonEnv(),
+  ]);
+  return ollamaRuntimeCheck({ version, daemonEnv });
+}
 
 /**
  * Pure SQLite, no Neo4j: `aion doctor` printed "8 checks passed" with 4,000+ jobs pending,
@@ -107,8 +258,8 @@ export function evictionFence(report: CoverageStateReport): string {
     // operation is named because re-running the command is what finishes it.
     return (
       `eviction fence DISARMED: a stop is owed by ${report.evictionStopRequestedBy} and is not ` +
-      'recorded yet. Nothing is removed. `aion evict disarm` finishes it; `aion evict arm` ' +
-      'refuses until it is finished'
+      'recorded yet. Nothing is removed. `aion evict disarm` finishes it; the service does not ' +
+      'arm over a stop that is owed'
     );
   }
   if (report.evictionGate === 'disarmed') {
@@ -118,7 +269,9 @@ export function evictionFence(report: CoverageStateReport): string {
     );
   }
   if (report.evictionGate === 'unarmed') {
-    return 'eviction fence closed (no compatibility revision)';
+    // Closed and not closed by anybody: the service arms it at each start, so this is either a
+    // substrate that has not started yet or one whose preconditions do not hold.
+    return 'eviction fence closed (no compatibility revision); the service arms it at start';
   }
   return `eviction fence ARMED at compatibility revision ${String(report.evictionCompatibilityRevision)}`;
 }

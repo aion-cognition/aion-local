@@ -29,6 +29,162 @@ export class Neo4jGdsUnavailableError extends Error {
   }
 }
 
+/**
+ * The server and plugin this build is verified against. `compose.yaml` pins the image to the
+ * same pairing and records what was measured on it; an install that assembles Neo4j by hand has
+ * no image to pin, so it is checked against these two constants instead. A patch release inside
+ * the series is accepted, which is why the comparison is on the series rather than the version.
+ */
+export const PINNED_NEO4J_SERIES = '2026.07';
+export const PINNED_GDS_SERIES = '2026.07';
+export const VERIFIED_GDS_VERSION = '2026.07.0';
+
+export type Neo4jPairing = {
+  readonly serverVersion: string;
+  readonly gdsVersion: string;
+  /**
+   * Server and plugin on the same CalVer series, which is the requirement rather than a
+   * preference: GDS is compiled against the kernel it ships beside, and a mismatched pair is
+   * where a procedure signature moves under the substrate. False is a refusal.
+   */
+  readonly matched: boolean;
+  /**
+   * That pair is also the one this build was measured on. False is a warning and not a refusal:
+   * a matched pair on a later series is a working substrate that nobody has run the procedure
+   * census against, and the operator who has one deserves to be told which it is.
+   */
+  readonly verified: boolean;
+};
+
+/**
+ * A Neo4j this build cannot use, with what to do about it. The remedy is carried rather than
+ * only formatted into the message: the CLI prints it as its own block, and a message that ran
+ * four numbered steps into one line is a message nobody follows.
+ */
+export class Neo4jPairingError extends Error {
+  readonly remedy: readonly string[];
+
+  constructor(message: string, remedy: readonly string[], options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'Neo4jPairingError';
+    this.remedy = remedy;
+  }
+}
+
+/** `2026.07.1` and `2026.07` both read as `2026.07`; anything unparseable stays as it came. */
+function versionSeries(version: string): string {
+  const parts = version.split('.');
+  return parts.length < 2 ? version : `${parts[0] ?? ''}.${parts[1] ?? ''}`;
+}
+
+/**
+ * What an operator has to do to put GDS on a server they run themselves. The plugins directory
+ * is read off the server when it will answer, because the one on this machine beats a path from
+ * a manual: a Homebrew install, a tarball and a package install each keep it somewhere else.
+ */
+export function gdsRemedyLines(pluginsDir: string | undefined): readonly string[] {
+  return [
+    `1. Download the graph-data-science jar for the ${PINNED_GDS_SERIES} series (the open-gds jar,`,
+    '   github.com/neo4j/graph-data-science/releases; neo4j.com/deployment-center is the other source).',
+    `2. Put it in this server's plugins directory: ${pluginsDir ?? '$NEO4J_HOME/plugins'}`,
+    '3. Add both lines to neo4j.conf. The first lets the procedures run unsandboxed, the second',
+    '   admits them to the procedure allowlist, and GDS needs each of them:',
+    '     dbms.security.procedures.unrestricted=gds.*',
+    '     dbms.security.procedures.allowlist=gds.*',
+    '4. Restart Neo4j and run this command again.',
+  ];
+}
+
+/** Best effort: the setting read needs privileges an install may not grant, and is never fatal. */
+async function readPluginsDirectory(driver: Driver): Promise<string | undefined> {
+  try {
+    const result = await driver.executeQuery(
+      "SHOW SETTINGS 'server.directories.plugins' YIELD value RETURN value",
+    );
+    const value = result.records[0]?.get('value') as string | undefined;
+    return value === undefined || value === '' ? undefined : value;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The version the handshake already carries, so no procedure has to be callable for it to be
+ * read: the driver reports `Neo4j/2026.07.1` as its agent, which is the same string
+ * `GraphConnection.health()` prints. A server that answers in another shape reads as unknown and
+ * fails the series comparison, which is the safe direction.
+ */
+async function readServerVersion(driver: Driver): Promise<string> {
+  const info = await driver.getServerInfo();
+  const agent = info.agent ?? '';
+  const slash = agent.lastIndexOf('/');
+  return slash === -1 ? 'unknown' : agent.slice(slash + 1);
+}
+
+/**
+ * Server and GDS version together, with the verdict on whether the two are the pairing this
+ * build was measured on. Missing GDS throws with the install steps; a mismatched pairing is
+ * reported rather than thrown, because what to do about it differs by install profile: a managed
+ * image pins it, and only a hand-assembled server can act on it.
+ */
+export async function readNeo4jPairing(driver: Driver, uri: string): Promise<Neo4jPairing> {
+  const serverVersion = await readServerVersion(driver);
+  let gdsVersion: string;
+  try {
+    gdsVersion = await verifyGdsAvailable(driver, uri);
+  } catch (err) {
+    throw new Neo4jPairingError(
+      `graph-data-science is not installed on the Neo4j at ${uri} (server ${serverVersion}). ` +
+        'The substrate needs it: community detection and node similarity both run as gds procedures.',
+      gdsRemedyLines(await readPluginsDirectory(driver)),
+      { cause: err },
+    );
+  }
+  const series = versionSeries(serverVersion);
+  return {
+    serverVersion,
+    gdsVersion,
+    matched: series === versionSeries(gdsVersion),
+    verified: series === PINNED_NEO4J_SERIES && versionSeries(gdsVersion) === PINNED_GDS_SERIES,
+  };
+}
+
+const VERIFIED_PAIRING = `${PINNED_NEO4J_SERIES} with graph-data-science ${VERIFIED_GDS_VERSION}`;
+
+/** One line for a report: what is running, and how far it is from the pairing that was measured. */
+export function describePairing(pairing: Neo4jPairing): string {
+  const verdict = verdictFor(pairing);
+  return `neo4j ${pairing.serverVersion}, graph-data-science ${pairing.gdsVersion}: ${verdict}`;
+}
+
+function verdictFor(pairing: Neo4jPairing): string {
+  if (pairing.verified) {
+    return `the verified pairing (${VERIFIED_PAIRING})`;
+  }
+  if (pairing.matched) {
+    return `matched, and past the verified pairing (${VERIFIED_PAIRING}): nobody has run the procedure census on this one`;
+  }
+  return 'MISMATCHED: the plugin is compiled against another kernel series';
+}
+
+/**
+ * The same read as a refusal, for the install that has to act on it. A mismatched pair is where a
+ * procedure signature moves under the substrate, so a native install stops rather than migrating
+ * a graph it may not be able to read back. A matched pair past the verified series is returned,
+ * and the caller reports it.
+ */
+export async function verifyNeo4jPairing(driver: Driver, uri: string): Promise<Neo4jPairing> {
+  const pairing = await readNeo4jPairing(driver, uri);
+  if (!pairing.matched) {
+    throw new Neo4jPairingError(`${uri}: ${describePairing(pairing)}`, [
+      `Install the graph-data-science release for the ${versionSeries(pairing.serverVersion)} series,`,
+      "or a server on the plugin's series. The two move together by design.",
+      ...gdsRemedyLines(await readPluginsDirectory(driver)),
+    ]);
+  }
+  return pairing;
+}
+
 export type Neo4jEndpoint = {
   uri: string;
   password: string;

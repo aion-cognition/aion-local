@@ -5,5 +5,5 @@
  */
 export type { Config } from './schema.js';
 export { DEFAULTS } from './defaults.js';
-export { envFileValue } from './env-file.js';
+export { envFileValue, parseEnvFile } from './env-file.js';
 export { loadConfig, ConfigError } from './load-config.js';

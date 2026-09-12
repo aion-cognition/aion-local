@@ -19,8 +19,6 @@ import {
   type Logger,
   type ProvisionEvent,
 } from '@aion/core';
-import { USAGE_PROTOCOL } from '@aion/mcp';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 
 import { CliUsageError, parseArgs, unknownOption, type ArgSpec } from './args.js';
@@ -33,9 +31,22 @@ import {
   waitForMcpHealth,
 } from './compose.js';
 import { installFullProfile } from './hooks-cmd.js';
+import {
+  readStorePairing,
+  storePairingRefusal,
+  upsertEnvValue,
+  type InstallProfile,
+} from './install-profile.js';
 import { lifecycleIntakeDeps, type LifecycleTarget } from './lifecycle.js';
+import {
+  prepareNativeProfile,
+  prepareNativeService,
+  provisionNativeGraph,
+  reportNativeHealth,
+} from './native-install.js';
 import { stdoutWriter, type Writer } from './output.js';
 import { envFilePath, envTemplatePath, resolveRepoDir } from './paths.js';
+import { renderRegistration } from './registration.js';
 import { withSubstrate } from './substrate.js';
 
 export const GIT_USER_NAME_ENV_VAR = 'AION_GIT_USER_NAME';
@@ -57,29 +68,42 @@ const MISSING_MEMBER_NAME =
  * `local` is the substrate on its own: Ollama for every generation role, no harness hooks.
  * `full` adds the Anthropic key and the Claude Code shims that make the recall and reflection
  * cadence a schedule rather than a judgment call.
+ *
+ * This is the generation profile, and `--profile` is the install profile: what the substrate
+ * runs on, docker or native. Two different questions, and the second one is a flag because it is
+ * asked once per install and read afterwards from config.
  */
 export type InitProfile = 'local' | 'full';
 
 const SPEC: ArgSpec = {
   command: 'init',
-  usage: 'aion init [local | full] [--yes]',
-  options: [{ flag: '--yes', alias: '-y' }],
+  usage: 'aion init [local | full] [--profile docker | native] [--yes]',
+  options: [
+    { flag: '--yes', alias: '-y' },
+    { flag: '--profile', takesValue: true },
+  ],
   maxPositionals: 1,
-  supported: ['local', 'full', '--yes'],
+  supported: ['local', 'full', '--profile', '--yes'],
 };
 
 export type InitFlags = {
   readonly assumeYes: boolean;
   readonly profile: InitProfile | undefined;
+  /** Absent leaves whatever `AION_INSTALL_PROFILE` already says, which defaults to docker. */
+  readonly install: InstallProfile | undefined;
 };
 
 export function parseInitFlags(argv: readonly string[]): InitFlags {
-  const { flags, positionals } = parseArgs(SPEC, argv);
+  const { flags, values, positionals } = parseArgs(SPEC, argv);
   const [profile] = positionals;
   if (profile !== undefined && profile !== 'local' && profile !== 'full') {
     throw unknownOption(SPEC, profile);
   }
-  return { assumeYes: flags.has('--yes'), profile };
+  const install = values.get('--profile');
+  if (install !== undefined && install !== 'docker' && install !== 'native') {
+    throw new CliUsageError(`--profile takes docker or native, not '${install}'`);
+  }
+  return { assumeYes: flags.has('--yes'), profile, install };
 }
 
 export type InitProfileInput = {
@@ -155,18 +179,6 @@ export async function resolveMemberName(input: MemberNameInput): Promise<string>
   return chosen;
 }
 
-function upsertEnvValue(path: string, key: string, value: string): void {
-  const lines = existsSync(path) ? readFileSync(path, 'utf8').split('\n') : [];
-  const index = lines.findIndex((entry) => entry.startsWith(`${key}=`));
-  const entry = `${key}=${value}`;
-  if (index === -1) {
-    lines.push(entry);
-  } else {
-    lines[index] = entry;
-  }
-  writeFileSync(path, lines.join('\n'));
-}
-
 async function askOnTerminal(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
@@ -205,34 +217,11 @@ function provisionReporter(write: Writer, logger: Logger): (event: ProvisionEven
   };
 }
 
-/** The one-time command that writes the server into Claude's user config. Every future session then connects with no per-session setup. */
-export function registrationCommand(port: number): string {
-  return `claude mcp add -s user --transport http aion http://127.0.0.1:${String(port)}/mcp`;
-}
-
-/** Same registration, as the raw JSON Claude Code's own config uses for an HTTP MCP server. For manual edits and other harnesses. */
-export function registrationJson(port: number): string {
-  return JSON.stringify(
-    { mcpServers: { aion: { type: 'http', url: `http://127.0.0.1:${String(port)}/mcp` } } },
-    null,
-    2,
-  );
-}
-
-function renderRegistration(port: number, write: Writer): void {
-  write('');
-  write('MCP registration (one time; every future Claude Code session connects automatically):');
-  write(`  ${registrationCommand(port)}`);
-  write('');
-  write('Equivalent raw JSON, for manual config or other harnesses:');
-  write(registrationJson(port));
-  write('');
-  write('Add to your CLAUDE.md so the agent knows when to call recall and reflection:');
-  write('');
-  write(USAGE_PROTOCOL);
-}
-
 async function provisionMcpService(config: Config, write: Writer, repoDir: string): Promise<void> {
+  if (config.install.profile === 'native') {
+    await prepareNativeService(config, repoDir, write);
+    return;
+  }
   write(`starting compose service ${MCP_SERVICE}`);
   await startService(composeRunner(repoDir), MCP_SERVICE, MCP_PROFILE);
   write(`waiting for aion-mcp health on port ${String(config.operational.mcpPort)}`);
@@ -246,6 +235,10 @@ async function provisionGraph(
   write: Writer,
   repoDir: string,
 ): Promise<void> {
+  if (config.install.profile === 'native') {
+    await provisionNativeGraph(config, password, write);
+    return;
+  }
   if (isManagedNeo4jUri(config.neo4j.uri)) {
     write(`starting compose service ${NEO4J_SERVICE}`);
     await startService(composeRunner(repoDir), NEO4J_SERVICE);
@@ -303,17 +296,21 @@ async function initialize(
   logger: Logger,
 ): Promise<void> {
   const repoDir = resolveRepoDir();
-  const managed = isManagedNeo4jUri(config.neo4j.uri);
+  // Either profile's own server: compose's, or the one the native profile installs and starts.
+  // Both get a generated password recorded in `.env`, because the install that owns the server is
+  // the install that can set it. Anything else is a server somebody else runs, and its password
+  // is theirs to supply.
+  const owned = isManagedNeo4jUri(config.neo4j.uri) || config.install.profile === 'native';
 
-  if (!managed && config.neo4j.password === '') {
+  if (!owned && config.neo4j.password === '') {
     throw new CliUsageError(
       `AION_NEO4J_PASSWORD is required for the external Neo4j at ${config.neo4j.uri}`,
     );
   }
-  const password = managed
+  const password = owned
     ? ensureNeo4jPassword(envFilePath(repoDir), envTemplatePath(repoDir))
     : config.neo4j.password;
-  if (managed) {
+  if (owned) {
     write(`neo4j password ready in ${envFilePath(repoDir)}`);
   }
 
@@ -350,6 +347,15 @@ async function initialize(
   const store = new SqliteStore({ filePath: config.sqlite.path });
   const connection = new GraphConnection({ uri: config.neo4j.uri, password });
   try {
+    // Before the migrations, because running them is what makes a dropped database look like a
+    // fresh one and hides that the graph beside it is not.
+    const pairing = await readStorePairing(connection.driver, store.db);
+    if (pairing !== 'fresh' && pairing !== 'paired') {
+      throw new CliUsageError(
+        storePairingRefusal(pairing, config.install.profile, config.operational.dataDir).join('\n'),
+      );
+    }
+
     const { applied, created } = await runGraphMigrations(connection.driver, store.db, {
       embedDimension: config.models.embedDimension,
     });
@@ -388,6 +394,11 @@ async function initialize(
   }
 
   await provisionMcpService(config, write, repoDir);
+  if (config.install.profile === 'native') {
+    // The whole machine changed in this run, so it closes with the report that judges it rather
+    // than with a summary written here. The docker profile ends where it always has.
+    await reportNativeHealth(config, password, write);
+  }
   renderRegistration(config.operational.mcpPort, write);
 }
 
@@ -444,7 +455,11 @@ export function runInit(
         interactive: process.stdin.isTTY,
         ask: askOnTerminal,
       });
-      const resolved = profile === 'full' ? await prepareFullProfile(config, flags, write) : config;
+      // The addresses first, the key second: both rewrite `.env` and re-read config, and the key
+      // is settled against the substrate this install is actually going to talk to.
+      const based =
+        flags.install === 'native' ? prepareNativeProfile(write, resolveRepoDir()) : config;
+      const resolved = profile === 'full' ? await prepareFullProfile(based, flags, write) : based;
 
       await initialize(resolved, flags, profile, write, logger);
 

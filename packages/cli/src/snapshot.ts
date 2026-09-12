@@ -34,6 +34,7 @@ import {
 
 import { ageOf, formatEdgeWeights } from './format.js';
 import { renderGeneration } from './generation-section.js';
+import { describeInstallProfile } from './install-profile.js';
 import { renderLanes } from './lanes-section.js';
 import {
   collectMaintenance,
@@ -212,6 +213,7 @@ export function renderSnapshot(
   write: Writer,
   now: number = Date.now(),
 ): void {
+  write(`profile  ${describeInstallProfile(config)}`);
   write(
     `neo4j    ${snapshot.neo4j.reachable ? 'up' : 'down'}  ${snapshot.neo4j.uri} (${snapshot.neo4j.detail})`,
   );

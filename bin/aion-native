@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Host wrapper for the native install profile: the same CLI, run on host Node against host
+# processes, with no image and no container. `bin/aion` is the docker profile's wrapper and
+# drives compose; this one only sources `.env` and executes.
+#
+# Sourcing the file is the point. Compose hands `.env` to the containers, so nothing in this
+# build loads it on the host, and a CLI run that did not source it would resolve the compose
+# service names instead of the loopback addresses a native install recorded.
+set -eo pipefail
+
+SELF="${BASH_SOURCE[0]}"
+while [ -L "$SELF" ]; do
+  TARGET="$(readlink "$SELF")"
+  case "$TARGET" in
+    /*) SELF="$TARGET" ;;
+    *) SELF="$(dirname -- "$SELF")/$TARGET" ;;
+  esac
+done
+REPO_DIR="$(cd -- "$(dirname -- "$SELF")/.." && pwd)"
+CLI_MAIN="$REPO_DIR/packages/cli/dist/main.js"
+
+if [ ! -f "$CLI_MAIN" ]; then
+  echo "aion: $CLI_MAIN is not built; run \`npm ci && npm run build\` in $REPO_DIR" >&2
+  exit 1
+fi
+
+if [ -f "$REPO_DIR/.env" ]; then
+  # `set -a` exports every assignment the file makes; an already-exported value still wins,
+  # because the shell's own environment is applied over the file by the re-export below.
+  PRESET="$(export -p)"
+  set -a
+  # shellcheck disable=SC1091
+  . "$REPO_DIR/.env"
+  set +a
+  eval "$PRESET"
+fi
+
+AION_GIT_USER_NAME="${AION_GIT_USER_NAME:-$(git -C "$REPO_DIR" config user.name 2>/dev/null || true)}"
+# HEAD is what `doctor` compares against the sha the running server was started with, which is
+# how a service left behind by an older checkout shows up as stale rather than as healthy.
+AION_REPO_HEAD_SHA="$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || true)"
+export AION_GIT_USER_NAME AION_REPO_HEAD_SHA
+export AION_REPO_PATH="$REPO_DIR"
+
+hooks_installed_in() {
+  [ -f "$1" ] && grep -q 'hook-main.js' "$1"
+}
+
+if hooks_installed_in "$HOME/.claude/settings.json" ||
+  hooks_installed_in "${CODEX_HOME:-$HOME/.codex}/hooks.json"; then
+  AION_HOOKS_INSTALLED=true
+else
+  AION_HOOKS_INSTALLED=false
+fi
+export AION_HOOKS_INSTALLED
+
+exec node "$CLI_MAIN" "$@"

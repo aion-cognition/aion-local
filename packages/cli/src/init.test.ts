@@ -2,12 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   parseInitFlags,
-  registrationCommand,
-  registrationJson,
   resolveAnthropicKey,
   resolveInitProfile,
   resolveMemberName,
 } from './init.js';
+import { registrationCommand, registrationJson } from './registration.js';
 
 const never = async (): Promise<string> => {
   throw new Error('prompt must not run');
@@ -25,7 +24,7 @@ describe('parseInitFlags', () => {
 
   it('rejects an unknown option', () => {
     expect(() => parseInitFlags(['--force'])).toThrow(
-      /unknown option .* for init \(supported: local, full, --yes\)/,
+      /unknown option .* for init \(supported: local, full, --profile, --yes\)/,
     );
   });
 
@@ -37,8 +36,27 @@ describe('parseInitFlags', () => {
 
   it('rejects a word that is neither profile', () => {
     expect(() => parseInitFlags(['medium'])).toThrow(
-      /unknown option .* for init \(supported: local, full, --yes\)/,
+      /unknown option .* for init \(supported: local, full, --profile, --yes\)/,
     );
+  });
+
+  it('takes the install profile as a flag, and leaves it unset to follow config', () => {
+    expect(parseInitFlags(['--profile', 'native']).install).toBe('native');
+    expect(parseInitFlags(['full', '--profile', 'docker', '--yes'])).toEqual({
+      assumeYes: true,
+      profile: 'full',
+      install: 'docker',
+    });
+    expect(parseInitFlags([]).install).toBeUndefined();
+  });
+
+  it('refuses an install profile it does not have, rather than defaulting quietly', () => {
+    // The flag decides whether init drives compose or a host machine. A typo that fell through to
+    // the default would bring up the other substrate.
+    expect(() => parseInitFlags(['--profile', 'podman'])).toThrow(
+      "--profile takes docker or native, not 'podman'",
+    );
+    expect(() => parseInitFlags(['--profile'])).toThrow('--profile needs a value');
   });
 });
 
