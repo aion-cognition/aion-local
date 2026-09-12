@@ -26,7 +26,12 @@ import { dirname, join } from 'node:path';
 
 import { parseArgs, type ArgSpec } from './args.js';
 import { mcpBaseUrl } from './compose.js';
-import { hooksKeyedOnlyCheck, queueLagCheck, readingHorizonCheck } from './doctor-checks.js';
+import {
+  coverageCheck,
+  hooksKeyedOnlyCheck,
+  queueLagCheck,
+  readingHorizonCheck,
+} from './doctor-checks.js';
 import { stdoutWriter, type Writer } from './output.js';
 import { withSubstrate } from './substrate.js';
 
@@ -380,6 +385,10 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
     {
       name: 'queue-lag',
       run: () => Promise.resolve(queueLagCheck(db, config)),
+    },
+    {
+      name: 'coverage-state',
+      run: () => Promise.resolve(coverageCheck(db)),
     },
     {
       name: 'hooks-keyed-only',

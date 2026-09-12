@@ -1,9 +1,11 @@
 import {
   acceptsHookCapture,
   queueLagSnapshot,
+  readCoverageState,
   resolveProviderRouting,
   scanHorizonIntegrity,
   type Config,
+  type CoverageStateReport,
   type HorizonIntegrity,
   type SqliteHandle,
 } from '@aion/core';
@@ -84,6 +86,48 @@ export function horizonIntegrityCheck(report: HorizonIntegrity): CheckResult {
 /** The same verdict over a live substrate, which is how `aion doctor` reaches it. */
 export async function readingHorizonCheck(driver: Driver): Promise<CheckResult> {
   return horizonIntegrityCheck(await scanHorizonIntegrity(driver));
+}
+
+/**
+ * What the substrate says it covers, and the fence it says nothing about.
+ *
+ * A preparing contract is the state a substrate is in between initialization and the activation
+ * the service publishes on its next start. It serves, so this warns rather than fails, and it
+ * names what the state costs: no temporal read carries a horizon while it holds. An unreadable
+ * record fails, because every covered read refuses against one, present-tense reads included.
+ *
+ * The eviction clause is spelled out rather than left to inference. The two gates live on one
+ * row and an active contract arms nothing.
+ */
+export function coverageStateCheck(report: CoverageStateReport): CheckResult {
+  const fence =
+    report.evictionGate === 'unarmed'
+      ? 'eviction fence closed (no compatibility revision)'
+      : `eviction fence ARMED at compatibility revision ${String(report.evictionCompatibilityRevision)}`;
+  if (report.coverageState === 'failed') {
+    return {
+      ok: false,
+      detail: `no servable coverage record; every covered read refuses. ${fence}`,
+    };
+  }
+  if (report.coverageState === 'preparing') {
+    return {
+      ok: true,
+      warn: true,
+      detail:
+        'contract preparing: temporal reads answer partial with coverage_contract_not_active, ' +
+        `and no read carries a history horizon. The service activates it at start. ${fence}`,
+    };
+  }
+  return {
+    ok: true,
+    detail: `contract active, history since ${report.historySince ?? 'unrecorded'}. ${fence}`,
+  };
+}
+
+/** The same verdict over a live substrate, which is how `aion doctor` reaches it. */
+export function coverageCheck(db: SqliteHandle): CheckResult {
+  return coverageStateCheck(readCoverageState(db));
 }
 
 /**

@@ -1,4 +1,4 @@
-import type { Logger, PlasticityCounters, QueueLagSnapshot } from '@aion/core';
+import type { CoverageStateReport, Logger, PlasticityCounters, QueueLagSnapshot } from '@aion/core';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { ErrorCode, isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { randomUUID } from 'node:crypto';
@@ -75,6 +75,12 @@ export type AionMcpServiceOptions = {
    * on purpose; `aion status` is where it belongs.
    */
   readonly plasticity?: () => PlasticityCounters;
+  /**
+   * The coverage contract in force and the eviction fence beside it, both SQLite-only. A probe
+   * reading `status: ok` learns the process is up; these say what its answers are allowed to
+   * claim, and whether anything may be removed from the substrate.
+   */
+  readonly coverage?: () => CoverageStateReport;
 };
 
 export class AionMcpService {
@@ -86,6 +92,7 @@ export class AionMcpService {
   readonly #http: HttpServer;
   readonly #queueLag: (() => QueueLagSnapshot) | undefined;
   readonly #plasticity: (() => PlasticityCounters) | undefined;
+  readonly #coverage: (() => CoverageStateReport) | undefined;
   readonly #inFlight: InFlightCalls;
   #stopping = false;
 
@@ -98,6 +105,7 @@ export class AionMcpService {
     this.#inFlight = new InFlightCalls(options.logger, options.drainTimeoutMs ?? DRAIN_TIMEOUT_MS);
     this.#queueLag = options.queueLag;
     this.#plasticity = options.plasticity;
+    this.#coverage = options.coverage;
     this.#http = createServer((req, res) => {
       void this.#route(req, res);
     });
@@ -195,6 +203,7 @@ export class AionMcpService {
             sessions: this.#sessions.size,
             queueLag: this.#queueLag,
             plasticity: this.#plasticity,
+            coverage: this.#coverage,
           }),
         );
         return;

@@ -30,6 +30,7 @@ import {
   purgeServedItemsIdleSince,
   queueLagSnapshot,
   recallResultFor,
+  readCoverageState,
   readMemberName,
   RecallSideEffects,
   recordGenerationOutcome,
@@ -414,6 +415,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       },
       queueLag: () => queueLagSnapshot(store.db, config.operational.workerMaxAttempts),
       plasticity: () => plasticityCounters(store.db),
+      coverage: () => readCoverageState(store.db),
     });
 
     // The primary trigger, not the fallback: a client's close() tears down its own

@@ -1,4 +1,4 @@
-import type { PlasticityCounters, QueueLagSnapshot } from '@aion/core';
+import type { CoverageStateReport, PlasticityCounters, QueueLagSnapshot } from '@aion/core';
 
 import { DESCRIPTIONS_VERSION } from './descriptions.js';
 
@@ -16,6 +16,7 @@ export type HealthSources = {
    */
   readonly queueLag: (() => QueueLagSnapshot) | undefined;
   readonly plasticity: (() => PlasticityCounters) | undefined;
+  readonly coverage: (() => CoverageStateReport) | undefined;
 };
 
 /**
@@ -65,6 +66,30 @@ function plasticityFields(
   };
 }
 
+/**
+ * What the substrate covers, and the separate fence that decides whether anything may be
+ * removed from it. `status: ok` is liveness and says nothing about either, so a probe that only
+ * reads the top-level status cannot tell a substrate serving full history from one serving none.
+ *
+ * The eviction keys are here for the same reason they are in `aion doctor`: the two gates sit on
+ * one row, and an active contract arms nothing.
+ */
+function coverageFields(
+  coverage: (() => CoverageStateReport) | undefined,
+): Record<string, unknown> {
+  if (coverage === undefined) {
+    return {};
+  }
+  const report = coverage();
+  return {
+    coverage_state: report.coverageState,
+    coverage_history_since: report.historySince,
+    coverage_epoch: report.coverageEpoch,
+    eviction_gate: report.evictionGate,
+    eviction_compatibility_revision: report.evictionCompatibilityRevision,
+  };
+}
+
 export function healthPayload(sources: HealthSources): Record<string, unknown> {
   return {
     status: 'ok',
@@ -73,5 +98,6 @@ export function healthPayload(sources: HealthSources): Record<string, unknown> {
     build_sha: process.env.AION_BUILD_SHA ?? 'unstamped',
     ...queueLagFields(sources.queueLag),
     ...plasticityFields(sources.plasticity),
+    ...coverageFields(sources.coverage),
   };
 }

@@ -44,6 +44,9 @@ export {
   readCoverageFence,
   type CheckedRead,
 } from './application/coverage-checker.js';
+/** What `aion doctor` and `/health` say about coverage, beside the fence it is not. */
+export { readCoverageState } from './application/coverage-state.js';
+export type { CoverageStateReport } from './application/coverage-state.js';
 export { refuseCheckedRead } from './application/read-completion.js';
 export { coverageLines, refusalLines } from './application/coverage-text.js';
 

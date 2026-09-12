@@ -454,6 +454,28 @@ command.
 The next init is then the fresh-substrate case, so the first thing the new substrate remembers
 is being initialized.
 
+## Coverage state
+
+`aion init` opens the coverage contract in the `preparing` state and the first service start
+activates it. A preparing contract promises no history: every read that names `as_of` or
+`knew_at` comes back partial with the limitation `coverage_contract_not_active`, and no read
+carries a history horizon. There is no manual step.
+
+Two surfaces report it, both read-only:
+
+- `aion doctor`, check `coverage-state`. It warns while the contract is preparing and fails when
+  the record cannot be served at all.
+- `GET /health`, keys `coverage_state` (`preparing`, `active` or `failed`),
+  `coverage_history_since` and `coverage_epoch`.
+
+Activation writes the horizon at the moment it happens and never earlier. A substrate that ran
+for a while before activating gets a horizon at the activation, so reads into the time before it
+are refused as `before_horizon` rather than answered from history nobody promised.
+
+Both surfaces also carry `eviction_gate` and `eviction_compatibility_revision`. That is a
+different gate. Eviction stays closed until the compatibility audit arms it, and an active
+coverage contract does not arm it.
+
 ## Logs
 
 Everything writes structured JSONL to one file on the data volume, `/data/logs/aion.jsonl` by
