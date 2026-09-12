@@ -204,7 +204,7 @@ describe('OllamaProvider.generate', () => {
 
     await expect(
       provider.generate({
-        model: 'qwen3:4b-instruct-2507',
+        model: 'qwen3:4b-instruct-2507-q4_K_M',
         messages: [{ role: 'user', content: 'reflect' }],
         schema: {},
         maxTokens: 128,

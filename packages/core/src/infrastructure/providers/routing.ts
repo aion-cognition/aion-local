@@ -173,7 +173,7 @@ export function evictableModels(routing: ProviderRouting): readonly string[] {
 
 /**
  * One line for a log or a status row:
- * `cue=anthropic:claude-haiku-4-5 reflect=ollama:qwen3:4b-instruct-2507`.
+ * `cue=anthropic:claude-haiku-4-5 reflect=ollama:qwen3:4b-instruct-2507-q4_K_M`.
  */
 export function routingSummary(routing: ProviderRouting): string {
   return routeList(routing)

@@ -107,7 +107,7 @@ export const KNOBS = {
     // uncached: 12.2s at 1,772 in / 514 out, 19.3s at 4,969 in, 46.8s at 12,488 in, which is
     // about 40% off the 8b at the same shape. 2.5 GB on disk at q4_K_M and 4.2 GB resident at
     // the window below, against 6.6 GB for the 8b.
-    reflect: ['AION_REFLECT_MODEL', text, 'qwen3:4b-instruct-2507'],
+    reflect: ['AION_REFLECT_MODEL', text, 'qwen3:4b-instruct-2507-q4_K_M'],
     // The `options.num_ctx` each role's generations are served under. Two numbers rather than
     // one because the windows answer different questions. Reflection reads rendered episode
     // text, so its window is sized to the rendered-input allowance with room over it; the

@@ -15,7 +15,7 @@
       "embed": "snowflake-arctic-embed2",
       "embedDimension": 1024,
       "cue": "qwen3:1.7b",
-      "reflect": "qwen3:4b-instruct-2507",
+      "reflect": "qwen3:4b-instruct-2507-q4_K_M",
       "cueNumCtx": 4096,
       "reflectNumCtx": 16384
     },

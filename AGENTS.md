@@ -276,7 +276,7 @@ Integration tests that drive enrichment call `testGenerationProvider(options)`
 not `local`, generation runs on Anthropic (`claude-haiku-4-5`, override with
 `AION_ANTHROPIC_MODEL`) and returns in a second or two; embedding always stays on Ollama, since
 the substrate has one embedding space. With no key, or `TEST_AION_GENERATION=local`, generation
-runs on the local reflect model instead (`qwen3:4b-instruct-2507` by default), which measured
+runs on the local reflect model instead (`qwen3:4b-instruct-2507-q4_K_M` by default), which measured
 12.2s at 1,772 input tokens and 46.8s at 12,488 on 2026-09-08; the previous default `qwen3:8b`
 took 35 to 100 seconds an episode.
 

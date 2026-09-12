@@ -67,7 +67,7 @@ stay enabled. That pin removes the cue surface's API spend. Its pack-quality and
 comparison is pending; the shipped pin default stays `auto`. [Cue pin tradeoff](docs/degradation.md#cue-extraction-pinned-local)
 states the measurement limits.
 
-**Local.** Cues run on `qwen3:1.7b` and reflection on `qwen3:4b-instruct-2507`, both on the host
+**Local.** Cues run on `qwen3:1.7b` and reflection on `qwen3:4b-instruct-2507-q4_K_M`, both on the host
 Ollama, each under a context window its role pins (`AION_CUE_NUM_CTX`, `AION_REFLECT_NUM_CTX`).
 
 Embeddings run on `snowflake-arctic-embed2` on the host under either profile and are never
