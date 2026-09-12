@@ -22,9 +22,9 @@ import { writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
 import { upsertEdge } from '../../infrastructure/graph/edges.js';
 import { PublicationInvariantError } from '../../infrastructure/publication/errors.js';
 import { committedLinkVersions } from '../../infrastructure/sqlite/committed-evidence.js';
+import { prepareRetirementVersion } from '../../infrastructure/sqlite/evidence-link-materialization.js';
 import {
   acknowledgeStatedLinkVersions,
-  prepareRetirementVersion,
   statedLinkId,
 } from '../../infrastructure/sqlite/evidence-links.js';
 import {

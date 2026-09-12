@@ -12,10 +12,8 @@ import {
 import { writeStampedNode } from '../../infrastructure/graph/bitemporal.js';
 import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
 import { committedIncidenceForNode } from '../../infrastructure/sqlite/committed-evidence.js';
-import {
-  acknowledgeStatedLinkVersions,
-  prepareRetirementVersion,
-} from '../../infrastructure/sqlite/evidence-links.js';
+import { prepareRetirementVersion } from '../../infrastructure/sqlite/evidence-link-materialization.js';
+import { acknowledgeStatedLinkVersions } from '../../infrastructure/sqlite/evidence-links.js';
 import { publishedScopeToken } from '../../infrastructure/sqlite/evidence-scope.js';
 import {
   acknowledgePublicationIntent,

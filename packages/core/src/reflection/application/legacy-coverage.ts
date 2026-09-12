@@ -2,11 +2,13 @@ import { durableRoleScope, nodeScopeDirection } from '../../evidence/domain/scop
 import type { LegacyCoverageEdge } from '../../infrastructure/graph/legacy-narrative-input.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
+  prepareMaterializedLinkVersion,
+  prepareRetirementVersion,
+} from '../../infrastructure/sqlite/evidence-link-materialization.js';
+import {
   acknowledgeStatedLinkVersions,
   evidenceLinkId,
   lastLinkVersionForOperation,
-  prepareMaterializedLinkVersion,
-  prepareRetirementVersion,
 } from '../../infrastructure/sqlite/evidence-links.js';
 import {
   acknowledgeScopeAdvance,

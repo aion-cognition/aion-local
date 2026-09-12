@@ -28,10 +28,12 @@ import {
 import { countNodesWithId } from '../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import { readEvictionManifest } from '../../infrastructure/sqlite/eviction-manifests.js';
 import {
-  acknowledgeStatedLinkVersions,
-  evidenceLinkId,
   prepareMaterializedLinkVersion,
   prepareRetirementVersion,
+} from '../../infrastructure/sqlite/evidence-link-materialization.js';
+import {
+  acknowledgeStatedLinkVersions,
+  evidenceLinkId,
   prepareStatedLinkVersion,
   statedLinkId,
 } from '../../infrastructure/sqlite/evidence-links.js';

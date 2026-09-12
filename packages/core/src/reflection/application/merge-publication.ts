@@ -22,11 +22,9 @@ import type { PublicationContext } from '../../infrastructure/publication/types.
 import { committedIncidenceForNodesAt } from '../../infrastructure/sqlite/committed-evidence.js';
 import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { prepareRetirementVersion } from '../../infrastructure/sqlite/evidence-link-materialization.js';
 import { releasePreparedLinkVersions } from '../../infrastructure/sqlite/evidence-link-settlement.js';
-import {
-  evidenceLinkId,
-  prepareRetirementVersion,
-} from '../../infrastructure/sqlite/evidence-links.js';
+import { evidenceLinkId } from '../../infrastructure/sqlite/evidence-links.js';
 import { readSubstratePairing } from '../../infrastructure/sqlite/publication-control.js';
 import { commitSourceIncidence } from '../../infrastructure/sqlite/source-incidence.js';
 import { checkPresentCoverage } from '../../recall/application/coverage-checker.js';

@@ -24,10 +24,10 @@ import type { Provider, StructuredRequest } from '../../../infrastructure/provid
 import { PublicationCoordinator } from '../../../infrastructure/publication/coordinator.js';
 import type { PublicationBoundary } from '../../../infrastructure/publication/types.js';
 import { SqliteStore } from '../../../infrastructure/sqlite/database.js';
+import { prepareRetirementVersion } from '../../../infrastructure/sqlite/evidence-link-materialization.js';
 import {
   acknowledgeStatedLinkVersions,
   listStatedLinksTo,
-  prepareRetirementVersion,
 } from '../../../infrastructure/sqlite/evidence-links.js';
 import {
   acknowledgePublicationIntent,

@@ -6,10 +6,8 @@ import {
   type ScopeDirection,
 } from '../../evidence/domain/scopes.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import {
-  acknowledgeStatedLinkVersions,
-  prepareMaterializedLinkVersion,
-} from '../../infrastructure/sqlite/evidence-links.js';
+import { prepareMaterializedLinkVersion } from '../../infrastructure/sqlite/evidence-link-materialization.js';
+import { acknowledgeStatedLinkVersions } from '../../infrastructure/sqlite/evidence-links.js';
 import {
   acknowledgeScopeAdvance,
   prepareScopeAdvance,
