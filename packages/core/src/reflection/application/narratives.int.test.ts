@@ -309,6 +309,20 @@ beforeAll(async () => {
   const backbone = await bootstrapBackbone(harness.driver, { memberName: 'Test User' });
   const logger = openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' });
 
+  // Narration publishes, so both deps sets carry the coordinator and its SQLite side; without
+  // them `narrateSession` fails closed ahead of every assertion in this file.
+  //
+  // Initialized before the direct intake publisher is built. That publisher stands a pairing row
+  // up by hand to skip the protocol, and a pairing already marked initialized makes the
+  // coordinator report a guard node nothing ever minted.
+  const publications = new PublicationCoordinator({
+    driver: harness.driver,
+    db,
+    logger,
+    handlers: [...INSTALLED_PUBLICATION_HANDLERS],
+  });
+  await publications.initialize();
+
   intake = {
     driver: harness.driver,
     db,
@@ -324,16 +338,6 @@ beforeAll(async () => {
     publications: directIntakePublisher(harness.driver, db),
     acceptHookCapture: true,
   };
-  // Narration publishes. Both deps sets carry the coordinator and its SQLite side, because
-  // without them `narrateSession` fails closed ahead of every assertion in this file.
-  const publications = new PublicationCoordinator({
-    driver: harness.driver,
-    db,
-    logger,
-    handlers: [...INSTALLED_PUBLICATION_HANDLERS],
-  });
-  await publications.initialize();
-
   deps = { driver: harness.driver, db, provider: provider(), logger, publications };
   structuralDeps = {
     driver: harness.driver,

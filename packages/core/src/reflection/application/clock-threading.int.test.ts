@@ -230,7 +230,9 @@ beforeAll(async () => {
     now: TODAY,
     occurredAt: OCCURRED_AT,
   });
-  expect(narrated.status).toBe('created');
+  // Asserted as the whole result rather than the status alone: a narrative that refuses says
+  // why in its summary, and a bare status turns every refusal into the same opaque failure.
+  expect(narrated).toMatchObject({ status: 'created' });
 }, 300_000);
 
 afterAll(async () => {
