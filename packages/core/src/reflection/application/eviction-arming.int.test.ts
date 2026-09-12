@@ -197,27 +197,6 @@ it('stamps the stop with the acknowledgment clock, which is the clock every surf
   await arm('arming:clock-restore');
 });
 
-it('releases its claim when the stop itself is refused, so the next one still lands', async () => {
-  // The reviewer's probe, end to end. A refused disarm that strands its name makes every later
-  // claim a first-claim-wins no-op, and the next stop publishes with nothing standing between it
-  // and a pending removal.
-  expect(disarmedAt()).toBeNull();
-  const refused = await act('disarm', 'arming:release-first');
-  expect(refused.status).toBe('acknowledged');
-
-  // A second stop on a stopped substrate is the reachable refusal. Its claim cannot land (the
-  // stamp is down), and what matters is that it leaves nothing behind either.
-  expect(await act('disarm', 'arming:release-second')).toMatchObject({
-    status: 'deferred',
-    reason: 'already_disarmed',
-  });
-  expect(readSubstratePairing(store.db)?.evictionStopRequestedBy).toBeNull();
-
-  await arm('arming:release-restore');
-  expect(disarmedAt()).toBeNull();
-  expect(readSubstratePairing(store.db)?.evictionStopRequestedBy).toBeNull();
-});
-
 it('refuses arming while a stop is owed and nobody has recorded it', async () => {
   // A claim standing with no operation behind it: what a crashed disarm leaves. Arming must not
   // clear it silently, because clearing it loses the record that somebody asked to stop.

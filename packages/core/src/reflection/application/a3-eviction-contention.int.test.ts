@@ -19,7 +19,16 @@ import {
   type EvictionNomination,
 } from './test-support/a3-eviction.fixture.js';
 import { nodeExists } from '../../infrastructure/graph/test-support/a3-eviction-graph.fixture.js';
+import {
+  claimEvictionStop,
+  evictionStopStands,
+  readSubstratePairing,
+} from '../../infrastructure/sqlite/publication-control.js';
 import { publicationRecord } from '../../infrastructure/sqlite/publication-coordinator-store.js';
+import {
+  preparePublicationIntent,
+  settleUnacknowledgedIntent,
+} from '../../infrastructure/sqlite/publication-intents.js';
 import { readSourceResidency } from '../../infrastructure/sqlite/source-lifecycle.js';
 
 /**
@@ -263,6 +272,47 @@ it('stops a killed writer from finishing its removal when the operator disarms',
     status: 'pinned',
     reason: 'compatibility_disarmed',
   });
+
+  await armEviction();
+});
+
+it('claims the stop over a spent claim, so a killed writer still cannot finish', async () => {
+  // The reviewer's probe. A disarm that ended refused used to strand its name on the row. The
+  // resolver reads a spent claim as no stop, so the substrate is armed again, and every later
+  // claim was a first-claim-wins no-op beside it: the next stop published with nothing between it
+  // and a pending removal. M1 verbatim, one attempt later.
+  const spent = 'eviction-disarm:spent';
+  claimEvictionStop(store.db, spent);
+  preparePublicationIntent(store.db, {
+    operationId: spent,
+    kind: 'eviction_arming',
+    payloadDigest: `digest:${spent}`,
+    payloadJson: '{}',
+    affectedScopesJson: '[]',
+    expectedJson: '{}',
+    preparedActionsJson: '[]',
+    createdAt: NOW,
+  });
+  settleUnacknowledgedIntent(store.db, spent, 'deferred', 'already_disarmed');
+  // Spent: the name stands on the row and stops nothing.
+  expect(readSubstratePairing(store.db)?.evictionStopRequestedBy).toBe(spent);
+  expect(evictionStopStands(store.db, readSubstratePairing(store.db))).toBe(false);
+
+  const { sourceId, nomination } = await attempt('contend-spent-claim');
+  const operationId = randomUUID();
+  await killAt('hold_prepared', operationId, evictionPayload(nomination));
+  expect(await nodeExists(driver, sourceId)).toBe(true);
+
+  await disarmEviction();
+
+  expect(await nodeExists(driver, sourceId)).toBe(true);
+  expect(readSourceResidency(store.db, sourceId)?.state).toBe('resident');
+  expect(publicationRecord(store.db, operationId)).toMatchObject({
+    state: 'deferred',
+    error: 'compatibility_disarmed',
+  });
+  // The stop is recorded and the row is clear, so the spent name is gone with it.
+  expect(readSubstratePairing(store.db)?.evictionStopRequestedBy).toBeNull();
 
   await armEviction();
 });
