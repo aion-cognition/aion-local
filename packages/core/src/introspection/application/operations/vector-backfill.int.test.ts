@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { vectorBackfillOperation } from './vector-backfill.js';
+import { EvidenceResolver } from '../../../evidence/application/resolver.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
@@ -17,7 +18,9 @@ import {
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import type { Provider, Vector } from '../../../infrastructure/providers/types.js';
+import type { PublicationCoordinator } from '../../../infrastructure/publication/coordinator.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import { activatedCoordinator } from '../../../reflection/application/test-support/publication-substrate.fixture.js';
 import { vectorInputHash } from '../../../reflection/domain/vector-input.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
@@ -30,6 +33,7 @@ let harness: Neo4jHarness;
 let db: SqliteHandle;
 let logger: Logger;
 let dataDir: string;
+let publications: PublicationCoordinator;
 
 const config: Config = {
   ...DEFAULTS,
@@ -43,6 +47,12 @@ beforeAll(async () => {
   db = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
   logger = openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'error' });
   await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
+  // The context pass publishes `context_vector_sync`, so the guard is part of this substrate.
+  // Without it the pass writes nothing and names the refusal, which the last case here asserts.
+  publications = await activatedCoordinator(
+    { driver: harness.driver, db, logger },
+    'vector-backfill',
+  );
 }, 300_000);
 
 afterAll(async () => {
@@ -72,6 +82,11 @@ function countingProvider(): CountingProvider {
   return provider;
 }
 
+/** The chunk-lifecycle half of the maintenance deps, which the context pass does not read. */
+function resolverFor(): EvidenceResolver {
+  return new EvidenceResolver({ driver: harness.driver, db, logger, publications });
+}
+
 function ctxFor(overrides: Partial<OperationContext> = {}): OperationContext {
   return {
     driver: harness.driver,
@@ -82,6 +97,7 @@ function ctxFor(overrides: Partial<OperationContext> = {}): OperationContext {
     health: healthFixture(),
     now: NOW,
     signal: new AbortController().signal,
+    narratives: { publications, resolver: resolverFor() },
     ...overrides,
   };
 }
@@ -205,5 +221,29 @@ describe('vector_backfill: context vector pass', () => {
     });
     const third = await operation.run(ctxFor({ now: LATER }));
     expect(third.itemsAffected).toBeGreaterThan(0);
+  }, 60_000);
+
+  it('writes nothing and names why when no coordinator is composed', async () => {
+    await upsertEdge(harness.driver, {
+      type: 'SIMILAR',
+      sourceId: 'context-a',
+      targetId: 'context-b',
+      strength: 0.7,
+      confidence: 1,
+      signals: ['episodic'],
+      provenance: ['test'],
+      count: 1,
+      now: LATER,
+    });
+    const before = await nodeProperties(harness.driver, 'context-a');
+
+    const uncomposed: OperationContext = { ...ctxFor({ now: LATER }), narratives: undefined };
+    const outcome = await vectorBackfillOperation().run(uncomposed);
+
+    // The property is not writable outside the guard any more, so the pass says so rather than
+    // reporting a refreshed count it did not earn.
+    expect(outcome.detail).toContain('no publication coordinator');
+    const after = await nodeProperties(harness.driver, 'context-a');
+    expect(after.context_vec_synced_at).toEqual(before.context_vec_synced_at);
   }, 60_000);
 });
