@@ -23,7 +23,7 @@ Node and npm come into it only for the two optional pieces below, `npm link` and
 harness hooks.
 
 Without Docker, the same substrate runs as host processes: `npm ci && npm run build`, then
-`./bin/aion-native init --profile native`, which installs and configures Neo4j, brings up the
+`./bin/aion-native init --install native`, which installs and configures Neo4j, brings up the
 server as a launchd job, and ends with a `doctor` report.
 [docs/operations.md](docs/operations.md) has that path and its failure remedies.
 
@@ -151,7 +151,7 @@ does not work and says so: the CLI orchestrates the repo it lives in.
 - `search`: direct hybrid search through the seed layer, bypassing pack assembly
 - `forget`: bitemporal close of a node, by id or by query
 - `unforget`: take back a forget; the statement chain keeps both and the node serves again
-- `evict`: the destructive fence, what it reads, and the stop an operator can put on it
+- `evict`: the destructive fence, what it reads, the stop an operator can put on it, and the lift
 - `unsupersede`: reopen a claim a supersession closed, whatever made the close
 - `queue`: inspect and triage the reflection queue
 - `replay`: put archived experiences back through the pipeline, and the usage stream back on top
@@ -161,7 +161,7 @@ does not work and says so: the CLI orchestrates the repo it lives in.
 - `timeline`: one episode across the archive, the graph, the queue, and the ledger
 
 The commands with teeth make you say so: `queue drop`, `queue reconcile --re-enqueue`,
-`forget`, `unforget`, `unsupersede`, and `evict disarm` preview what they would do
+`forget`, `unforget`, `unsupersede`, `evict disarm` and `evict rearm` preview what they would do
 and stop without `--yes`, and
 `proposals`, `maintain`, and `unmerge` act only through an explicit `apply` or `run`
 subcommand. `replay run` guards harder: it refuses to write to the shipped substrate at all

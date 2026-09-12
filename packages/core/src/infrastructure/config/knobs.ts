@@ -69,7 +69,7 @@ export const KNOBS = {
    * where init verifies a Neo4j somebody else manages, writes a launchd job rather than
    * starting a container, and both stores are directories. It is a knob rather than a flag on
    * every command because doctor and status have to know which substrate to check without
-   * being told again, and `aion init --profile native` records it in `.env` for them.
+   * being told again, and `aion init --install native` records it in `.env` for them.
    *
    * Nothing derives the addresses from it. `neo4j.uri`, `ollama.url`, `operational.dataDir`,
    * `sqlite.path` and `logging.filePath` keep their own defaults and their own env vars, and

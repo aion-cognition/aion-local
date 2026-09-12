@@ -34,11 +34,11 @@ export {
 } from './application/source-suppression.js';
 
 /**
- * The two acts on the fence, and they are reached from different places on purpose. Arming is the
- * service start's, through `armEvictionOnStart` below; the stop is an operator's, through
- * `aion evict disarm`, and nothing in initialization or the maintenance catalog reaches either.
- * The precondition tables and the unverified list are exported for `aion evict status`, which is
- * where the fence is read.
+ * The three acts on the fence, reached from different places on purpose. The first arming is the
+ * service start's, through `armEvictionOnStart` below; the stop and the lift of a stop are an
+ * operator's, through `aion evict disarm` and `aion evict rearm`. Nothing in initialization or the
+ * maintenance catalog reaches any of them. The precondition tables and the unverified list are
+ * exported for the two surfaces that print them, `status` and `rearm`.
  */
 export {
   ARMING_NOT_VERIFIED,
@@ -47,6 +47,7 @@ export {
   EVICTION_COMPATIBILITY_REVISION,
   evictionArmingOperationId,
   evictionArmingPublication,
+  rearmPreconditions,
 } from './application/eviction-arming.js';
 export type { ArmingPrecondition } from './application/eviction-arming.js';
 

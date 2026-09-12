@@ -32,8 +32,10 @@ const COVERAGE_COLUMN = 'activation_capability_revision';
 const ARMING_WRITER = 'establishEvictionCompatibility';
 const DISARM_WRITER = 'recordEvictionDisarm';
 const CLAIM_WRITER = 'claimEvictionStop';
-/** The one path that publishes the arm act, now that no command does. */
+/** The one path that arms a substrate on its own, now that no command does it first. */
 const START_ARM = 'armEvictionOnStart';
+/** The operation both arming paths and the stop go through. */
+const ARMING_KIND = 'evictionArmingPublication';
 
 /**
  * A write is an UPDATE, an INSERT or a REPLACE reaching this column; a read of it is not one.
@@ -191,9 +193,10 @@ describe('the eviction compatibility capability is not armed by any production w
     expect(reached.map((file) => relative(REPO_ROOT, file))).toEqual([]);
   });
 
-  it('finds the arm act published from one place, and it is the service start', () => {
-    // `armEvictionOnStart` is the whole arming path now, so the set of files that call it is the
-    // set of things that can arm a substrate. One entry, and it is the boot sequence.
+  it('finds the start arm published from one place, and it is the service start', () => {
+    // `armEvictionOnStart` is the whole automatic arming path, so the set of files that call it is
+    // the set of things that can arm a substrate on their own. One entry, and it is the boot
+    // sequence.
     const definition = join(
       PACKAGES_DIR,
       'core',
@@ -207,6 +210,19 @@ describe('the eviction compatibility capability is not armed by any production w
     );
     expect(callers.map((file) => relative(REPO_ROOT, file))).toEqual([
       join('packages', 'mcp', 'src', 'bootstrap.ts'),
+    ]);
+  });
+
+  it('finds the arming operation published from exactly two places, and names both', () => {
+    // The service start, and the command an operator takes a stop back with: a stop must not be a
+    // one-way door. These two files are the whole set that publishes this operation, and a third
+    // appearing here is a third way to move a destructive capability.
+    const publishers = files.filter((file) =>
+      readFileSync(file, 'utf8').includes(`${ARMING_KIND}.kind`),
+    );
+    expect(publishers.map((file) => relative(REPO_ROOT, file)).sort()).toEqual([
+      join('packages', 'cli', 'src', 'evict.ts'),
+      join('packages', 'core', 'src', 'reflection', 'application', 'eviction-arming-start.ts'),
     ]);
   });
 
@@ -224,13 +240,29 @@ describe('the eviction compatibility capability is not armed by any production w
     );
   });
 
-  it('finds no arm act left in the CLI, which is where it used to be', () => {
-    // The manual step is gone rather than hidden behind a flag: `aion evict` takes status and
-    // disarm, and the payload it publishes only ever says disarm.
+  it('finds the CLI publishing its own subcommand as the act, and `arm` is not one', () => {
+    // The act the command publishes is the word the operator typed, so the subcommand list is the
+    // act set. `arm` is not in it: the first arming is the substrate's, and what a person can do
+    // is stop the fence or take that stop back. The ledger reads the difference.
     const evict = readFileSync(join(PACKAGES_DIR, 'cli', 'src', 'evict.ts'), 'utf8');
-    expect(evict).toContain("subcommands: ['status', 'disarm']");
+    expect(evict).toContain("subcommands: ['status', 'disarm', 'rearm']");
+    expect(evict).toContain('act: action');
     expect(evict).not.toContain("act: 'arm'");
     expect(evict).not.toContain("'arm',");
+  });
+
+  it('keeps the owed-stop refusal on the automatic path and lifts it only for the re-arm', () => {
+    // The one precondition the two tables differ on, and the difference is the whole point: the
+    // start must never clear a stop nobody finished recording, and an operator saying so is when
+    // clearing it is right.
+    const arming = readFileSync(
+      join(PACKAGES_DIR, 'core', 'src', 'reflection', 'application', 'eviction-arming.ts'),
+      'utf8',
+    );
+    expect(arming).toContain("reason: 'eviction_stop_owed'");
+    expect(arming).toContain("precondition.reason !== 'eviction_stop_owed'");
+    // And the filter is the only difference: the re-arm table is the arming table minus that row.
+    expect(arming).toContain('armingPreconditions(db, installedKinds, revision).filter');
   });
 
   it('still finds the stop read before the revision, which is what makes it fail-closed', () => {

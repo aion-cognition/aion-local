@@ -55,7 +55,7 @@ describe('the launchd job that replaces the compose service', () => {
   });
 
   it('says it is generated, because it lands in a directory people edit by hand', () => {
-    expect(plist).toContain('aion init --profile native');
+    expect(plist).toContain('aion init --install native');
     expect(plist).toContain(`${JOB.repoDir}/.env`);
   });
 

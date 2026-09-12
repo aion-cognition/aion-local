@@ -56,7 +56,7 @@ function disarmedAt(): string | null {
   return readSubstratePairing(store.db)?.evictionDisarmedAt ?? null;
 }
 
-async function act(kind: 'arm' | 'disarm', operationId: string) {
+async function act(kind: 'arm' | 'disarm' | 'rearm', operationId: string) {
   return await publications.publish({
     kind: evictionArmingPublication.kind,
     operationId,
@@ -254,4 +254,47 @@ it('refuses arming while a stop is owed and nobody has recorded it', async () =>
   } finally {
     await arm('arming:owed-restore');
   }
+});
+
+/**
+ * The stop, the restart that does not lift it, and the operator who does. Last in the file because
+ * each case here disarms the substrate the ones above left armed, and puts it back.
+ */
+it('lets an operator lift a recorded stop, and the next start then keeps it armed', async () => {
+  await act('disarm', 'arming:stop-to-lift');
+  expect(disarmedAt()).not.toBeNull();
+  // A restart is not a retraction: the start finds the stop and leaves it alone.
+  expect(await armEvictionOnStart(publications, store.db)).toMatchObject({ state: 'disarmed' });
+
+  const lifted = await act(
+    'rearm',
+    evictionArmingOperationId('rearm', EVICTION_COMPATIBILITY_REVISION, epoch(), NOW),
+  );
+
+  expect(lifted).toMatchObject({ status: 'acknowledged' });
+  expect(disarmedAt()).toBeNull();
+  expect(readCoverageState(store.db).evictionGate).toBe('armed');
+  // And now there is no stop to respect, so the next start reads the fence open and publishes
+  // nothing: the lift holds across restarts exactly as the stop did.
+  expect(await armEvictionOnStart(publications, store.db)).toEqual({
+    state: 'armed',
+    revision: EVICTION_COMPATIBILITY_REVISION,
+  });
+});
+
+it('lifts a stop that was asked for and never recorded, which the start refuses to', async () => {
+  // The claim a crashed disarm leaves. The start answers `eviction_stop_owed` and leaves it where
+  // it is; the operator's act clears the claim and raises the revision in one transaction. The
+  // record of who asked survives in that operation's own intent row, which nothing prunes.
+  claimEvictionStop(store.db, 'disarm-that-never-finished');
+  expect(await armEvictionOnStart(publications, store.db)).toEqual({
+    state: 'unarmed',
+    reason: 'eviction_stop_owed',
+  });
+
+  expect(await act('rearm', 'arming:lift-the-owed')).toMatchObject({ status: 'acknowledged' });
+
+  expect(readSubstratePairing(store.db)?.evictionStopRequestedBy).toBeNull();
+  expect(disarmedAt()).toBeNull();
+  expect(readCoverageState(store.db).evictionGate).toBe('armed');
 });

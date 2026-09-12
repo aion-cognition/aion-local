@@ -109,7 +109,7 @@ export async function ensureNeo4jInstalled(
   if (installed === undefined) {
     throw new NativeSetupError(
       'brew installed neo4j and no conf/neo4j.conf turned up under its prefix. Point init at the distribution:',
-      ['export NEO4J_HOME=$(brew --prefix neo4j)/libexec', 'aion init --profile native'],
+      ['export NEO4J_HOME=$(brew --prefix neo4j)/libexec', 'aion init --install native'],
     );
   }
   write(`  neo4j installed at ${installed.home}`);

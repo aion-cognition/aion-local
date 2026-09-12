@@ -220,7 +220,7 @@ export async function prepareNativeService(
   if (!existsSync(script)) {
     throw new NativeSetupError(
       `the native profile runs the MCP server from ${script}, which is not built:`,
-      ['npm ci && npm run build', 'aion init --profile native'],
+      ['npm ci && npm run build', 'aion init --install native'],
     );
   }
 

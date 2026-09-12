@@ -69,21 +69,26 @@ const MISSING_MEMBER_NAME =
  * `full` adds the Anthropic key and the Claude Code shims that make the recall and reflection
  * cadence a schedule rather than a judgment call.
  *
- * This is the generation profile, and `--profile` is the install profile: what the substrate
+ * This is the generation profile; `--install` is the install profile, which is what the substrate
  * runs on, docker or native. Two different questions, and the second one is a flag because it is
  * asked once per install and read afterwards from config.
+ *
+ * `--profile` is accepted as an alias for `--install` and is not advertised. It is what the flag
+ * was called for one release, and two things named "profile" in one usage line is the reason it
+ * is not called that any more.
  */
 export type InitProfile = 'local' | 'full';
 
 const SPEC: ArgSpec = {
   command: 'init',
-  usage: 'aion init [local | full] [--profile docker | native] [--yes]',
+  usage: 'aion init [local | full] [--install docker | native] [--yes]',
   options: [
     { flag: '--yes', alias: '-y' },
+    { flag: '--install', takesValue: true },
     { flag: '--profile', takesValue: true },
   ],
   maxPositionals: 1,
-  supported: ['local', 'full', '--profile', '--yes'],
+  supported: ['local', 'full', '--install', '--yes'],
 };
 
 export type InitFlags = {
@@ -99,9 +104,10 @@ export function parseInitFlags(argv: readonly string[]): InitFlags {
   if (profile !== undefined && profile !== 'local' && profile !== 'full') {
     throw unknownOption(SPEC, profile);
   }
-  const install = values.get('--profile');
+  const flag = values.has('--install') ? '--install' : '--profile';
+  const install = values.get(flag);
   if (install !== undefined && install !== 'docker' && install !== 'native') {
-    throw new CliUsageError(`--profile takes docker or native, not '${install}'`);
+    throw new CliUsageError(`${flag} takes docker or native, not '${install}'`);
   }
   return { assumeYes: flags.has('--yes'), profile, install };
 }

@@ -23,9 +23,9 @@ import {
  *
  * Every substrate is built with eviction fenced rather than absent. `durableEligibility` answers
  * `compatibility_not_established` for every source while the compatibility revision reads zero,
- * and two paths move it: the service arms the fence at start (`eviction-arming-start.ts`), and an
- * operator stops it again with `aion evict disarm`. Nothing in initialization, the worker or the
- * maintenance catalog reaches either act.
+ * and three acts move it: the service arms the fence at start (`eviction-arming-start.ts`), an
+ * operator stops it again with `aion evict disarm`, and `aion evict rearm` takes that stop back.
+ * Nothing in initialization, the worker or the maintenance catalog reaches any of them.
  *
  * It stays an audited operation now that the arm is automatic, and for the same reason it was one
  * when it was manual. A substrate that can remove memory has to say when it became one, and a
@@ -43,14 +43,29 @@ import {
  * the revision is untouched and a separate stamp is written, so the capability this substrate
  * established stays readable and eviction refuses on the stamp before it reads the number. It
  * stops future evictions and it cannot undo one that already happened.
+ *
+ * And it is not permanent. `rearm` lifts the stamp through the same operation, taking its own
+ * receipt, so a stop and the decision to take it back read in sequence rather than as one column
+ * that changed its mind.
  */
 
 /** The destructive capability this build implements. A different build carries a different one. */
 export const EVICTION_COMPATIBILITY_REVISION = 1;
 
+/**
+ * Three acts on one fence, and the third is not the first repeated.
+ *
+ * `arm` opens the capability and is the service start's. `disarm` stops it and leaves the record
+ * that it was open. `rearm` is an operator taking a stop back, and it is its own act because it is
+ * the one thing allowed to arm over a stop that was asked for and never recorded: the start must
+ * never do that, and a person saying so explicitly is exactly when it is right.
+ */
+export const EVICTION_ACTS = ['arm', 'disarm', 'rearm'] as const;
+
+export type EvictionAct = (typeof EVICTION_ACTS)[number];
+
 const Payload = z.strictObject({
-  /** Arming opens the capability; disarming stops it and leaves the record that it was open. */
-  act: z.enum(['arm', 'disarm']),
+  act: z.enum(EVICTION_ACTS),
   revision: z.number().int().positive(),
   /** The contract in force when the operator asked, so a coverage change refuses the act. */
   coverageEpoch: z.string().min(1),
@@ -58,7 +73,7 @@ const Payload = z.strictObject({
   observedAt: z.string().min(1),
 });
 const Result = z.strictObject({
-  act: z.enum(['arm', 'disarm']),
+  act: z.enum(EVICTION_ACTS),
   revision: z.number().int().positive(),
 });
 
@@ -171,14 +186,34 @@ export function armingPreconditions(
           : `a stop is owed by ${owing}: run \`aion evict disarm\` to finish it`,
     },
     {
-      // A RECORDED stop is re-armable at the same revision: the stop is what is being reversed,
-      // and refusing it as `already_armed` would leave no way back.
+      // A stopped substrate is re-armable at the same revision: the stop is what is being
+      // reversed, and refusing it as `already_armed` would leave no way back. Either stop counts,
+      // the recorded stamp and the claim nobody finished, because both are something to lift.
       name: 'the fence is not already at this revision',
       reason: 'already_armed',
-      holds: armed < revision || disarmed !== null,
+      holds: armed < revision || evictionStopStands(db, pairing),
       detail: armedDetail(armed, disarmed),
     },
   ];
+}
+
+/**
+ * What an explicit re-arm asks, which is the arming table minus one row.
+ *
+ * `eviction_stop_owed` is there to stop an arming from quietly clearing a stop nobody finished
+ * recording, and the service start has to respect it. A person running `aion evict rearm` is the
+ * case it was guarding against being taken silently: the act names the stop it lifts, the
+ * confirmation says so, and the receipt records who lifted it. The record survives either way,
+ * since nothing prunes `publication_intents` and the owed operation's own row stands.
+ */
+export function rearmPreconditions(
+  db: SqliteHandle,
+  installedKinds: readonly PublicationKind[],
+  revision: number,
+): readonly ArmingPrecondition[] {
+  return armingPreconditions(db, installedKinds, revision).filter(
+    (precondition) => precondition.reason !== 'eviction_stop_owed',
+  );
 }
 
 /**
@@ -213,16 +248,27 @@ export function disarmPreconditions(db: SqliteHandle): readonly ArmingPreconditi
   ];
 }
 
+function preconditionsFor(
+  context: PublicationContext,
+  act: EvictionAct,
+  revision: number,
+): readonly ArmingPrecondition[] {
+  if (act === 'disarm') {
+    return disarmPreconditions(context.db);
+  }
+  if (act === 'rearm') {
+    return rearmPreconditions(context.db, context.installedKinds, revision);
+  }
+  return armingPreconditions(context.db, context.installedKinds, revision);
+}
+
 function firstFailure(
   context: PublicationContext,
-  act: 'arm' | 'disarm',
+  act: EvictionAct,
   revision: number,
 ): string | undefined {
-  const checks =
-    act === 'disarm'
-      ? disarmPreconditions(context.db)
-      : armingPreconditions(context.db, context.installedKinds, revision);
-  return checks.find((precondition) => !precondition.holds)?.reason;
+  return preconditionsFor(context, act, revision).find((precondition) => !precondition.holds)
+    ?.reason;
 }
 
 /**
@@ -233,7 +279,7 @@ function firstFailure(
  * own receipt rather than a replay of the last one.
  */
 export function evictionArmingOperationId(
-  act: 'arm' | 'disarm',
+  act: EvictionAct,
   revision: number,
   coverageEpoch: string,
   at: Date,
@@ -314,6 +360,10 @@ export const evictionArmingPublication = new PublicationOperation({
       recordEvictionDisarm(context.db, context.knownFrom);
       return undefined;
     }
+    // Both arming acts land here. The writer clears the stamp and the unfinished claim in the
+    // same transaction that raises the revision, which is what keeps a substrate from reading
+    // armed by the number and stopped by the stamp; `rearm` is the act allowed to reach it with
+    // a claim standing.
     establishEvictionCompatibility(context.db, data.revision);
     return undefined;
   },

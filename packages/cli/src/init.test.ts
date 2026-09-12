@@ -24,7 +24,7 @@ describe('parseInitFlags', () => {
 
   it('rejects an unknown option', () => {
     expect(() => parseInitFlags(['--force'])).toThrow(
-      /unknown option .* for init \(supported: local, full, --profile, --yes\)/,
+      /unknown option .* for init \(supported: local, full, --install, --yes\)/,
     );
   });
 
@@ -36,13 +36,13 @@ describe('parseInitFlags', () => {
 
   it('rejects a word that is neither profile', () => {
     expect(() => parseInitFlags(['medium'])).toThrow(
-      /unknown option .* for init \(supported: local, full, --profile, --yes\)/,
+      /unknown option .* for init \(supported: local, full, --install, --yes\)/,
     );
   });
 
   it('takes the install profile as a flag, and leaves it unset to follow config', () => {
-    expect(parseInitFlags(['--profile', 'native']).install).toBe('native');
-    expect(parseInitFlags(['full', '--profile', 'docker', '--yes'])).toEqual({
+    expect(parseInitFlags(['--install', 'native']).install).toBe('native');
+    expect(parseInitFlags(['full', '--install', 'docker', '--yes'])).toEqual({
       assumeYes: true,
       profile: 'full',
       install: 'docker',
@@ -50,13 +50,24 @@ describe('parseInitFlags', () => {
     expect(parseInitFlags([]).install).toBeUndefined();
   });
 
+  it('still takes the old --profile spelling, and does not advertise it', () => {
+    // One release called it `--profile`, which put two different questions under one word in the
+    // same usage line. The alias keeps that invocation working; the usage names `--install`.
+    expect(parseInitFlags(['--profile', 'native']).install).toBe('native');
+    expect(() => parseInitFlags(['--nope'])).toThrow(/supported: local, full, --install, --yes/);
+  });
+
   it('refuses an install profile it does not have, rather than defaulting quietly', () => {
     // The flag decides whether init drives compose or a host machine. A typo that fell through to
-    // the default would bring up the other substrate.
+    // the default would bring up the other substrate. The refusal names the spelling that was
+    // actually typed, so the alias does not answer about a flag nobody used.
+    expect(() => parseInitFlags(['--install', 'podman'])).toThrow(
+      "--install takes docker or native, not 'podman'",
+    );
     expect(() => parseInitFlags(['--profile', 'podman'])).toThrow(
       "--profile takes docker or native, not 'podman'",
     );
-    expect(() => parseInitFlags(['--profile'])).toThrow('--profile needs a value');
+    expect(() => parseInitFlags(['--install'])).toThrow('--install needs a value');
   });
 });
 

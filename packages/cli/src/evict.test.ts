@@ -10,6 +10,8 @@ import {
   parseEvictFlags,
   runEvict,
   runEvictDisarm,
+  runEvictRearm,
+  standingStop,
   writeNotVerified,
   writePreconditions,
 } from './evict.js';
@@ -32,8 +34,14 @@ describe('parseEvictFlags', () => {
 
   it('refuses `arm`, which the service now does at start, and says what it takes instead', () => {
     // Not silently accepted and not silently ignored: somebody who learned the manual step reads
-    // the supported list here rather than watching a command exit 0 having armed nothing.
-    expect(() => parseEvictFlags(['arm'])).toThrow('status, disarm');
+    // the supported list here rather than watching a command exit 0 having armed nothing, and the
+    // list names `rearm`, which is what they actually want on a stopped substrate.
+    expect(() => parseEvictFlags(['arm'])).toThrow('status, disarm, rearm');
+  });
+
+  it('reads rearm as its own act', () => {
+    expect(parseEvictFlags(['rearm'])).toEqual({ action: 'rearm', yes: false });
+    expect(parseEvictFlags(['rearm', '--yes']).yes).toBe(true);
   });
 });
 
@@ -84,11 +92,12 @@ describe('the honest-gaps section', () => {
     expect(said.join(' ')).toContain('writer audit');
   });
 
-  it('has exactly one renderer, which is the status read', () => {
-    // The list used to be printed twice: on a status read and again above the arming question.
-    // With no arming question left, a second caller would be a second place for it to drift.
+  it('rides with every arming decision, from one definition', () => {
+    // Two call sites, one list: the status read, and the re-arm, which is the only decision left
+    // that opens the capability. A third would be somewhere for the wording to drift.
     const source = readFileSync(fileURLToPath(new URL('./evict.ts', import.meta.url)), 'utf8');
-    expect(source.split('writeNotVerified(write)')).toHaveLength(2);
+    expect(source.split('writeNotVerified(write)')).toHaveLength(3);
+    expect(source.split('export function writeNotVerified')).toHaveLength(2);
   });
 });
 
@@ -232,5 +241,109 @@ describe('what `aion evict` actually prints', () => {
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain('stop eviction on this substrate?');
     expect(said.join('\n')).not.toContain('not verified here');
+  });
+
+  async function rearm(stop: {
+    readonly disarmedAt?: string;
+    readonly owedBy?: string;
+  }): Promise<{ said: string[]; prompts: string[]; published: number; code: number }> {
+    const said: string[] = [];
+    const prompts: string[] = [];
+    let published = 0;
+    const store = new SqliteStore({ filePath: join(dir, `rearm-${String(Date.now())}.sqlite`) });
+    try {
+      store.db
+        .prepare(
+          `INSERT INTO publication_control
+             (substrate_id, bootstrap_state, protocol_version, activation_capability_revision,
+              eviction_compatibility_revision, eviction_disarmed_at, eviction_stop_requested_by)
+           VALUES ('s1', 'initialized', 1, 1, 1, ?, ?)`,
+        )
+        .run(stop.disarmedAt ?? null, stop.owedBy ?? null);
+      store.db
+        .prepare(
+          `INSERT INTO coverage_contract
+             (epoch, history_since, activated_at, field_policy_version, state)
+           VALUES ('epoch-1', '2026-09-12T00:00:00.000Z', '2026-09-12T00:00:00.000Z', 1, 'active')`,
+        )
+        .run();
+      const code = await runEvictRearm(
+        store.db,
+        () => {
+          published += 1;
+          return Promise.resolve({
+            status: 'acknowledged' as const,
+            operationId: 'op-1',
+            sequence: '1',
+            result: { act: 'rearm', revision: 1 },
+            knownFrom: '2026-09-12T12:00:00.000Z',
+            observedAckAt: '2026-09-12T12:00:00.000Z',
+            clockClamped: false,
+          });
+        },
+        (prompt: string) => {
+          prompts.push(prompt);
+          return Promise.resolve(true);
+        },
+        (line: string) => said.push(line),
+      );
+      return { said, prompts, published, code };
+    } finally {
+      store.close();
+    }
+  }
+
+  it('names the stop it lifts and when the substrate recorded it, in the question', async () => {
+    const { said, prompts, published } = await rearm({ disarmedAt: '2026-09-12T09:00:00.000Z' });
+
+    expect(said[0]).toContain('the stop recorded at 2026-09-12T09:00:00.000Z');
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain('the stop recorded at 2026-09-12T09:00:00.000Z');
+    // The gaps ride with it: this is the one decision left that opens the capability.
+    expect(prompts[0]).toContain('unverified');
+    expect(said.join('\n')).toContain('not verified here');
+    expect(published).toBe(1);
+    expect(said.join('\n')).toContain('a restart keeps it armed');
+  });
+
+  it('names a stop that was asked for and never recorded, and lifts that one too', async () => {
+    // The case the service start refuses on purpose. A person naming it out loud is when clearing
+    // it is right, and the operation that owed it is named in the question.
+    const { prompts, published } = await rearm({ owedBy: 'disarm-that-never-finished' });
+
+    expect(prompts[0]).toContain('the stop owed by disarm-that-never-finished');
+    expect(prompts[0]).toContain('never recorded');
+    expect(published).toBe(1);
+  });
+
+  it('is a no-op with a message on a substrate nobody stopped', async () => {
+    const { said, prompts, published, code } = await rearm({});
+
+    expect(code).toBe(0);
+    expect(published).toBe(0);
+    expect(prompts).toEqual([]);
+    expect(said.join('\n')).toContain('nothing to lift');
+  });
+});
+
+describe('standingStop', () => {
+  const report = (over: Partial<CoverageStateReport>): CoverageStateReport => ({
+    coverageState: 'active',
+    historySince: null,
+    coverageEpoch: 'epoch-1',
+    evictionGate: 'armed',
+    evictionCompatibilityRevision: 1,
+    evictionDisarmedAt: null,
+    evictionStopRequestedBy: null,
+    ...over,
+  });
+
+  it('prefers the recorded stamp over the claim, since the stamp is the finished statement', () => {
+    expect(
+      standingStop(
+        report({ evictionDisarmedAt: '2026-09-12T09:00:00.000Z', evictionStopRequestedBy: 'op-2' }),
+      ),
+    ).toContain('recorded at 2026-09-12T09:00:00.000Z');
+    expect(standingStop(report({}))).toBeUndefined();
   });
 });

@@ -8,7 +8,9 @@ import {
   INSTALLED_PUBLICATION_KINDS,
   readCoverageState,
   readCurrentCoverageContract,
+  rearmPreconditions,
   type ArmingPrecondition,
+  type CoverageStateReport,
   type PublicationOutcome,
   type SqliteHandle,
 } from '@aion/core';
@@ -20,14 +22,14 @@ import { confirmOrExit, stderrWriter, stdoutWriter, type Writer } from './output
 import { withSubstrate } from './substrate.js';
 
 /**
- * `aion evict status | disarm`: reading the destructive fence, and the one act an operator takes
- * on it.
+ * `aion evict status | disarm | rearm`: reading the destructive fence, and the two acts an
+ * operator takes on it.
  *
- * Arming is not here any more. The service arms the fence at start, through the same audited
- * operation and against the same precondition table (`armEvictionOnStart`); the manual step was
- * removed on 2026-09-12. What the checks cannot verify has not changed and has not gone away:
- * `status` prints the table and the unverified list together, which is now the only place either
- * is printed.
+ * The first arming is not here any more. The service arms the fence at start, through the same
+ * audited operation and against the same precondition table (`armEvictionOnStart`); the manual
+ * step was removed on 2026-09-12. What the checks cannot verify has not changed and has not gone
+ * away: it is printed on `status`, and again by `rearm`, which is the one decision left that opens
+ * the capability.
  *
  * `disarm` stays, because stopping is the operator's. It is not the inverse of arming: it stamps a
  * stop that eviction reads before it reads the revision, so the capability this substrate
@@ -38,17 +40,22 @@ import { withSubstrate } from './substrate.js';
  * a new request, so a stop that only became durable at its own acknowledgment would be recorded on
  * a substrate the removal had already left. The claim goes down before anything is settled, and
  * the pending attempt meets it at its own recovery re-check.
+ *
+ * `rearm` is the way back, and it exists because a stop must not be a one-way door. It is the one
+ * act allowed to lift a stop that was asked for and never recorded: the service start refuses that
+ * case on purpose, and a person naming it out loud is when clearing it is right. The prompt says
+ * which stop it lifts and when the substrate recorded it.
  */
 
-const SPEC: ArgSpec<'status' | 'disarm'> = {
+const SPEC: ArgSpec<'status' | 'disarm' | 'rearm'> = {
   command: 'evict',
-  usage: 'aion evict [status | disarm] [--yes]',
-  subcommands: ['status', 'disarm'],
+  usage: 'aion evict [status | disarm | rearm] [--yes]',
+  subcommands: ['status', 'disarm', 'rearm'],
   options: [{ flag: '--yes' }],
 };
 
 export type EvictFlags = {
-  readonly action: 'status' | 'disarm';
+  readonly action: 'status' | 'disarm' | 'rearm';
   readonly yes: boolean;
 };
 
@@ -128,6 +135,70 @@ export async function runEvictDisarm(
   return 0;
 }
 
+/**
+ * What a re-arm would lift, read before anything is published. `undefined` means there is nothing
+ * to take back, which is the no-op the command reports rather than a refusal: somebody who ran it
+ * on an armed substrate got the state they wanted.
+ */
+export function standingStop(state: CoverageStateReport): string | undefined {
+  if (state.evictionDisarmedAt !== null) {
+    return `the stop recorded at ${state.evictionDisarmedAt}`;
+  }
+  if (state.evictionStopRequestedBy !== null) {
+    return `the stop owed by ${state.evictionStopRequestedBy}, which was never recorded`;
+  }
+  return undefined;
+}
+
+/**
+ * Taking a stop back.
+ *
+ * It prints what it is about to lift and when the substrate recorded it, then the same gaps an
+ * arming decision has always carried, because this is now the only decision that opens the
+ * capability. The act goes through the coordinator like any other, so the lift leaves a receipt
+ * beside the stop it reverses, and the two read in sequence.
+ */
+export async function runEvictRearm(
+  db: SqliteHandle,
+  publish: () => Promise<PublicationOutcome>,
+  confirm: (prompt: string) => Promise<boolean>,
+  write: Writer,
+): Promise<number> {
+  const state = readCoverageState(db);
+  const lifting = standingStop(state);
+  if (lifting === undefined) {
+    write(evictionFence(state));
+    write('nothing to lift: no stop stands on this substrate, so there is nothing to take back.');
+    write('The service arms the fence at start; `aion evict status` is where it reports why not.');
+    return 0;
+  }
+  write(`rearming lifts ${lifting}.`);
+  write('Eviction removes archived Episode and Turn projections permanently from there.');
+  const ready = writePreconditions(
+    rearmPreconditions(db, INSTALLED_PUBLICATION_KINDS, EVICTION_COMPATIBILITY_REVISION),
+    write,
+  );
+  writeNotVerified(write);
+  if (!ready) {
+    stderrWriter('not rearmed: a precondition above does not hold');
+    return 1;
+  }
+  if (
+    !(await confirm(`lift ${lifting}? the checks above cover none of the unverified list [y/N] `))
+  ) {
+    write('cancelled');
+    return 1;
+  }
+  const outcome = await publish();
+  if (outcome.status !== 'acknowledged') {
+    stderrWriter(`not rearmed: ${outcome.reason}`);
+    return 1;
+  }
+  write(`armed at compatibility revision ${String(EVICTION_COMPATIBILITY_REVISION)}`);
+  write('the stop is lifted and a restart keeps it armed. `aion evict disarm` stops it again.');
+  return 0;
+}
+
 export function runEvict(
   argv: readonly string[] = [],
   write: Writer = stdoutWriter,
@@ -152,39 +223,43 @@ export function runEvict(
       }
       // Bolt is needed only to move the fence: the coordinator takes the guard in the graph, and a
       // status read answers out of the records.
-      const connection = await substrate.requireGraph('evict disarm');
+      const { action } = flags;
+      const connection = await substrate.requireGraph(`evict ${action}`);
       if (connection === undefined) {
         return 1;
       }
       const epoch = readCurrentCoverageContract(db)?.epoch;
       if (epoch === undefined) {
-        stderrWriter('not disarmed: no coverage registry to act against');
+        stderrWriter(`not ${action}ed: no coverage registry to act against`);
         return 1;
       }
       const logger = substrate.logger();
       const publications = await lifecyclePublications({ connection, db, logger });
       const now = new Date();
-      return await runEvictDisarm(
-        db,
-        async () =>
-          await publications.publish({
-            kind: evictionArmingPublication.kind,
-            operationId: evictionArmingOperationId(
-              'disarm',
-              EVICTION_COMPATIBILITY_REVISION,
-              epoch,
-              now,
-            ),
-            payload: {
-              act: 'disarm',
-              revision: EVICTION_COMPATIBILITY_REVISION,
-              coverageEpoch: epoch,
-              observedAt: now.toISOString(),
-            },
-          }),
-        async (prompt) => await confirmOrExit(prompt, flags.yes, write),
-        write,
-      );
+      // Its own moment in its own identity: a stop and the lift of it are two decisions on one
+      // substrate under one revision and one contract, and each takes its own receipt.
+      const publish = async (): Promise<PublicationOutcome> =>
+        await publications.publish({
+          kind: evictionArmingPublication.kind,
+          operationId: evictionArmingOperationId(
+            action,
+            EVICTION_COMPATIBILITY_REVISION,
+            epoch,
+            now,
+          ),
+          payload: {
+            act: action,
+            revision: EVICTION_COMPATIBILITY_REVISION,
+            coverageEpoch: epoch,
+            observedAt: now.toISOString(),
+          },
+        });
+      const confirm = async (prompt: string): Promise<boolean> =>
+        await confirmOrExit(prompt, flags.yes, write);
+      if (action === 'rearm') {
+        return await runEvictRearm(db, publish, confirm, write);
+      }
+      return await runEvictDisarm(db, publish, confirm, write);
     },
   });
 }

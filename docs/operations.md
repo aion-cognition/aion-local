@@ -23,12 +23,16 @@ Either way it is one command to running:
 
 ```
 ./bin/aion init              # docker
-./bin/aion-native init --profile native
+./bin/aion-native init --install native
 ```
 
 `init` is idempotent on both. A re-run against a healthy install reports what is already there
 and changes nothing: no container is recreated, no launchd job is bounced, and no configuration
 file is rewritten.
+
+The flag was `--profile` for one release and is now `--install`, because `aion init full --profile
+native` put two different questions under one word. The old spelling still works and is not
+advertised.
 
 ### Bringing up the native profile
 
@@ -37,7 +41,7 @@ server and the CLI run from `packages/*/dist` rather than from an image.
 
 ```
 npm ci && npm run build
-./bin/aion-native init --profile native
+./bin/aion-native init --install native
 ```
 
 That one command does all of it. In order:
@@ -565,7 +569,7 @@ On the native profile the same two drops are two directories:
    file drop: with the server stopped, remove the `databases/neo4j` and `transactions/neo4j`
    directories under Neo4j's data directory. `SHOW SETTINGS 'server.directories.data'` on a
    running server names it, and on a Homebrew install it is `$(brew --prefix)/var/neo4j`.
-5. Start Neo4j again, then `./bin/aion-native init --profile native`.
+5. Start Neo4j again, then `./bin/aion-native init --install native`.
 
 The next init is then the fresh-substrate case, so the first thing the new substrate remembers
 is being initialized.
@@ -657,17 +661,27 @@ for a first one.
 
 **A stop holds through a restart.** The service does not arm over a standing stamp: a disarm is a
 statement an operator made, and a restart is not a retraction of it. The start reports the
-substrate as disarmed and leaves it alone. Lifting a stop is therefore a deliberate act of its
-own, and today that means clearing the stamp in the database or resetting the substrate; the
-re-arm path the old `aion evict arm` gave is gone with the command.
+substrate as disarmed and leaves it alone.
+
+**`aion evict rearm` is the way back**, because a stop must not be a one-way door. It publishes the
+arming act through the same operation the service start uses, prints which stop it is lifting and
+when the substrate recorded it, prints the unverified list the way the old `arm` did, and asks. The
+lift takes its own receipt, so the stop and the lift read in sequence in the ledger. After it, the
+fence is armed and stays armed across restarts, and `disarm` stops it again.
+
+It is also the one act allowed to lift a stop that was asked for and never recorded (below). The
+service start refuses that case on purpose; a person naming the owed stop out loud is when clearing
+it is right. Run on a substrate nobody stopped, `rearm` reports that there is nothing to lift and
+publishes nothing.
 
 A stop that was asked for and never recorded is different. `aion evict disarm` claims it durably
 before the guard settles anything, so an attempt that dies after the claim and before its
 acknowledgment leaves the substrate stopped with a claim nobody finished. `aion doctor` and
 `/health` name the operation that owes it. **Running `aion evict disarm` again is what resolves
 it**: the next stop adopts the standing claim and its own acknowledgment records it. The service's
-own arm refuses with `eviction_stop_owed` and reports it, because clearing an unrecorded stop
-would lose the record that somebody asked for one.
+own arm refuses with `eviction_stop_owed` and reports it, because clearing an unrecorded stop is
+not a decision a restart should take. `aion evict rearm` will clear it, since that is a person
+saying so; the operation that asked keeps its own intent row either way.
 
 **It stops future evictions and cannot undo one that already happened.** An eviction that reached
 its acknowledgment removed a projection under a receipt, and nothing puts it back.
