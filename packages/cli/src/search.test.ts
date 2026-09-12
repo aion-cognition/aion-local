@@ -265,8 +265,8 @@ describe('coverage at the search command', () => {
   });
 
   /**
-   * F11-A10: the same unsupported request, through the command line and through the tool, is
-   * refused for the same reason against the same bounds and spends nothing either way.
+   * The same unsupported request, through the command line and through the tool, is refused for
+   * the same reason against the same bounds and spends nothing either way.
    */
   it('refuses identically over the command line and over the tool', async () => {
     activateCoverageContract(db, { activatedAt: ACTIVATED_AT, fieldPolicyVersion: 1 });

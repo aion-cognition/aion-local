@@ -137,9 +137,9 @@ describe('sealing', () => {
   });
 
   /**
-   * F13 D6: a backdated arrival joins the remainder and seals into a LATER chunk. Sealed history
-   * is append-only at the chunk grain, so the only record that the two describe the same stretch
-   * of time is the annotation the later seal writes.
+   * A backdated arrival joins the remainder and seals into a LATER chunk. Sealed history is
+   * append-only at the chunk grain, so the only record that the two describe the same stretch of
+   * time is the annotation the later seal writes.
    */
   it('records the earlier chunk a backdated arrival overlaps, and moves nothing about it', () => {
     accepted('early', 1, '2026-09-09T09:00:00.000Z');

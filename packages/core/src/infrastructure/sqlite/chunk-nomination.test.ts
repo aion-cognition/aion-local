@@ -151,9 +151,9 @@ describe('a session tail that is due to seal', () => {
 
 describe('membership a source is not proved for', () => {
   /**
-   * F13 D9 makes a verified identity a precondition of membership. An unresolved source waiting
-   * outside every chunk is the correct answer and a silent one, so the count travels with the
-   * demand rather than the source simply never being narrated.
+   * A verified identity is a precondition of membership. An unresolved source waiting outside
+   * every chunk is the correct answer and a silent one, so the count travels with the demand
+   * rather than the source simply never being narrated.
    */
   it('is outside the eligible tail and counted by itself', () => {
     accept({ sourceId: 's1', position: 1 });

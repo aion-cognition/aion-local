@@ -11,8 +11,8 @@ export const NARRATIVE_SCHEMA_STATEMENTS: readonly string[] = [
    * A chunk is a sealed set of sources under one partition policy. `published_revision_no` is
    * the head: null until a first publication lands, and moved only by one that succeeds.
    *
-   * `overlaps_json` is F13 D6's annotation: the earlier chunks of this session whose world-time
-   * span contains ANY of this one's members. A backdated arrival joins the remainder and seals
+   * `overlaps_json` names the earlier chunks of this session whose world-time span contains ANY
+   * of this one's members. A backdated arrival joins the remainder and seals
    * into a later chunk rather than repartitioning history, so the overlap is the only record that
    * the two describe the same stretch of time. Null and empty differ as they do everywhere here:
    * null means nobody computed it, an empty array means it was computed and there was none.

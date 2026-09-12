@@ -270,9 +270,9 @@ describe('a served request', () => {
 });
 
 /**
- * F11 D6: the text says what the JSON says. A caller reading only the block is the one who
- * would otherwise take a partial answer for a complete one, so every limitation and gap the
- * metadata carries is in the words too, and an ordinary answer stays ordinary.
+ * The text says what the JSON says. A caller reading only the block is the one who would
+ * otherwise take a partial answer for a complete one, so every limitation and gap the metadata
+ * carries is in the words too, and an ordinary answer stays ordinary.
  */
 describe('what the rendered text says', () => {
   function renderedOf(outcome: Awaited<ReturnType<typeof recall>>): string {
@@ -350,9 +350,9 @@ describe('a contract that moves under the read', () => {
   });
 
   /**
-   * F11-A16's last leg: activation is an epoch change like any other, so a read that began
-   * under the preparing record revalidates at the boundary rather than being served under the
-   * contract that replaced it.
+   * Activation is an epoch change like any other, so a read that began under the preparing
+   * record revalidates at the boundary rather than being served under the contract that
+   * replaced it.
    */
   it('refuses a read that began while the contract was still preparing', async () => {
     atBoundary = () => {

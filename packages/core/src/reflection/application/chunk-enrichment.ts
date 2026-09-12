@@ -14,8 +14,8 @@ import type { ChunkEnrichmentNode } from '../domain/chunk-render.js';
  *
  * Enrichment is optional, which decides whether it may be OMITTED. It does not decide whether it
  * may be submitted unfenced: once a node's text is in the prompt, or its id is cited, the revision
- * rests on it exactly as it rests on a member's raw passage, and F12 D9 asks for every read the
- * answer stood on. A node whose state nobody can certify is therefore left out rather than sent.
+ * rests on it exactly as it rests on a member's raw passage, and the revision has to name every
+ * read it stood on. A node whose state nobody can certify is left out rather than sent.
  *
  * Nomination happens over the SUBMITTED MEMBERSHIP first and the bound is applied to that. A
  * session-wide read bounded across every episode a session ever held will spend its whole limit on

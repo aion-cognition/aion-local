@@ -23,9 +23,9 @@ export const CHUNK_STATES = ['sealed', 'published'] as const;
 export type ChunkState = (typeof CHUNK_STATES)[number];
 
 /**
- * F13 D2's identity. The member set is sorted and deduplicated first, so the same seal computes
- * the same id however the remainder read returned it, and the separator is escaped rather than
- * written as a raw byte.
+ * A chunk's identity is its member set, not the order a read returned them in. The set is sorted
+ * and deduplicated first, so the same seal computes the same id however the remainder read came
+ * back, and the separator is escaped rather than written as a raw byte.
  */
 export function chunkIdentity(
   sessionIdentity: string,
@@ -87,7 +87,7 @@ export type SealedChunk = {
   readonly publishedRevisionNo: number | null;
   readonly memberCount: number;
   readonly createdAt: string;
-  /** F13 D6: earlier chunks of this session whose world-time span holds any of this one's members. */
+  /** Earlier chunks of this session whose world-time span holds any of this one's members. */
   readonly overlaps: readonly string[] | undefined;
   /** Whether more overlapping chunks were found than the bound stores. A list, not a survey. */
   readonly overlapsTruncated: boolean | undefined;

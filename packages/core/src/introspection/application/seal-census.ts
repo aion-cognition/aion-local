@@ -178,8 +178,8 @@ export function readSealDemand(db: SqliteHandle, input: SealCensusInput): SealDe
       blockedSourcesByReason[tally.reason] = tally.sources;
     }
     if (held.sources > 0) {
-      // F13 D9 keeps an unverified source outside membership. It is held, not eligible, and it
-      // is named so the wait is visible rather than a source that is simply never narrated.
+      // An unverified source stays outside membership. It is held, not eligible, and it is
+      // named so the wait is visible rather than a source that is simply never narrated.
       blockedSourcesByReason.membership_unverified = held.sources;
     }
     const blockedAt = blocked.reduce<string | undefined>(

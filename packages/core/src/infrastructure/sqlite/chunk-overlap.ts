@@ -9,8 +9,8 @@ type OverlapAnnotation = {
 /**
  * Earlier chunks of this session whose members' world-time span holds a member of `sourceIds`.
  *
- * The condition is F13 D6's: an arrival whose world time falls inside a sealed chunk's span does
- * not repartition it. It is asked of EVERY new member, not only the earliest one. A membership
+ * The condition: an arrival whose world time falls inside a sealed chunk's span does not
+ * repartition it. It is asked of EVERY new member, not only the earliest one. A membership
  * that opens before an old chunk and reaches into it overlaps that chunk on its later member, and
  * testing the earliest arrival alone answered for a moment no old span contained and stored
  * nothing — the annotation was silently empty exactly where a backdated arrival made it matter.

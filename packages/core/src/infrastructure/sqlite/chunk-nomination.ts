@@ -239,8 +239,8 @@ export type HeldMembership = {
 /**
  * Unsealed sources a chunk may not take yet because their identity is not proved.
  *
- * F13 D9 makes a verified source identity a precondition of membership, so an unresolved or
- * pinned source waits outside every chunk rather than freezing into one. Waiting silently is the
+ * A verified source identity is a precondition of membership, so an unresolved or pinned source
+ * waits outside every chunk rather than freezing into one. Waiting silently is the
  * loss this read exists to prevent: the count travels with the demand so the source is visible by
  * reason and age instead of simply never being narrated.
  */
