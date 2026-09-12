@@ -3,11 +3,13 @@ import {
   drainSourceIndexQueue,
   countQueueJobsByLane,
   dropUnclaimedJobs,
+  INTEGRATE_JOB_TYPE,
   isReflectionLane,
   listQueueJobs,
   promoteJobs,
   reconcileEnrichment,
   REFLECTION_LANES,
+  SOURCE_INDEX_JOB_TYPE,
   sourceReadDeps,
   type ReflectionJob,
   type ReflectionLane,
@@ -36,15 +38,19 @@ type Subcommand = (typeof SUBCOMMANDS)[number];
 
 const DEFAULT_LIST_LIMIT = 50;
 
+/** The two rows an acceptance writes, which is the whole population this command can act on. */
+const JOB_TYPES = [INTEGRATE_JOB_TYPE, SOURCE_INDEX_JOB_TYPE] as const;
+
 const SPEC: ArgSpec<Subcommand> = {
   command: 'queue',
   usage:
     'aion queue [ls | drop | promote | reconcile | index] [--session <id>] [--lane <lane>] ' +
-    '[--limit <n>] [--re-enqueue] [--yes]',
+    '[--job-type <type>] [--limit <n>] [--re-enqueue] [--yes]',
   subcommands: SUBCOMMANDS,
   options: [
     { flag: '--session', takesValue: true },
     { flag: '--lane', takesValue: true },
+    { flag: '--job-type', takesValue: true },
     { flag: '--limit', takesValue: true },
     { flag: '--re-enqueue' },
     { flag: '--yes' },
@@ -55,6 +61,7 @@ export type QueueFlags = {
   readonly subcommand: Subcommand;
   readonly session?: string;
   readonly lane?: ReflectionLane;
+  readonly jobType?: string;
   readonly limit?: number;
   readonly reEnqueue: boolean;
   readonly yes: boolean;
@@ -66,6 +73,16 @@ function laneOf(value: string | undefined): ReflectionLane | undefined {
   }
   if (!isReflectionLane(value)) {
     throw new CliUsageError(`--lane got '${value}', expected ${REFLECTION_LANES.join(' or ')}`);
+  }
+  return value;
+}
+
+function jobTypeOf(value: string | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!JOB_TYPES.includes(value as (typeof JOB_TYPES)[number])) {
+    throw new CliUsageError(`--job-type got '${value}', expected ${JOB_TYPES.join(' or ')}`);
   }
   return value;
 }
@@ -86,7 +103,16 @@ export function parseQueueFlags(argv: readonly string[]): QueueFlags {
   const { subcommand, flags, values } = parseArgs(SPEC, argv);
   const session = values.get('--session');
   const lane = laneOf(values.get('--lane'));
+  const jobType = jobTypeOf(values.get('--job-type'));
   const limit = limitOf(values.get('--limit'));
+
+  if (subcommand === 'promote' && jobType === SOURCE_INDEX_JOB_TYPE) {
+    throw new CliUsageError(
+      `promote does not move ${SOURCE_INDEX_JOB_TYPE} rows: the index drainer claims them by ` +
+        'job type rather than by lane, so promotion buys them nothing, and while they sit in ' +
+        'the interactive lane `pending_ahead` reports them as work ahead of every live turn',
+    );
+  }
 
   return {
     subcommand,
@@ -94,6 +120,7 @@ export function parseQueueFlags(argv: readonly string[]): QueueFlags {
     yes: flags.has('--yes'),
     ...(session === undefined ? {} : { session }),
     ...(lane === undefined ? {} : { lane }),
+    ...(jobType === undefined ? {} : { jobType }),
     ...(limit === undefined ? {} : { limit }),
   };
 }
@@ -102,10 +129,28 @@ function filterOf(flags: QueueFlags): ReflectionQueueFilter {
   return {
     ...(flags.session === undefined ? {} : { sessionId: flags.session }),
     ...(flags.lane === undefined ? {} : { lane: flags.lane }),
+    ...(flags.jobType === undefined ? {} : { jobType: flags.jobType }),
   };
 }
 
-function describeFilter(flags: QueueFlags): string {
+/**
+ * What `drop` and `promote` act on, which is never the whole queue.
+ *
+ * Both narrow to the reflection backlog unless the operator names a type. An acceptance also
+ * writes a `source_index` row that a different handler owns: dropping it destroys an obligation
+ * nothing else records, and promoting it puts a row the index drainer claims by job type into the
+ * one lane `pending_ahead` counts. That narrowing used to be accidental — index rows are
+ * hard-coded to the bulk lane, and that literal is the only reason `pending_ahead` survived.
+ */
+function writeFilterOf(flags: QueueFlags): ReflectionQueueFilter {
+  return { ...filterOf(flags), jobType: flags.jobType ?? INTEGRATE_JOB_TYPE };
+}
+
+/**
+ * What a write will act on. The job type is always named, because the narrowing is the part an
+ * operator has to see: `drop` and `promote` never reach the whole queue.
+ */
+function describeWriteFilter(flags: QueueFlags): string {
   const parts: string[] = [];
   if (flags.lane !== undefined) {
     parts.push(`lane=${flags.lane}`);
@@ -113,7 +158,8 @@ function describeFilter(flags: QueueFlags): string {
   if (flags.session !== undefined) {
     parts.push(`session=${flags.session}`);
   }
-  return parts.length === 0 ? 'the whole queue' : parts.join(' ');
+  parts.push(`job-type=${flags.jobType ?? INTEGRATE_JOB_TYPE}`);
+  return parts.join(' ');
 }
 
 /** Column widths are the widest value each field can hold: a uuid session id is 36 characters. */
@@ -122,12 +168,13 @@ export function renderQueueJobs(jobs: readonly ReflectionJob[], now: Date, write
     write('no matching jobs');
     return;
   }
-  write('lane         age    attempts  session                               job');
+  write('lane         type         age    attempts  session                               job');
   for (const job of jobs) {
     const state = job.claimedAt === null ? '' : ' (claimed)';
     write(
       [
         job.lane.padEnd(12),
+        job.jobType.padEnd(12),
         ageOf(now.getTime() - new Date(job.enqueuedAt).getTime()).padStart(5),
         String(job.attempts).padStart(9),
         `  ${(job.sessionId ?? '-').padEnd(36)}`,
@@ -140,19 +187,39 @@ export function renderQueueJobs(jobs: readonly ReflectionJob[], now: Date, write
   }
 }
 
+/**
+ * The matched total, then each population on its own line. The per-lane depth is the reflection
+ * backlog alone: index rows are all bulk by construction, so summing them into that line reported
+ * a lane flood every time the corpus grew.
+ */
 function renderCounts(substrate: Substrate, flags: QueueFlags): void {
   const db = substrate.db();
   const { workerMaxAttempts } = substrate.config.operational;
-  const counts = countQueueJobs(db, filterOf(flags), workerMaxAttempts);
-  const byLane = countQueueJobsByLane(db, filterOf(flags), workerMaxAttempts);
-  const lanes = REFLECTION_LANES.map((lane) => `${lane}=${String(byLane.get(lane) ?? 0)}`).join(
-    ' ',
-  );
+  const filter = filterOf(flags);
+  const counts = countQueueJobs(db, filter, workerMaxAttempts);
   substrate.write('');
   substrate.write(
     `matched  ${String(counts.total)} jobs: ${String(counts.unclaimed)} unclaimed, ${String(counts.claimed)} claimed, ${String(counts.exhausted)} exhausted`,
   );
-  substrate.write(`pending  ${lanes}`);
+  if (flags.jobType !== SOURCE_INDEX_JOB_TYPE) {
+    const byLane = countQueueJobsByLane(
+      db,
+      { ...filter, jobType: INTEGRATE_JOB_TYPE },
+      workerMaxAttempts,
+    );
+    const lanes = REFLECTION_LANES.map((lane) => `${lane}=${String(byLane.get(lane) ?? 0)}`).join(
+      ' ',
+    );
+    substrate.write(`pending  ${lanes}`);
+  }
+  if (flags.jobType !== INTEGRATE_JOB_TYPE) {
+    const index = countQueueJobs(
+      db,
+      { ...filter, jobType: SOURCE_INDEX_JOB_TYPE },
+      workerMaxAttempts,
+    );
+    substrate.write(`index    ${String(index.pending)} ${SOURCE_INDEX_JOB_TYPE} rows pending`);
+  }
 }
 
 function runLs(substrate: Substrate, flags: QueueFlags): number {
@@ -165,12 +232,25 @@ function runLs(substrate: Substrate, flags: QueueFlags): number {
 async function runDrop(substrate: Substrate, flags: QueueFlags): Promise<number> {
   const db = substrate.db();
   const { write } = substrate;
-  const counts = countQueueJobs(db, filterOf(flags));
+  const filter = writeFilterOf(flags);
+  const counts = countQueueJobs(db, filter);
+  if (flags.jobType === undefined) {
+    const spared = countQueueJobs(db, { ...filterOf(flags), jobType: SOURCE_INDEX_JOB_TYPE });
+    if (spared.unclaimed > 0) {
+      write(
+        `${String(spared.unclaimed)} unclaimed ${SOURCE_INDEX_JOB_TYPE} rows are excluded: ` +
+          `they are a different handler's obligation and nothing else records them. ` +
+          `Pass --job-type ${SOURCE_INDEX_JOB_TYPE} to drop those instead`,
+      );
+    }
+  }
   if (counts.unclaimed === 0) {
-    write(`nothing to drop: no unclaimed jobs match ${describeFilter(flags)}`);
+    write(`nothing to drop: no unclaimed jobs match ${describeWriteFilter(flags)}`);
     return 0;
   }
-  write(`would drop ${String(counts.unclaimed)} unclaimed jobs matching ${describeFilter(flags)}`);
+  write(
+    `would drop ${String(counts.unclaimed)} unclaimed jobs matching ${describeWriteFilter(flags)}`,
+  );
   if (counts.claimed > 0) {
     write(`${String(counts.claimed)} claimed jobs are running and are left alone`);
   }
@@ -178,18 +258,19 @@ async function runDrop(substrate: Substrate, flags: QueueFlags): Promise<number>
     write('their episodes stay in the graph; re-run with --yes to drop the queue rows');
     return 0;
   }
-  const dropped = dropUnclaimedJobs(db, filterOf(flags));
-  substrate.logger().warn({ dropped, filter: filterOf(flags) }, 'reflection queue jobs dropped');
-  write(`dropped ${String(dropped)} unclaimed jobs matching ${describeFilter(flags)}`);
+  const dropped = dropUnclaimedJobs(db, filter);
+  substrate.logger().warn({ dropped, filter }, 'reflection queue jobs dropped');
+  write(`dropped ${String(dropped)} unclaimed jobs matching ${describeWriteFilter(flags)}`);
   write('their episodes are still stored; `aion queue reconcile` counts and can re-enqueue them');
   return 0;
 }
 
 function runPromote(substrate: Substrate, flags: QueueFlags): number {
-  const promoted = promoteJobs(substrate.db(), filterOf(flags));
-  substrate.logger().info({ promoted, filter: filterOf(flags) }, 'reflection queue jobs promoted');
+  const filter = writeFilterOf(flags);
+  const promoted = promoteJobs(substrate.db(), filter);
+  substrate.logger().info({ promoted, filter }, 'reflection queue jobs promoted');
   substrate.write(
-    `promoted ${String(promoted)} unclaimed jobs to the interactive lane (${describeFilter(flags)})`,
+    `promoted ${String(promoted)} unclaimed jobs to the interactive lane (${describeWriteFilter(flags)})`,
   );
   return 0;
 }

@@ -9,6 +9,12 @@ export { handleReflection, INTEGRATE_JOB_TYPE } from './application/intake.js';
 export type { ReflectionIntakeDeps } from './application/intake.js';
 
 /**
+ * The other row an acceptance writes. Exported because `aion queue` is the surface that has to
+ * tell the reflection backlog apart from the index obligations a different handler owns.
+ */
+export { SOURCE_INDEX_JOB_TYPE } from './application/intake-queue.js';
+
+/**
  * The one installed handler set. The legacy materialization producer joins it here; its migration
  * DRIVER is a separate owner's, so the freeze/walk/seal entry points stay inside core until that
  * driver exists to import them.

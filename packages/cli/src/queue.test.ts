@@ -2,6 +2,7 @@ import {
   enqueueReflectionJob,
   listReflectionJobs,
   ReflectionQueueClaimant,
+  SOURCE_INDEX_JOB_TYPE,
   SqliteStore,
   type ReflectionLane,
 } from '@aion/core';
@@ -47,6 +48,18 @@ describe('parseQueueFlags', () => {
     expect(() => parseQueueFlags(['ls', '--limit', 'lots'])).toThrow(
       "--limit got 'lots', expected a positive integer",
     );
+    expect(() => parseQueueFlags(['ls', '--job-type', 'reflect'])).toThrow(
+      "--job-type got 'reflect', expected",
+    );
+  });
+
+  it('refuses to promote index rows, since promoting them breaks pending_ahead', () => {
+    expect(() => parseQueueFlags(['promote', '--job-type', SOURCE_INDEX_JOB_TYPE])).toThrow(
+      'promote does not move source_index rows',
+    );
+    expect(parseQueueFlags(['drop', '--job-type', SOURCE_INDEX_JOB_TYPE]).jobType).toBe(
+      SOURCE_INDEX_JOB_TYPE,
+    );
   });
 });
 
@@ -86,6 +99,16 @@ describe('aion queue against a seeded substrate', () => {
     enqueue('flood', 'bulk', 'flood-0');
     enqueue('flood', 'bulk', 'flood-1');
     enqueue('agent', 'interactive', 'live-0');
+  }
+
+  /** The other row an acceptance writes, always bulk, owned by the index drainer. */
+  function enqueueIndex(sessionId: string, label: string): string {
+    return enqueueReflectionJob(
+      store.db,
+      SOURCE_INDEX_JOB_TYPE,
+      { episode_id: label },
+      { lane: 'bulk', sessionId },
+    );
   }
 
   it('lists the queue with lanes, sessions and a per-lane depth', async () => {
@@ -149,6 +172,64 @@ describe('aion queue against a seeded substrate', () => {
 
     expect(lines.join('\n')).toContain('promoted 2 unclaimed jobs to the interactive lane');
     expect(listReflectionJobs(store.db).every((job) => job.lane === 'interactive')).toBe(true);
+  });
+
+  it('counts the reflection backlog and the index rows as two numbers, never one', async () => {
+    seed();
+    enqueueIndex('flood', 'flood-0');
+    enqueueIndex('flood', 'flood-1');
+    enqueueIndex('agent', 'live-0');
+    const { lines, write } = collector();
+
+    expect(await runQueue(['ls'], write)).toBe(0);
+
+    const output = lines.join('\n');
+    expect(output).toContain('matched  6 jobs: 6 unclaimed, 0 claimed, 0 exhausted');
+    // The per-lane line is the reflection backlog alone: all three index rows are bulk.
+    expect(output).toContain('pending  interactive=1 bulk=2');
+    expect(output).toContain('index    3 source_index rows pending');
+    expect(output).toContain(SOURCE_INDEX_JOB_TYPE);
+  });
+
+  it('leaves index rows alone on a drop, and says how many it spared', async () => {
+    seed();
+    enqueueIndex('flood', 'flood-0');
+    const { lines, write } = collector();
+
+    await runQueue(['drop', '--session', 'flood', '--yes'], write);
+
+    const output = lines.join('\n');
+    expect(output).toContain('1 unclaimed source_index rows are excluded');
+    expect(output).toContain('dropped 2 unclaimed jobs matching session=flood job-type=integrate');
+    expect(listReflectionJobs(store.db).map((job) => job.jobType).sort()).toEqual([
+      'integrate',
+      SOURCE_INDEX_JOB_TYPE,
+    ]);
+  });
+
+  it('drops index rows only when asked for them by name', async () => {
+    seed();
+    enqueueIndex('flood', 'flood-0');
+    const { lines, write } = collector();
+
+    await runQueue(['drop', '--job-type', SOURCE_INDEX_JOB_TYPE, '--yes'], write);
+
+    expect(lines.join('\n')).toContain('dropped 1 unclaimed jobs');
+    expect(listReflectionJobs(store.db).every((job) => job.jobType === 'integrate')).toBe(true);
+  });
+
+  it('promotes the reflection backlog and leaves the index rows in the bulk lane', async () => {
+    seed();
+    const indexId = enqueueIndex('flood', 'flood-0');
+    const { write } = collector();
+
+    await runQueue(['promote', '--session', 'flood'], write);
+
+    const promoted = listReflectionJobs(store.db);
+    expect(promoted.filter((job) => job.lane === 'interactive')).toHaveLength(3);
+    // `pending_ahead` reads the interactive lane, so an index row that moved would be counted
+    // against every live turn until it drained.
+    expect(promoted.find((job) => job.id === indexId)?.lane).toBe('bulk');
   });
 
   it('rejects a bad option before opening anything', async () => {
