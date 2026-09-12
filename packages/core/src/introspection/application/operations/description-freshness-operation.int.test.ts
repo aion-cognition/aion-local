@@ -18,7 +18,9 @@ import {
 import { linkEntityMentions, mergeEntities } from '../../../infrastructure/graph/entity-queries.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import {
+  closeEntityValidity,
   nodeProperties,
+  reopenEntityValidity,
   storedEntity,
 } from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
@@ -175,10 +177,7 @@ describe('descriptionFreshnessOperation against a live graph', () => {
     // The two model calls are long enough for a merge, a decay, or a forget to close the
     // entity. The write is an in-place replacement with no close to undo, so it carries the
     // currency test itself.
-    await harness.driver.executeQuery(
-      'MATCH (e:Entity { id: $id }) SET e.valid_until = datetime($now)',
-      { id: entityId, now: NOW.toISOString() },
-    );
+    await closeEntityValidity(harness.driver, entityId, NOW);
     try {
       const applied = await refreshEntityDescription(harness.driver, {
         id: entityId,
@@ -192,9 +191,7 @@ describe('descriptionFreshnessOperation against a live graph', () => {
       const props = await nodeProperties(harness.driver, entityId);
       expect(props.text).toBe(REFRESHED_DESCRIPTION);
     } finally {
-      await harness.driver.executeQuery('MATCH (e:Entity { id: $id }) REMOVE e.valid_until', {
-        id: entityId,
-      });
+      await reopenEntityValidity(harness.driver, entityId);
     }
   }, 60_000);
 

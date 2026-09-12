@@ -15,6 +15,7 @@ import {
 } from '../../infrastructure/graph/introspection-health.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import { findPendingVectorNodes } from '../../infrastructure/graph/pending-vectors.js';
+import { setEpisodeVectorHash } from '../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
@@ -165,20 +166,14 @@ describe('graph health counts', () => {
   it('counts a vector with no hash as missing, the same population the drain reads', async () => {
     // A re-enqueue clears the hash and leaves the floats: the node is behind, because nothing
     // can show the stored vector was taken over the text the node holds now.
-    await harness.driver.executeQuery(
-      'MATCH (n:Episode { id: $id }) SET n.content_vec_hash = null',
-      { id: 'episode-loose' },
-    );
+    await setEpisodeVectorHash(harness.driver, 'episode-loose', null);
     try {
       expect(await countVectorParity(harness.driver)).toEqual({ expected: 6, vectored: 4 });
       expect(await findPendingVectorNodes(harness.driver, 10)).toContainEqual(
         expect.objectContaining({ id: 'episode-loose' }),
       );
     } finally {
-      await harness.driver.executeQuery(
-        'MATCH (n:Episode { id: $id }) SET n.content_vec_hash = $hash',
-        { id: 'episode-loose', hash: VECTOR_HASH },
-      );
+      await setEpisodeVectorHash(harness.driver, 'episode-loose', VECTOR_HASH);
     }
   });
 

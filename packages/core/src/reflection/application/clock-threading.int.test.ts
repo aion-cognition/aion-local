@@ -9,16 +9,17 @@ import { CognitiveExtractionStage } from './stages/cognitive.js';
 import { EntityExtractionStage } from './stages/entities.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
-import {
-  BITEMPORAL_PROPERTIES,
-  writeStampedDerivedNodeInTransaction,
-} from '../../infrastructure/graph/bitemporal.js';
-import { inWriteTransaction, runRead } from '../../infrastructure/graph/connection.js';
+import { writeStampedDerivedNodeInTransaction } from '../../infrastructure/graph/bitemporal.js';
+import { inWriteTransaction } from '../../infrastructure/graph/connection.js';
 import { upsertEdgeInTransaction } from '../../infrastructure/graph/edges.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
 import { BASE_NODE_LABEL } from '../../infrastructure/graph/labels.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
 import { ensureGraphSession } from '../../infrastructure/graph/sessions.js';
+import {
+  stampsOfLabel,
+  type NodeStamps,
+} from '../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
@@ -75,13 +76,7 @@ let dataDir: string;
 let logger: Logger;
 let provider: Provider;
 
-type Stamps = {
-  readonly id: string;
-  readonly labels: readonly string[];
-  readonly occurredAt: Date | null;
-  readonly validFrom: Date | null;
-  readonly txFrom: Date | null;
-};
+type Stamps = NodeStamps;
 
 /**
  * The episode as it reached the substrate, written at the fixture's clock: the Session, the
@@ -153,25 +148,7 @@ async function seedExperience(memberId: string, workspaceId: string): Promise<vo
 }
 
 async function stampsOf(label: string): Promise<Stamps[]> {
-  return runRead(
-    harness.driver,
-    [
-      `MATCH (n:${label})`,
-      'RETURN n.id AS id, labels(n) AS labels,',
-      `       n.${BITEMPORAL_PROPERTIES.occurredAt} AS occurred_at,`,
-      `       n.${BITEMPORAL_PROPERTIES.validFrom} AS valid_from,`,
-      `       n.${BITEMPORAL_PROPERTIES.txFrom} AS tx_from`,
-      'ORDER BY n.id',
-    ].join('\n'),
-    {},
-    (row) => ({
-      id: row.id as string,
-      labels: row.labels as string[],
-      occurredAt: (row.occurred_at ?? null) as Date | null,
-      validFrom: (row.valid_from ?? null) as Date | null,
-      txFrom: (row.tx_from ?? null) as Date | null,
-    }),
-  );
+  return stampsOfLabel(harness.driver, label);
 }
 
 const BACKBONE_LABELS = ['Member', 'Workspace', 'Substrate'];

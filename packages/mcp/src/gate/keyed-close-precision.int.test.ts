@@ -6,17 +6,16 @@ import {
   resolveProviderRouting,
   writeStampedNode,
 } from '@aion/core';
-import { runRead } from '@aion/core/infrastructure/graph/connection.js';
 import { SUBJECT_PROPAGATION_METHOD } from '@aion/core/infrastructure/graph/subject-family.js';
+import {
+  closesByMethod,
+  keyedClaims as keyedClaimRows,
+} from '@aion/core/infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   CognitiveExtractionStage,
   DEFAULT_KEYED_CLOSE_MODE,
 } from '@aion/core/reflection/application/stages/cognitive.js';
-import {
-  CLAIM_ASPECT_PROPERTY,
-  CLAIM_SUBJECT_PROPERTY,
-  KEYED_CLOSE_METHOD,
-} from '@aion/core/reflection/domain/claim-key.js';
+import { KEYED_CLOSE_METHOD } from '@aion/core/reflection/domain/claim-key.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { GateSubstrate, REMOTE_JUDGE_ABSENT } from './gate-substrate.fixture.js';
@@ -163,33 +162,9 @@ async function enrich(episodeId: string, text: string, occurredAt: Date): Promis
   }
 }
 
-/** Every claim the run keyed, so a case can say whether the mechanism had anything to match on. */
-const KEYED_CLAIMS = [
-  'MATCH (n:Memory)-[:EXTRACTED_FROM]->(e:Episode)',
-  `WHERE n.${CLAIM_SUBJECT_PROPERTY} IS NOT NULL AND n.${CLAIM_ASPECT_PROPERTY} IS NOT NULL`,
-  'RETURN n.id AS id, e.id AS episode_id,',
-  `       n.${CLAIM_SUBJECT_PROPERTY} AS subject, n.${CLAIM_ASPECT_PROPERTY} AS aspect`,
-  'ORDER BY episode_id, id',
-].join('\n');
-
 /** Every close the key itself made, read off the lineage edge's provenance rather than a counter. */
-const CLOSES_BY_METHOD = [
-  'MATCH (newClaim)-[r:SUPERSEDES]->(old)',
-  'WHERE $method IN r.provenance',
-  'MATCH (newClaim)-[:EXTRACTED_FROM]->(newEpisode:Episode)',
-  'MATCH (old)-[:EXTRACTED_FROM]->(oldEpisode:Episode)',
-  'RETURN newClaim.id AS new_id, old.id AS old_id,',
-  '       newEpisode.id AS new_episode_id, oldEpisode.id AS old_episode_id',
-  'ORDER BY old_id, new_id',
-].join('\n');
-
 async function readClosesBy(method: string): Promise<MechanicalClose[]> {
-  return runRead(substrate.driver, CLOSES_BY_METHOD, { method }, (row) => ({
-    newId: row.new_id as string,
-    oldId: row.old_id as string,
-    newEpisodeId: row.new_episode_id as string,
-    oldEpisodeId: row.old_episode_id as string,
-  }));
+  return closesByMethod(substrate.driver, method);
 }
 
 /** A close is right when it runs from a case's later half to its own earlier half, and the case corrects. */
@@ -270,11 +245,12 @@ beforeAll(async () => {
     await enrich(newEpisodeId(entry), entry.next, NEW_AT);
   }
 
-  keyedClaims = await runRead(substrate.driver, KEYED_CLAIMS, {}, (row) => ({
-    id: row.id as string,
-    episodeId: row.episode_id as string,
-    subjectEntityId: row.subject as string,
-    aspectNorm: row.aspect as string,
+  // Every claim the run keyed, so a case can say whether the mechanism had anything to match on.
+  keyedClaims = (await keyedClaimRows(substrate.driver)).map((row) => ({
+    id: row.id,
+    episodeId: row.episodeId,
+    subjectEntityId: row.subject,
+    aspectNorm: row.aspect,
   }));
   closes = await readClosesBy(KEYED_CLOSE_METHOD);
   propagated = (await readClosesBy(SUBJECT_PROPAGATION_METHOD)).length;

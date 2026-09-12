@@ -1,5 +1,9 @@
 import neo4j, { type Driver } from 'neo4j-driver';
 
+import {
+  CLAIM_ASPECT_PROPERTY,
+  CLAIM_SUBJECT_PROPERTY,
+} from '../../../reflection/domain/claim-key.js';
 import type { Vector } from '../../providers/types.js';
 import { ACCESS_COUNT_PROPERTY } from '../access-tracking.js';
 import { CO_OCCURS_TYPE, SIMILAR_TYPE } from '../association-queries.js';
@@ -15,7 +19,8 @@ import {
   ENTITY_PARTICIPATION_TYPE,
   ENTITY_TYPE_COUNTS_PROPERTY,
 } from '../entity-queries.js';
-import { BASE_NODE_LABEL } from '../labels.js';
+import { MEMORY_PROPERTIES } from '../episodes.js';
+import { BASE_NODE_LABEL, ENTITY_LABEL, EXTRACTION_TYPE } from '../labels.js';
 import { SUPERSEDES_TYPE } from '../relationships.js';
 import { LAST_ACCESSED_PROPERTY } from '../seed-queries.js';
 import { fromGraphVector, toGraphDateTime, toGraphVector, type Row } from '../values.js';
@@ -684,5 +689,153 @@ export async function retireEpisodeProjection(driver: Driver, episodeId: string)
       parameters: { id: episodeId },
     },
     () => undefined,
+  );
+}
+
+/**
+ * Puts an episode's vector hash where a test needs it, reversibly.
+ *
+ * A null hash is what a re-enqueue leaves: the floats stay and nothing can show they were taken
+ * over the text the node holds now, which is the reading the drain and the parity count share.
+ */
+export async function setEpisodeVectorHash(
+  driver: Driver,
+  episodeId: string,
+  hash: string | null,
+): Promise<void> {
+  await runWrite(
+    driver,
+    {
+      cypher: `MATCH (n:Episode { id: $id }) SET n.${MEMORY_PROPERTIES.contentVectorHash} = $hash`,
+      parameters: { id: episodeId, hash },
+    },
+    () => undefined,
+  );
+}
+
+/**
+ * Closes an entity's validity the way a merge, a decay or a forget would, and reopens it.
+ *
+ * The pair is what makes a currency test reversible: an in-place description rewrite carries its
+ * own currency check and has no close to undo, so the test has to supply the close itself.
+ */
+export async function closeEntityValidity(
+  driver: Driver,
+  entityId: string,
+  at: Date,
+): Promise<void> {
+  await runWrite(
+    driver,
+    {
+      cypher: `MATCH (e:${ENTITY_LABEL} { id: $id }) SET e.${BITEMPORAL_PROPERTIES.validUntil} = datetime($at)`,
+      parameters: { id: entityId, at: at.toISOString() },
+    },
+    () => undefined,
+  );
+}
+
+export async function reopenEntityValidity(driver: Driver, entityId: string): Promise<void> {
+  await runWrite(
+    driver,
+    {
+      cypher: `MATCH (e:${ENTITY_LABEL} { id: $id }) REMOVE e.${BITEMPORAL_PROPERTIES.validUntil}`,
+      parameters: { id: entityId },
+    },
+    () => undefined,
+  );
+}
+
+/** The three clocks a node carries, read together so a test can say which of them agree. */
+export type NodeStamps = {
+  readonly id: string;
+  readonly labels: readonly string[];
+  readonly occurredAt: Date | null;
+  readonly validFrom: Date | null;
+  readonly txFrom: Date | null;
+};
+
+/** Every node of one label with its clocks, ordered, for a test comparing axes across a write. */
+export async function stampsOfLabel(driver: Driver, label: string): Promise<NodeStamps[]> {
+  return runRead(
+    driver,
+    [
+      `MATCH (n:${label})`,
+      'RETURN n.id AS id, labels(n) AS labels,',
+      `       n.${BITEMPORAL_PROPERTIES.occurredAt} AS occurred_at,`,
+      `       n.${BITEMPORAL_PROPERTIES.validFrom} AS valid_from,`,
+      `       n.${BITEMPORAL_PROPERTIES.txFrom} AS tx_from`,
+      'ORDER BY n.id',
+    ].join('\n'),
+    {},
+    (row) => ({
+      id: row.id as string,
+      labels: row.labels as string[],
+      occurredAt: (row.occurred_at ?? null) as Date | null,
+      validFrom: (row.valid_from ?? null) as Date | null,
+      txFrom: (row.tx_from ?? null) as Date | null,
+    }),
+  );
+}
+
+/** A claim the keying mechanism had something to match on: both key properties present. */
+export type KeyedClaimRow = {
+  readonly id: string;
+  readonly episodeId: string;
+  readonly subject: string;
+  readonly aspect: string;
+};
+
+export async function keyedClaims(driver: Driver): Promise<KeyedClaimRow[]> {
+  return runRead(
+    driver,
+    [
+      `MATCH (n:Memory)-[:${EXTRACTION_TYPE}]->(e:Episode)`,
+      `WHERE n.${CLAIM_SUBJECT_PROPERTY} IS NOT NULL AND n.${CLAIM_ASPECT_PROPERTY} IS NOT NULL`,
+      'RETURN n.id AS id, e.id AS episode_id,',
+      `       n.${CLAIM_SUBJECT_PROPERTY} AS subject, n.${CLAIM_ASPECT_PROPERTY} AS aspect`,
+      'ORDER BY episode_id, id',
+    ].join('\n'),
+    {},
+    (row) => ({
+      id: row.id as string,
+      episodeId: row.episode_id as string,
+      subject: row.subject as string,
+      aspect: row.aspect as string,
+    }),
+  );
+}
+
+/** One close, with the episodes both ends were extracted from. */
+export type CloseByMethodRow = {
+  readonly newId: string;
+  readonly oldId: string;
+  readonly newEpisodeId: string;
+  readonly oldEpisodeId: string;
+};
+
+/**
+ * Every close one named method made, read off the lineage edge's own provenance rather than off
+ * a counter. A counter says how many; the provenance says which, which is what a precision
+ * question needs.
+ */
+export async function closesByMethod(driver: Driver, method: string): Promise<CloseByMethodRow[]> {
+  return runRead(
+    driver,
+    [
+      `MATCH (newClaim)-[r:${SUPERSEDES_TYPE}]->(old)`,
+      'WHERE $method IN r.provenance',
+      `MATCH (newClaim)-[:${EXTRACTION_TYPE}]->(newEpisode:Episode)`,
+      `MATCH (old)-[:${EXTRACTION_TYPE}]->(oldEpisode:Episode)`,
+      'RETURN newClaim.id AS new_id, old.id AS old_id,',
+      '       newEpisode.id AS new_episode_id, oldEpisode.id AS old_episode_id',
+      'ORDER BY old_id, new_id',
+    ].join('\n'),
+    { method },
+    (row) => ({
+      newId: row.new_id as string,
+      oldId: row.old_id as string,
+      newEpisodeId: row.new_episode_id as string,
+      oldEpisodeId: row.old_episode_id as string,
+    }),
   );
 }
