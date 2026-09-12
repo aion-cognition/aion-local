@@ -126,7 +126,7 @@ async function sourceWithSurvivor(
 
 beforeAll(async () => {
   await activateCoverage();
-  armEviction();
+  await armEviction();
 });
 
 it('finishes an eviction interrupted after its commit exactly once', async () => {

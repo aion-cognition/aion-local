@@ -12,9 +12,10 @@ import {
   type ReadCoordinator,
 } from './read-completion.js';
 import { GraphTransaction } from '../../infrastructure/graph/connection.js';
-import type {
-  CheckpointResult,
-  PublicationCheckpoint,
+import {
+  PUBLICATION_KINDS,
+  type CheckpointResult,
+  type PublicationCheckpoint,
 } from '../../infrastructure/publication/types.js';
 import {
   activateCoverageContract,
@@ -86,6 +87,7 @@ const coordinator: ReadCoordinator = {
         graph: STUB_GRAPH,
         db: store.db,
         now: NOW,
+        installedKinds: [...PUBLICATION_KINDS],
       }))
     ) {
       return { status: 'retry', reason: 'evidence_changed' };

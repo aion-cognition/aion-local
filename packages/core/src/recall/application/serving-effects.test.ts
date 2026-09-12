@@ -10,7 +10,10 @@ import { idAddress } from '../../evidence/domain/address.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 import { GraphTransaction } from '../../infrastructure/graph/connection.js';
 import { knewAt } from '../../infrastructure/graph/read-modes.js';
-import type { PublicationCheckpoint } from '../../infrastructure/publication/types.js';
+import {
+  PUBLICATION_KINDS,
+  type PublicationCheckpoint,
+} from '../../infrastructure/publication/types.js';
 import {
   activateCoverageContract,
   prepareCoverageContract,
@@ -182,6 +185,7 @@ describe('the effects at the completion boundary', () => {
         graph: STUB_GRAPH,
         db: store.db,
         now: NOW,
+        installedKinds: [...PUBLICATION_KINDS],
       });
       if (!valid) {
         return { status: 'retry', reason: 'evidence_changed' };

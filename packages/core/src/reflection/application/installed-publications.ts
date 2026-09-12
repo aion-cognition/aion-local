@@ -1,6 +1,7 @@
 import { calendarRollupPublication } from './calendar-rollup-publication.js';
 import { reflectionCompletionPublication } from './completion-publication.js';
 import { episodeEvictionPublication } from './episode-eviction.js';
+import { evictionArmingPublication } from './eviction-arming.js';
 import { familyCutoverPublication } from './family-cutover.js';
 import { intakePublication } from './intake-publication.js';
 import { legacyMaterializationPublication } from './legacy-materialization.js';
@@ -47,4 +48,8 @@ export const INSTALLED_PUBLICATION_HANDLERS: readonly PublicationHandler[] = [
   orphanSuppressionPublication,
   sourceSuppressionPublication,
   episodeEvictionPublication,
+  // Installed like any other, and reached from nowhere but the operator's command. A pending
+  // arming act has to be recoverable by whatever process finds it, which is what installing it
+  // in the one shared set is for; nothing here starts it.
+  evictionArmingPublication,
 ];

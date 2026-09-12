@@ -109,6 +109,7 @@ export class PublicationCoordinator {
       transactions: this.#transactions,
       now: this.#now,
       timeoutMs: this.#readTimeoutMs,
+      installedKinds: () => [...this.#handlers.keys()],
     });
     for (const handler of options.handlers) {
       if (!PUBLICATION_KINDS.includes(handler.kind) || this.#handlers.has(handler.kind)) {
@@ -426,7 +427,14 @@ export class PublicationCoordinator {
   }
 
   #context(lock: Locked, operationId: string, sequence: string | null): PublicationContext {
-    return { operationId, sequence, graph: lock.graph, db: this.#options.db, now: this.#now() };
+    return {
+      operationId,
+      sequence,
+      graph: lock.graph,
+      db: this.#options.db,
+      now: this.#now(),
+      installedKinds: [...this.#handlers.keys()],
+    };
   }
 
   #withinBytes(text: string): void {

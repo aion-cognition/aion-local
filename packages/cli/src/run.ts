@@ -1,6 +1,7 @@
 import { runConsolidate } from './consolidate.js';
 import { runCosts } from './costs.js';
 import { runDoctor } from './doctor.js';
+import { runEvict } from './evict.js';
 import { runForget } from './forget.js';
 import { runHooks } from './hooks-cmd.js';
 import { runInit } from './init.js';
@@ -103,6 +104,10 @@ const commands: Record<string, Command> = {
   forget: {
     summary: 'bitemporal close of a node by id or query: nothing is deleted',
     run: (argv) => runForget(argv),
+  },
+  evict: {
+    summary: 'the destructive fence: what it reads, and the one act that lowers it: status | arm',
+    run: (argv) => runEvict(argv),
   },
   unforget: {
     summary: 'take back a forget: the statement chain keeps both, the node serves again',

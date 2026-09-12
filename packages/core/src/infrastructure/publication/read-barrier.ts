@@ -4,7 +4,12 @@ import { PublicationInvariantError, PublicationUnavailable } from './errors.js';
 import { readPairedPosition } from './paired-position.js';
 import { checkpointFrom, sameCheckpoint, verifyPublicationState } from './protocol.js';
 import type { PublicationTransactions } from './transaction.js';
-import type { CheckpointResult, PublicationCheckpoint, PublicationContext } from './types.js';
+import type {
+  CheckpointResult,
+  PublicationCheckpoint,
+  PublicationContext,
+  PublicationKind,
+} from './types.js';
 import type { SqliteHandle } from '../sqlite/database.js';
 import { publicationWrite } from '../sqlite/publication-bounded.js';
 import { coordinatorControl } from '../sqlite/publication-coordinator-store.js';
@@ -19,6 +24,8 @@ type ReadOptions = {
   readonly transactions: PublicationTransactions;
   readonly timeoutMs: number;
   readonly now: () => Date;
+  /** What the composition installed, carried through so a validation reads the same context. */
+  readonly installedKinds: () => readonly PublicationKind[];
 };
 
 /** Certification is separate from nomination and never initiates publication recovery. */
@@ -62,7 +69,7 @@ export class PublicationReadBarrier {
     validate: (context: PublicationContext) => Promise<boolean>,
     complete: (db: SqliteHandle) => SynchronousResult<T>,
   ): Promise<ReadCompletion<T>> {
-    const { db, now, transactions } = this.#options;
+    const { db, now, transactions, installedKinds } = this.#options;
     if (coordinatorControl(db).pendingOperationId !== null) {
       return { status: 'retry', reason: 'pending_publication' };
     }
@@ -83,6 +90,7 @@ export class PublicationReadBarrier {
             graph: lock.graph,
             db,
             now: now(),
+            installedKinds: installedKinds(),
           }))
         ) {
           return { status: 'retry', reason: 'evidence_changed' };

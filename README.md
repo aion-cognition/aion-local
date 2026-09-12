@@ -145,6 +145,7 @@ does not work and says so: the CLI orchestrates the repo it lives in.
 - `search`: direct hybrid search through the seed layer, bypassing pack assembly
 - `forget`: bitemporal close of a node, by id or by query
 - `unforget`: take back a forget; the statement chain keeps both and the node serves again
+- `evict`: the destructive fence, what it reads, and the one act that lowers it
 - `unsupersede`: reopen a claim a supersession closed, whatever made the close
 - `queue`: inspect and triage the reflection queue
 - `replay`: put archived experiences back through the pipeline, and the usage stream back on top

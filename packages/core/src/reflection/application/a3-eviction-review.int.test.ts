@@ -117,7 +117,7 @@ async function publishEviction(nomination: Nomination, operationId = randomUUID(
 
 beforeAll(async () => {
   await activateCoverage();
-  armEviction();
+  await armEviction();
 });
 
 it('removes one source projection exactly and leaves everything it stood beside', async () => {
@@ -263,7 +263,7 @@ it('refuses every source while the compatibility capability is unestablished', a
     reason: 'compatibility_not_established',
   });
 
-  armEviction();
+  await armEviction();
   expect(durableEligibility(store.db, sourceId, POLICY).status).toBe('eligible');
   expect(await nodeExists(driver, sourceId)).toBe(true);
 });
@@ -280,7 +280,7 @@ it('keeps refusing with the coverage contract active and its capability establis
       reason: 'compatibility_not_established',
     });
   } finally {
-    armEviction();
+    await armEviction();
   }
   expect(await nodeExists(driver, sourceId)).toBe(true);
 });

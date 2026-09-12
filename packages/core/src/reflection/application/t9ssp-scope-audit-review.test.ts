@@ -3,6 +3,7 @@ import { expect, it } from 'vitest';
 import { INCOMING_STATEMENT_SCOPES } from './chunk-evidence.js';
 import { intakePublication } from './intake-publication.js';
 import type { GraphTransaction } from '../../infrastructure/graph/connection.js';
+import { PUBLICATION_KINDS } from '../../infrastructure/publication/types.js';
 import { prepareCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 
@@ -18,6 +19,7 @@ it('declares the incoming scopes the new source producer actually mutates', asyn
         operationId: 'scope-audit',
         sequence: null,
         now,
+        installedKinds: [...PUBLICATION_KINDS],
       },
       {
         identity: 'member',

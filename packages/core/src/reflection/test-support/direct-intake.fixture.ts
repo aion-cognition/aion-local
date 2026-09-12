@@ -3,9 +3,10 @@ import { randomUUID } from 'node:crypto';
 
 import type { MergePublisher } from '../../evidence/application/merge-recovery.js';
 import { GraphTransaction } from '../../infrastructure/graph/connection.js';
-import type {
-  PublicationOutcome,
-  PublicationHandler,
+import {
+  PUBLICATION_KINDS,
+  type PublicationOutcome,
+  type PublicationHandler,
 } from '../../infrastructure/publication/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { reflectionCompletionPublication } from '../application/completion-publication.js';
@@ -88,7 +89,16 @@ function directPublisher(
       try {
         return await session.executeWrite(async (tx) => {
           const graph = new GraphTransaction(tx);
-          const context = { operationId: request.operationId, sequence, graph, db, now };
+          const context = {
+            operationId: request.operationId,
+            sequence,
+            graph,
+            db,
+            now,
+            // This driver stands in for a coordinator composed with everything, which is what
+            // the handler under test would meet in the service.
+            installedKinds: [...PUBLICATION_KINDS],
+          };
           const plan = await operation.prepare(context, operation.decodePayload(request.payload));
           const check = await operation.check(context, plan);
           if (check.status !== 'valid') {

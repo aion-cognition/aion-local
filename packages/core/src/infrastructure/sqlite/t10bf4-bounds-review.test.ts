@@ -22,6 +22,7 @@ import { DEFAULTS } from '../config/defaults.js';
 import type { GraphTransaction } from '../graph/connection.js';
 import { openLogger } from '../logging/logger.js';
 import { buildEvidenceRevision } from '../publication/preconditions.js';
+import { PUBLICATION_KINDS } from '../publication/types.js';
 
 const NOW = new Date('2026-09-09T06:00:00.000Z');
 
@@ -77,7 +78,14 @@ it('keeps guarded candidate enumeration bounded even when almost all old revisio
       }),
     } as unknown as GraphTransaction;
     const plan = await narrativeFamilyRepairPublication.prepare(
-      { db: store.db, graph, operationId: 'repair-history', sequence: null, now: NOW },
+      {
+        db: store.db,
+        graph,
+        operationId: 'repair-history',
+        sequence: null,
+        now: NOW,
+        installedKinds: [...PUBLICATION_KINDS],
+      },
       { chunkId: family, coverageEpoch: 'fixture-epoch', observedAt: NOW.toISOString() },
     );
     expect(pageReads).toBeGreaterThan(0);

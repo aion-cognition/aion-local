@@ -7,27 +7,29 @@ import { describe, expect, it } from 'vitest';
  * The line between a destructive capability existing and being reachable.
  *
  * No writer the compatibility audit marks unknown may be enabled while the contract is being
- * activated, and the audit still carries a large owed body: the reflection stage writers, plasticity, merge
- * and unmerge, forget and unsupersede, and the introspection operations all mutate the graph
- * outside the publication protocol today. Eviction is therefore built and fenced rather than
- * built and live, and the fence is one positively verified fact: the eviction compatibility
- * revision on the publication control record.
+ * activated, and the audit still carries a large owed body: the reflection stage writers,
+ * plasticity, merge and unmerge, and the introspection operations all mutate the graph outside
+ * the publication protocol today. Eviction is therefore built and fenced rather than built and
+ * live, and the fence is one positively verified fact: the eviction compatibility revision on
+ * the publication control record.
  *
- * Nothing in production sets that revision. The compatibility audit owns it, and no audit has
- * run, so `durableEligibility` answers `compatibility_not_established` for every source on every
- * deployed substrate and the operation removes nothing. This test is what keeps that true: a
- * writer that set the revision would quietly arm every destructive path behind it, and the
- * change that adds one has to change this list and be reviewed for doing so.
+ * Exactly one production path sets that revision, and it is an audited operation an operator
+ * publishes by hand. Nothing in initialization, the service start or the maintenance catalog
+ * reaches it, so every substrate answers `compatibility_not_established` for every source until
+ * somebody deliberately arms it. This test is what keeps that true: a second writer would arm
+ * the capability silently, and the change that adds one has to change these lists and be
+ * reviewed for doing so.
  *
- * Coverage activation is a different gate on the same row and has its own producer, because a
- * substrate that cannot state what it covers is unusable while a substrate that cannot evict is
- * merely full. The last two cases hold the two apart: the arming column has no production
- * writer, and the coverage column does.
+ * Coverage activation is a different gate on the same row, because a substrate that cannot state
+ * what it covers is unusable while a substrate that cannot evict is merely full. The last cases
+ * hold them apart and hold the arming column's writer to one caller.
  */
 const REPO_ROOT = fileURLToPath(new URL('../../../../../', import.meta.url));
 const PACKAGES_DIR = join(REPO_ROOT, 'packages');
 const CAPABILITY_COLUMN = 'eviction_compatibility_revision';
 const COVERAGE_COLUMN = 'activation_capability_revision';
+/** The one function that reaches the column, so the caller scan does not depend on SQL text. */
+const ARMING_WRITER = 'establishEvictionCompatibility';
 
 /**
  * A write is an UPDATE, an INSERT or a REPLACE reaching this column; a read of it is not one.
@@ -120,9 +122,46 @@ describe('the eviction compatibility capability is not armed by any production w
     expect(writesTheCapability(`SELECT ${CAPABILITY_COLUMN} FROM publication_control`)).toBe(false);
   });
 
-  it('finds no production path that sets the eviction compatibility revision', () => {
+  it('finds one production path that sets the eviction compatibility revision', () => {
+    // The scan catches a writer in any of the four statement forms, in any file, so a second
+    // entry appearing here is a second writer and this equality is what fails on it.
     const offenders = files.filter((file) => writesTheCapability(readFileSync(file, 'utf8')));
-    expect(offenders.map((file) => relative(REPO_ROOT, file))).toEqual([]);
+    expect(offenders.map((file) => relative(REPO_ROOT, file))).toEqual([
+      join('packages', 'core', 'src', 'infrastructure', 'sqlite', 'publication-control.ts'),
+    ]);
+  });
+
+  it('finds one production caller of that writer, and it is the arming acknowledgment', () => {
+    const definition = join(
+      PACKAGES_DIR,
+      'core',
+      'src',
+      'infrastructure',
+      'sqlite',
+      'publication-control.ts',
+    );
+    const callers = files.filter(
+      (file) => file !== definition && readFileSync(file, 'utf8').includes(`${ARMING_WRITER}(`),
+    );
+    expect(callers.map((file) => relative(REPO_ROOT, file))).toEqual([
+      join('packages', 'core', 'src', 'reflection', 'application', 'eviction-arming.ts'),
+    ]);
+    // Named inside the acknowledgment and nowhere else in the module, so the write cannot happen
+    // on a path that did not first pass the operation's check.
+    const arming = readFileSync(callers[0] ?? '', 'utf8');
+    expect(arming.split(`${ARMING_WRITER}(`)).toHaveLength(2);
+    expect(arming.slice(arming.indexOf('acknowledgeSqlite')).includes(ARMING_WRITER)).toBe(true);
+  });
+
+  it('finds no arming call from initialization, the service or the maintenance catalog', () => {
+    // The arming act is an operator's. A caller here would make it a side effect of starting up.
+    const forbidden = ['cli/src/init.ts', 'mcp/src/bootstrap.ts', 'introspection/application'];
+    const reached = files.filter(
+      (file) =>
+        forbidden.some((part) => relative(REPO_ROOT, file).includes(join(...part.split('/')))) &&
+        readFileSync(file, 'utf8').includes(ARMING_WRITER),
+    );
+    expect(reached.map((file) => relative(REPO_ROOT, file))).toEqual([]);
   });
 
   it('still finds the column read and the fence that acts on what it says', () => {

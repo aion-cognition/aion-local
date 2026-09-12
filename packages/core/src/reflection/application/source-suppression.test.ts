@@ -7,11 +7,12 @@ import {
 import { GRAPH_NODE_SCOPE } from '../../evidence/domain/scopes.js';
 import { GraphTransaction } from '../../infrastructure/graph/connection.js';
 import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
-import type {
-  PublicationAckContext,
-  PublicationContext,
-  PublicationPlan,
-  PublicationSqliteContext,
+import {
+  PUBLICATION_KINDS,
+  type PublicationAckContext,
+  type PublicationContext,
+  type PublicationPlan,
+  type PublicationSqliteContext,
 } from '../../infrastructure/publication/types.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import { readScopeMirror } from '../../infrastructure/sqlite/evidence-scope.js';
@@ -121,6 +122,7 @@ function checkContext(graph: GraphTransaction): PublicationContext {
     graph,
     db: store.db,
     now: new Date(NOW),
+    installedKinds: [...PUBLICATION_KINDS],
   };
 }
 

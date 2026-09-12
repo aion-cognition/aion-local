@@ -143,8 +143,41 @@ export function setPendingOperation(db: SqliteHandle, operationId: string | unde
  * implement.
  *
  * This is the coverage gate and nothing else. The eviction fence on the same row is a separate
- * column with its own owner, and no production path writes that one.
+ * column with its own writer above, reached only from an operator's explicit arming act.
  */
+/**
+ * Records the destructive capability an operator has deliberately armed, and answers with the
+ * revision in force.
+ *
+ * The eviction fence. A substrate reads zero here until somebody arms it, and while it reads
+ * zero `durableEligibility` answers `compatibility_not_established` for every source, so the
+ * eviction operation removes nothing. This is the only production writer of that column, and it
+ * is reached from one place: the acknowledge path of the arming publication, which is an audited
+ * operation with a receipt. A second writer would arm the capability silently.
+ *
+ * Upward only, on the coverage writer's rule and for the same reason: a recorded revision above
+ * this one is a capability a later build established, and writing a lower number over it would
+ * re-enable a contract this build does not implement.
+ */
+export function establishEvictionCompatibility(db: SqliteHandle, revision: number): number {
+  if (!Number.isSafeInteger(revision) || revision <= 0) {
+    throw new Error('eviction compatibility revision must be a positive safe integer');
+  }
+  return db
+    .transaction((): number => {
+      db.prepare(
+        `UPDATE publication_control SET eviction_compatibility_revision = ?
+         WHERE eviction_compatibility_revision < ?`,
+      ).run(revision, revision);
+      const pairing = readSubstratePairing(db);
+      if (pairing === undefined) {
+        throw new Error('no publication control record to arm');
+      }
+      return pairing.evictionCompatibilityRevision;
+    })
+    .immediate();
+}
+
 export function establishActivationCapability(db: SqliteHandle, revision: number): number {
   if (!Number.isSafeInteger(revision) || revision <= 0) {
     throw new Error('coverage activation capability must be a positive safe integer');

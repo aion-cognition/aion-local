@@ -8,8 +8,8 @@ export type JsonObject = { readonly [key: string]: JsonValue };
 export const PUBLICATION_PROTOCOL_VERSION = 1;
 export const GRAPH_COMPLETION_EFFECT = 'publication:graph_completion';
 /**
- * The closed set of operation kinds the coordinator admits. Seventeen: the twelve the design
- * signed off, and five the implementation added, each with its reason stated at the entry. A kind
+ * The closed set of operation kinds the coordinator admits. Eighteen: the twelve the design
+ * signed off, and six the implementation added, each with its reason stated at the entry. A kind
  * outside this list is refused at construction, and a kind here with no installed handler is
  * refused at publish. Count them from this list rather than from any prose about it.
  */
@@ -46,6 +46,13 @@ export const PUBLICATION_KINDS = [
   // it does share is the family fence: a summary that publishes over a session's whole-session
   // narrative, or absorbs one, has to own it at the moment it writes.
   'calendar_rollup_publish',
+  // Arming the destructive capability. Its own kind rather than a variant of
+  // `coverage_activation`, which is the gate that decides what a substrate may serve; this one
+  // decides what may be taken out of it, and the two answer opposite questions on one row. It
+  // is a publication at all so the act leaves a receipt: a substrate that can remove memory is
+  // a substrate somebody deliberately said could, and that statement has to be recoverable and
+  // readable afterwards like any other.
+  'eviction_arming',
 ] as const;
 export type PublicationKind = (typeof PUBLICATION_KINDS)[number];
 
@@ -77,6 +84,15 @@ export type PublicationContext = {
   readonly graph: GraphTransaction;
   readonly db: SqliteHandle;
   readonly now: Date;
+  /**
+   * Which kinds the composition running this operation installed.
+   *
+   * Almost every handler ignores it. The one that cannot is the arming operation: a process
+   * that composed a smaller set cannot recover a pending operation of a kind it does not know,
+   * and that is the condition arming a destructive capability has to rule out rather than
+   * assume. Read from the coordinator's own map, so a caller cannot state it.
+   */
+  readonly installedKinds: readonly PublicationKind[];
 };
 
 export type PublicationStamp = {

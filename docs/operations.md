@@ -482,8 +482,36 @@ for a while before activating gets a horizon at the activation, so reads into th
 are refused as `before_horizon` rather than answered from history nobody promised.
 
 Both surfaces also carry `eviction_gate` and `eviction_compatibility_revision`. That is a
-different gate. Eviction stays closed until the compatibility audit arms it, and an active
-coverage contract does not arm it.
+different gate. Eviction stays closed until an operator arms it, and an active coverage contract
+does not arm it.
+
+## The eviction fence
+
+```
+aion evict [status | arm] [--yes]
+```
+
+Eviction is built and fenced on every substrate. While the fence is closed, eligibility answers
+`compatibility_not_established` for every source and the `episode_evict` operation removes
+nothing. Nothing lowers the fence on its own: not `aion init`, not the service start, not the
+maintenance catalog. A person runs `arm`.
+
+`status` prints the fence, the coverage contract behind it, and each precondition arming checks:
+
+- every declared publication kind has an installed handler
+- the substrate finished its bootstrap
+- the coverage capability is established
+- the coverage contract is active
+- the requested revision is the one this build implements
+- the fence is not already at that revision
+
+`arm` prints the same list, refuses if any of it fails, asks, and then publishes the act through
+the coordinator, so it leaves a receipt like any other decision. The checks are not the whole
+reason the fence exists. A large body of writers still mutates the graph outside the publication
+protocol, and no code can look at a substrate and tell whether that work is done; the command
+says which conditions it verified and leaves the rest of the judgment with whoever types it.
+
+Arming moves upward only and there is no disarm. A substrate that has been armed stays armed.
 
 ## Logs
 

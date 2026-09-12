@@ -8,7 +8,10 @@ import {
 import { seedSource, commitSourceState } from '../../evidence/test-support/evidence.fixture.js';
 import type { GraphTransaction } from '../../infrastructure/graph/connection.js';
 import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
-import type { PublicationContext } from '../../infrastructure/publication/types.js';
+import {
+  PUBLICATION_KINDS,
+  type PublicationContext,
+} from '../../infrastructure/publication/types.js';
 import {
   prepareCoverageContract,
   readCurrentCoverageContract,
@@ -33,6 +36,7 @@ it('rejects an explicitly supplied merge evidence revision after its source chan
       db: store.db,
       graph: {} as GraphTransaction,
       now,
+      installedKinds: [...PUBLICATION_KINDS],
     };
     // The binding travels in the payload: the guard re-verifies what the judge decided on, and a
     // merge that carries none is refused before any of this.

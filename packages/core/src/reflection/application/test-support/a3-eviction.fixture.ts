@@ -32,6 +32,11 @@ import { runSourceIndexJob } from '../../../introspection/application/source-ind
 import { SessionManager } from '../../../session/session-manager.js';
 import { publishChunkNarrative, sealSessionChunk } from '../chunk-narrative.js';
 import type { ChunkNarrativeDeps } from '../chunk-seal.js';
+import {
+  EVICTION_COMPATIBILITY_REVISION,
+  evictionArmingOperationId,
+  evictionArmingPublication,
+} from '../eviction-arming.js';
 import { INSTALLED_PUBLICATION_HANDLERS } from '../installed-publications.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../intake.js';
 import { LaneAssigner } from '../lanes.js';
@@ -271,12 +276,21 @@ export async function activateCoverage(): Promise<void> {
 }
 
 /**
- * What the compatibility audit would do, done here so the battery can exercise the paths behind
- * the fence. It is deliberately a second call: activating coverage arms nothing, and a battery
- * that got eviction for free from `activateCoverage` would not notice if the two gates merged.
+ * The operator's arming act, taken here so the battery can exercise the paths behind the fence.
+ *
+ * Through the real operation rather than a direct write, so what this battery runs against is
+ * what an armed substrate actually is. It is deliberately a second call: activating coverage arms
+ * nothing, and a battery that got eviction for free from `activateCoverage` would not notice if
+ * the two gates merged.
  */
-export function armEviction(): void {
-  store.db.prepare('UPDATE publication_control SET eviction_compatibility_revision = 1').run();
+export async function armEviction(): Promise<void> {
+  const epoch = readCurrentCoverageContract(store.db)?.epoch ?? '';
+  const outcome = await publications.publish({
+    kind: evictionArmingPublication.kind,
+    operationId: evictionArmingOperationId(EVICTION_COMPATIBILITY_REVISION, epoch),
+    payload: { revision: EVICTION_COMPATIBILITY_REVISION, coverageEpoch: epoch },
+  });
+  expect(outcome.status).toBe('acknowledged');
 }
 
 /** One source carried all the way to eligible through the production paths. */

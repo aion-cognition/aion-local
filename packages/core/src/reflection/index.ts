@@ -24,6 +24,18 @@ export {
   sourceSuppressionPublication,
 } from './application/source-suppression.js';
 
+/**
+ * The arming act. Exported for the one command that takes it, which is the only caller anywhere:
+ * nothing in initialization, the service or the maintenance catalog reaches this.
+ */
+export {
+  armingPreconditions,
+  EVICTION_COMPATIBILITY_REVISION,
+  evictionArmingOperationId,
+  evictionArmingPublication,
+} from './application/eviction-arming.js';
+export type { ArmingPrecondition } from './application/eviction-arming.js';
+
 export { LaneAssigner } from './application/lanes.js';
 
 export { recordLifecycleEvent } from './application/lifecycle-events.js';

@@ -56,7 +56,7 @@ function context(): OperationContext {
 
 beforeAll(async () => {
   await activateCoverage();
-  armEviction();
+  await armEviction();
 });
 
 it('scores one eligible source of a batch of eight as an eighth and then evicts it', async () => {
