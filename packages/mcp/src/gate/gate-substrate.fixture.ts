@@ -4,9 +4,11 @@ import {
   DEFAULTS,
   handleRecall,
   handleReflection,
+  INSTALLED_PUBLICATION_HANDLERS,
   LaneAssigner,
   openLogger,
   openSqliteHandle,
+  PublicationCoordinator,
   ReflectionOrchestrator,
   ReflectionWorker,
   runGraphMigrations,
@@ -96,6 +98,7 @@ export class GateSubstrate {
   #worker: ReflectionWorker | undefined;
   #harness: Neo4jHarness | undefined;
   #db: SqliteHandle | undefined;
+  #publications: PublicationCoordinator | undefined;
   #logger: Logger | undefined;
   #sessions: SessionManager | undefined;
   #provider: Provider | undefined;
@@ -137,9 +140,25 @@ export class GateSubstrate {
       baseUrl: this.config.ollama.url,
       embedModel: this.config.models.embed,
     });
+    // The pipeline's narrative stage publishes, and without a coordinator it failed every run:
+    // five attempts, then the job exhausted and sat in the queue while `whenIdle()` resolved
+    // over it, which is what every "timed out waiting for X to enrich" in this suite was.
+    //
+    // Built here rather than beside the direct publishers below, because those stand a pairing
+    // row up by hand to skip the protocol, and a pairing already marked initialized makes the
+    // coordinator report a guard node nothing ever minted.
+    const publications = new PublicationCoordinator({
+      driver: this.driver,
+      db: this.db,
+      logger: this.logger,
+      handlers: [...INSTALLED_PUBLICATION_HANDLERS],
+    });
+    await publications.initialize();
+    this.#publications = publications;
   }
 
   async close(): Promise<void> {
+    this.#publications = undefined;
     await stopNeo4jHarness(this.#harness);
     this.#harness = undefined;
     this.#db?.close();
@@ -169,6 +188,13 @@ export class GateSubstrate {
       throw new Error('gate substrate is not open');
     }
     return this.#logger;
+  }
+
+  get publications(): PublicationCoordinator {
+    if (this.#publications === undefined) {
+      throw new Error('gate substrate is not open');
+    }
+    return this.#publications;
   }
 
   get provider(): Provider {
@@ -209,7 +235,13 @@ export class GateSubstrate {
   /** The shipped stage list, from `bootstrap.ts`, over this substrate. */
   orchestrator(): ReflectionOrchestrator {
     return new ReflectionOrchestrator(
-      { driver: this.driver, db: this.db, provider: this.provider, logger: this.logger },
+      {
+        driver: this.driver,
+        db: this.db,
+        provider: this.provider,
+        logger: this.logger,
+        publications: this.publications,
+      },
       reflectionStages(this.config),
     );
   }
