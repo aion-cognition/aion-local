@@ -178,6 +178,7 @@ export function readQueue(db: SqliteHandle, config: Config, now: Date): QueueHea
     depth,
     oldestUnclaimedMs: snapshot.oldestUnclaimedMs,
     exhausted: snapshot.exhausted,
+    indexDepth: snapshot.indexDepth,
     p95EnrichmentLagMs: snapshot.p95EnrichmentLagMs,
     deadLetterAttentionCount: countDeadLetterAttention(db, config.operational.workerMaxAttempts),
     cueDegradedRate: snapshot.cueDegradedRate,

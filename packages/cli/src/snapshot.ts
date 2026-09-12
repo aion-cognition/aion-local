@@ -422,7 +422,8 @@ export function renderSnapshot(
     queue.cueDegradedRate === undefined
       ? 'no recalls yet'
       : `${(queue.cueDegradedRate * 100).toFixed(1)}% of recent recalls degraded on cues`;
-  write(`queue    ${depth}, oldest unclaimed ${oldest}, ${String(queue.exhausted)} exhausted`);
+  const spent = `${String(queue.exhausted)} exhausted, ${String(queue.indexDepth)} index pending`;
+  write(`queue    ${depth}, oldest unclaimed ${oldest}, ${spent}`);
   write(
     `lag      p95 intake-to-enriched ${p95}, ${String(queue.reinforcementDropped)} reinforcement rows dropped`,
   );

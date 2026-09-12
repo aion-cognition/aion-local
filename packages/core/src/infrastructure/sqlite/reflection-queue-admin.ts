@@ -19,6 +19,14 @@ import {
 export type ReflectionQueueFilter = {
   readonly sessionId?: string;
   readonly lane?: ReflectionLane;
+  /**
+   * One acceptance writes two rows: the `integrate` job the reflection worker runs, and the
+   * `source_index` job a different handler owns. An unfiltered count adds two populations
+   * together, which read a drained reflection queue as a backlog the size of the whole corpus.
+   * Every reader and writer in this file routes through `conditions`, so this is the one place
+   * the distinction is made.
+   */
+  readonly jobType?: string;
 };
 
 export type ReflectionQueueCounts = {
@@ -52,6 +60,10 @@ function conditions(filter: ReflectionQueueFilter, extra: readonly string[] = []
   if (filter.lane !== undefined) {
     clauses.push('lane = ?');
     parameters.push(filter.lane);
+  }
+  if (filter.jobType !== undefined) {
+    clauses.push('job_type = ?');
+    parameters.push(filter.jobType);
   }
   return { sql: clauses.length === 0 ? '' : ` WHERE ${clauses.join(' AND ')}`, parameters };
 }

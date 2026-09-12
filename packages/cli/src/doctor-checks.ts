@@ -35,6 +35,7 @@ export function queueLagCheck(
   const oldest = snapshot.oldestUnclaimedMs;
   const detail = [
     `depth ${String(depth)} (interactive ${String(interactive)}, bulk ${String(bulk)})`,
+    `${String(snapshot.indexDepth)} source-index rows pending`,
     `oldest unclaimed ${oldest === undefined ? 'none' : `${String(Math.round(oldest / 1000))}s`}`,
     `${String(snapshot.exhausted)} exhausted`,
     `${String(snapshot.reinforcementDropped)} reinforcement rows dropped`,
@@ -47,7 +48,12 @@ export function queueLagCheck(
   ].join(', ');
 
   const stale = oldest !== undefined && oldest > config.operational.lagOldestUnclaimedWarnMs;
-  const deep = depth > config.operational.lagQueueDepthWarnThreshold;
+  // Either backlog past the threshold earns the warning. Scoping `depth` to the reflection rows
+  // would otherwise have taken the index rows out of the gauge entirely, and an index backlog
+  // nothing counts is how every source behind it stays eviction-pinned unnoticed.
+  const deep =
+    depth > config.operational.lagQueueDepthWarnThreshold ||
+    snapshot.indexDepth > config.operational.lagQueueDepthWarnThreshold;
   if (stale || deep) {
     return { ok: true, warn: true, detail };
   }

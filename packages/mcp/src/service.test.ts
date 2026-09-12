@@ -372,6 +372,7 @@ describe('health', () => {
         depthByLane: { interactive: 2, bulk: 5 },
         oldestUnclaimedMs: 12_000,
         exhausted: 1,
+        indexDepth: 9,
         reinforcementDropped: 7,
         p95EnrichmentLagMs: 4_200,
         cueDegradedRate: undefined,
@@ -386,6 +387,8 @@ describe('health', () => {
       expect(body.queue_depth).toEqual({ interactive: 2, bulk: 5 });
       expect(body.queue_oldest_unclaimed_ms).toBe(12_000);
       expect(body.queue_exhausted).toBe(1);
+      // Its own key, never folded into `queue_depth`.
+      expect(body.queue_index_depth).toBe(9);
       expect(body.reinforcement_dropped).toBe(7);
       expect(body.enrichment_lag_p95_ms).toBe(4_200);
     } finally {
@@ -403,6 +406,7 @@ describe('health', () => {
         depthByLane: { interactive: 0, bulk: 0 },
         oldestUnclaimedMs: undefined,
         exhausted: 0,
+        indexDepth: 0,
         reinforcementDropped: 0,
         p95EnrichmentLagMs: undefined,
         cueDegradedRate: undefined,

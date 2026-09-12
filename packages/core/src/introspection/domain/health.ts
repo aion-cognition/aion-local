@@ -54,6 +54,12 @@ export type QueueHealth = {
   readonly oldestUnclaimedMs: number | undefined;
   /** Unclaimed jobs past the attempt ceiling: no worker will ever take them again. */
   readonly exhausted: number;
+  /**
+   * Claimable `source_index` rows. Its own number rather than part of `depth`, because the
+   * reflection worker never claims one and the advisor would otherwise be scored against a
+   * reflection backlog that was really the index backlog.
+   */
+  readonly indexDepth: number;
   readonly p95EnrichmentLagMs: number | undefined;
   /** Exhausted jobs `dead_letter` already gave their one retry, which failed again: needs a person. */
   readonly deadLetterAttentionCount: number;
@@ -293,6 +299,7 @@ export const NEUTRAL_QUEUE_HEALTH: QueueHealth = {
   depth: 0,
   oldestUnclaimedMs: undefined,
   exhausted: 0,
+  indexDepth: 0,
   p95EnrichmentLagMs: undefined,
   deadLetterAttentionCount: 0,
   cueDegradedRate: undefined,

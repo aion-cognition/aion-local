@@ -21,6 +21,7 @@ const SNAPSHOT: StatsSnapshot = {
     depthByLane: { interactive: 1, bulk: 2 },
     oldestUnclaimedMs: 45_000,
     exhausted: 0,
+    indexDepth: 0,
     reinforcementDropped: 0,
     p95EnrichmentLagMs: 3_000,
     cueDegradedRate: 0.05,

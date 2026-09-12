@@ -1,3 +1,4 @@
+import { INTAKE_JOB_TYPE, SOURCE_INDEX_JOB_TYPE } from './intake-queue.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { countOpenEntityMergeProposals } from '../../infrastructure/sqlite/entity-merge-proposals.js';
 import { p95EnrichmentLagMs } from '../../infrastructure/sqlite/lag-samples.js';
@@ -20,12 +21,26 @@ import { countOpenSupersessionProposals } from '../../infrastructure/sqlite/supe
  * every liveness probe.
  */
 export type QueueLagSnapshot = {
-  /** Claimable rows only. An exhausted row is not depth: no worker will ever take it. */
+  /**
+   * Claimable `integrate` rows only. An exhausted row is not depth: no worker will ever take it,
+   * and neither is a `source_index` row, which the reflection worker's claim filter excludes.
+   * Folding the index rows in here reported one number that was secretly two populations, and
+   * the depth gauge tripped at half the real reflection backlog.
+   */
   readonly depthByLane: Readonly<Record<ReflectionLane, number>>;
   /** `undefined` when nothing is waiting, not zero: there is no age to report. */
   readonly oldestUnclaimedMs: number | undefined;
-  /** Unclaimed rows past `workerMaxAttempts`; claiming skips them forever without maintenance. */
+  /**
+   * Unclaimed `integrate` rows past `workerMaxAttempts`; claiming skips them forever without
+   * maintenance. An index row that exhausts its own attempts is not one of these.
+   */
   readonly exhausted: number;
+  /**
+   * Claimable `source_index` rows, counted beside the reflection backlog rather than inside it.
+   * An operator needs both numbers: these never move under the reflection worker, and every
+   * source behind them stays eviction-pinned until their own handler drains them.
+   */
+  readonly indexDepth: number;
   readonly reinforcementDropped: number;
   /** `undefined` until the first job completes; see `lag-samples.ts`. */
   readonly p95EnrichmentLagMs: number | undefined;
@@ -47,8 +62,9 @@ export function queueLagSnapshot(
   workerMaxAttempts: number,
   now: Date = new Date(),
 ): QueueLagSnapshot {
-  const counts = countQueueJobs(db, {}, workerMaxAttempts);
-  const byLane = countQueueJobsByLane(db, {}, workerMaxAttempts);
+  const counts = countQueueJobs(db, { jobType: INTAKE_JOB_TYPE }, workerMaxAttempts);
+  const byLane = countQueueJobsByLane(db, { jobType: INTAKE_JOB_TYPE }, workerMaxAttempts);
+  const index = countQueueJobs(db, { jobType: SOURCE_INDEX_JOB_TYPE }, workerMaxAttempts);
   const depthByLane = Object.fromEntries(
     REFLECTION_LANES.map((lane) => [lane, byLane.get(lane) ?? 0]),
   ) as Record<ReflectionLane, number>;
@@ -60,6 +76,7 @@ export function queueLagSnapshot(
         ? undefined
         : Math.max(0, now.getTime() - new Date(counts.oldestPendingAt).getTime()),
     exhausted: counts.exhausted,
+    indexDepth: index.pending,
     reinforcementDropped: reinforcementQueueDroppedCount(db),
     p95EnrichmentLagMs: p95EnrichmentLagMs(db),
     cueDegradedRate: cueDegradedRate(db),

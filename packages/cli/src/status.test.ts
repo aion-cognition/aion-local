@@ -12,6 +12,7 @@ const EMPTY_QUEUE: QueueLagSnapshot = {
   depthByLane: { interactive: 0, bulk: 0 },
   oldestUnclaimedMs: undefined,
   exhausted: 0,
+  indexDepth: 0,
   reinforcementDropped: 0,
   p95EnrichmentLagMs: undefined,
   cueDegradedRate: undefined,
@@ -85,6 +86,7 @@ describe('renderStatus', () => {
         depthByLane: { interactive: 2, bulk: 5 },
         oldestUnclaimedMs: 130_000,
         exhausted: 1,
+        indexDepth: 9,
         reinforcementDropped: 7,
         p95EnrichmentLagMs: 42_000,
         cueDegradedRate: undefined,
@@ -96,7 +98,9 @@ describe('renderStatus', () => {
     renderStatus(snapshot, DEFAULTS, write);
 
     const text = lines.join('\n');
-    expect(text).toContain('queue    interactive=2 bulk=5, oldest unclaimed 2m, 1 exhausted');
+    expect(text).toContain(
+      'queue    interactive=2 bulk=5, oldest unclaimed 2m, 1 exhausted, 9 index pending',
+    );
     expect(text).toContain('lag      p95 intake-to-enriched 42s, 7 reinforcement rows dropped');
   });
 

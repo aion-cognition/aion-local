@@ -33,6 +33,7 @@ function queueLagFields(queueLag: (() => QueueLagSnapshot) | undefined): Record<
     queue_depth: snapshot.depthByLane,
     queue_oldest_unclaimed_ms: snapshot.oldestUnclaimedMs ?? null,
     queue_exhausted: snapshot.exhausted,
+    queue_index_depth: snapshot.indexDepth,
     reinforcement_dropped: snapshot.reinforcementDropped,
     enrichment_lag_p95_ms: snapshot.p95EnrichmentLagMs ?? null,
     cue_degraded_rate: snapshot.cueDegradedRate ?? null,
