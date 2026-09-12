@@ -63,6 +63,29 @@ export async function checkOllamaReachable(
   }
 }
 
+/**
+ * The daemon's own version, which is the one runtime fact about it the HTTP API reports. Ollama
+ * exposes no settings endpoint, so nothing else about how the daemon was started can be read
+ * from here: the process environment carrying `OLLAMA_FLASH_ATTENTION` and
+ * `OLLAMA_KV_CACHE_TYPE` is visible only to something that can see the process table, which is
+ * why the doctor check pairs this with a printed manual command.
+ */
+export async function readOllamaVersion(
+  baseUrl: string,
+  options: Pick<ProvisionOptions, 'fetchImpl'> = {},
+): Promise<string> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const response = await fetchImpl(`${normalizeBaseUrl(baseUrl)}/api/version`);
+  if (!response.ok) {
+    throw new OllamaUnreachableError(
+      baseUrl,
+      new Error(`${response.status} ${summarizeErrorBody(await response.text())}`),
+    );
+  }
+  const body = (await response.json()) as { version?: unknown };
+  return typeof body.version === 'string' ? body.version : 'unknown';
+}
+
 /** Installed model names, newest-first as Ollama returns them. `aion status` renders this. */
 export async function listOllamaModels(
   baseUrl: string,

@@ -1,5 +1,8 @@
 {
   "defaults": {
+    "install": {
+      "profile": "docker"
+    },
     "neo4j": {
       "uri": "bolt://neo4j:7687",
       "password": ""
@@ -12,7 +15,9 @@
       "embed": "snowflake-arctic-embed2",
       "embedDimension": 1024,
       "cue": "qwen3:1.7b",
-      "reflect": "qwen3:8b"
+      "reflect": "qwen3:4b-instruct-2507",
+      "cueNumCtx": 4096,
+      "reflectNumCtx": 16384
     },
     "anthropic": {
       "apiKey": "",
@@ -250,6 +255,7 @@
     "AION_CUE_BUDGET_MS -> recall.cueBudgetMs : number",
     "AION_CUE_CACHE_TTL_MINUTES -> recall.cueCacheTtlMinutes : number",
     "AION_CUE_MODEL -> models.cue : string",
+    "AION_CUE_NUM_CTX -> models.cueNumCtx : number",
     "AION_CUE_PROVIDER -> routing.cue : string",
     "AION_CURIOSITY_BATCH -> maintenance.curiosityBatch : number",
     "AION_DATA_DIR -> operational.dataDir : string",
@@ -267,6 +273,7 @@
     "AION_HEBBIAN_FLUSH_CEILING -> hebbian.flushCeiling : number",
     "AION_HEBBIAN_LEARNING_RATE -> hebbian.learningRate : number",
     "AION_HEBBIAN_WEIGHT_FLOOR -> hebbian.weightFloor : number",
+    "AION_INSTALL_PROFILE -> install.profile : string",
     "AION_INTENTION_HORIZON_DAYS -> temporal.intentionHorizonDays : number",
     "AION_KEYED_CLOSE_MODE -> reflection.keyedCloseMode : string",
     "AION_KEYED_NARRATIVE_EPISODE_CHARS -> reflection.keyedNarrativeEpisodeChars : number",
@@ -374,6 +381,7 @@
     "AION_RECONCILE_WARN_THRESHOLD -> operational.reconcileWarnThreshold : number",
     "AION_REDACTION_ENTROPY_THRESHOLD -> redaction.entropyThreshold : number",
     "AION_REFLECT_MODEL -> models.reflect : string",
+    "AION_REFLECT_NUM_CTX -> models.reflectNumCtx : number",
     "AION_REFLECT_PROVIDER -> routing.reflect : string",
     "AION_REFLECTION_ASSOCIATION_SIMILAR_LIMIT -> reflection.associationSimilarLimit : number",
     "AION_REFLECTION_ENTITY_DEDUP_THRESHOLD -> reflection.entityDedupThreshold : number",
@@ -533,6 +541,13 @@
     "AION_CUE_MODEL=": "ConfigError Invalid configuration:\nAION_CUE_MODEL: Too small: expected string to have >=1 characters",
     "AION_CUE_MODEL=zzz": "ok \"zzz\"",
     "AION_CUE_MODEL=x": "ok \"x\"",
+    "AION_CUE_NUM_CTX=not-a-number": "ConfigError Invalid configuration:\nAION_CUE_NUM_CTX: Invalid input: expected number, received NaN",
+    "AION_CUE_NUM_CTX=": "ConfigError Invalid configuration:\nAION_CUE_NUM_CTX: Invalid input: expected number, received NaN",
+    "AION_CUE_NUM_CTX=-1": "ConfigError Invalid configuration:\nAION_CUE_NUM_CTX: Too small: expected number to be >0",
+    "AION_CUE_NUM_CTX=0": "ConfigError Invalid configuration:\nAION_CUE_NUM_CTX: Too small: expected number to be >0",
+    "AION_CUE_NUM_CTX=0.5": "ConfigError Invalid configuration:\nAION_CUE_NUM_CTX: Invalid input: expected int, received number",
+    "AION_CUE_NUM_CTX=1.5": "ConfigError Invalid configuration:\nAION_CUE_NUM_CTX: Invalid input: expected int, received number",
+    "AION_CUE_NUM_CTX=2": "ok 2",
     "AION_CUE_PROVIDER=": "ConfigError Invalid configuration:\nAION_CUE_PROVIDER: Invalid option: expected one of \"auto\"|\"ollama\"|\"anthropic\"",
     "AION_CUE_PROVIDER=zzz": "ConfigError Invalid configuration:\nAION_CUE_PROVIDER: Invalid option: expected one of \"auto\"|\"ollama\"|\"anthropic\"",
     "AION_CUE_PROVIDER=x": "ConfigError Invalid configuration:\nAION_CUE_PROVIDER: Invalid option: expected one of \"auto\"|\"ollama\"|\"anthropic\"",
@@ -636,6 +651,9 @@
     "AION_HEBBIAN_WEIGHT_FLOOR=0.5": "ok 0.5",
     "AION_HEBBIAN_WEIGHT_FLOOR=1.5": "ConfigError Invalid configuration:\nAION_HEBBIAN_WEIGHT_FLOOR: Too big: expected number to be <=1",
     "AION_HEBBIAN_WEIGHT_FLOOR=2": "ConfigError Invalid configuration:\nAION_HEBBIAN_WEIGHT_FLOOR: Too big: expected number to be <=1",
+    "AION_INSTALL_PROFILE=": "ConfigError Invalid configuration:\nAION_INSTALL_PROFILE: Invalid option: expected one of \"docker\"|\"native\"",
+    "AION_INSTALL_PROFILE=zzz": "ConfigError Invalid configuration:\nAION_INSTALL_PROFILE: Invalid option: expected one of \"docker\"|\"native\"",
+    "AION_INSTALL_PROFILE=x": "ConfigError Invalid configuration:\nAION_INSTALL_PROFILE: Invalid option: expected one of \"docker\"|\"native\"",
     "AION_INTENTION_HORIZON_DAYS=not-a-number": "ConfigError Invalid configuration:\nAION_INTENTION_HORIZON_DAYS: Invalid input: expected number, received NaN",
     "AION_INTENTION_HORIZON_DAYS=": "ConfigError Invalid configuration:\nAION_INTENTION_HORIZON_DAYS: Invalid input: expected number, received NaN",
     "AION_INTENTION_HORIZON_DAYS=-1": "ConfigError Invalid configuration:\nAION_INTENTION_HORIZON_DAYS: Too small: expected number to be >0",
@@ -1290,6 +1308,13 @@
     "AION_REFLECT_MODEL=": "ConfigError Invalid configuration:\nAION_REFLECT_MODEL: Too small: expected string to have >=1 characters",
     "AION_REFLECT_MODEL=zzz": "ok \"zzz\"",
     "AION_REFLECT_MODEL=x": "ok \"x\"",
+    "AION_REFLECT_NUM_CTX=not-a-number": "ConfigError Invalid configuration:\nAION_REFLECT_NUM_CTX: Invalid input: expected number, received NaN",
+    "AION_REFLECT_NUM_CTX=": "ConfigError Invalid configuration:\nAION_REFLECT_NUM_CTX: Invalid input: expected number, received NaN",
+    "AION_REFLECT_NUM_CTX=-1": "ConfigError Invalid configuration:\nAION_REFLECT_NUM_CTX: Too small: expected number to be >0",
+    "AION_REFLECT_NUM_CTX=0": "ConfigError Invalid configuration:\nAION_REFLECT_NUM_CTX: Too small: expected number to be >0",
+    "AION_REFLECT_NUM_CTX=0.5": "ConfigError Invalid configuration:\nAION_REFLECT_NUM_CTX: Invalid input: expected int, received number",
+    "AION_REFLECT_NUM_CTX=1.5": "ConfigError Invalid configuration:\nAION_REFLECT_NUM_CTX: Invalid input: expected int, received number",
+    "AION_REFLECT_NUM_CTX=2": "ok 2",
     "AION_REFLECT_PROVIDER=": "ConfigError Invalid configuration:\nAION_REFLECT_PROVIDER: Invalid option: expected one of \"auto\"|\"ollama\"|\"anthropic\"",
     "AION_REFLECT_PROVIDER=zzz": "ConfigError Invalid configuration:\nAION_REFLECT_PROVIDER: Invalid option: expected one of \"auto\"|\"ollama\"|\"anthropic\"",
     "AION_REFLECT_PROVIDER=x": "ConfigError Invalid configuration:\nAION_REFLECT_PROVIDER: Invalid option: expected one of \"auto\"|\"ollama\"|\"anthropic\"",
@@ -1694,6 +1719,13 @@
     "models.cue=\"\"": "models.cue: Too small: expected string to have >=1 characters",
     "models.cue=42": "models.cue: Invalid input: expected string, received number",
     "models.cue=null": "models.cue: Invalid input: expected string, received null",
+    "models.cueNumCtx=-1": "models.cueNumCtx: Too small: expected number to be >0",
+    "models.cueNumCtx=0": "models.cueNumCtx: Too small: expected number to be >0",
+    "models.cueNumCtx=0.5": "models.cueNumCtx: Invalid input: expected int, received number",
+    "models.cueNumCtx=1.5": "models.cueNumCtx: Invalid input: expected int, received number",
+    "models.cueNumCtx=2": "ok",
+    "models.cueNumCtx=NaN": "models.cueNumCtx: Invalid input: expected number, received NaN",
+    "models.cueNumCtx=\"text\"": "models.cueNumCtx: Invalid input: expected number, received string",
     "routing.cue=\"\"": "routing.cue: Invalid option: expected one of \"auto\"|\"ollama\"|\"anthropic\"",
     "routing.cue=42": "routing.cue: Invalid option: expected one of \"auto\"|\"ollama\"|\"anthropic\"",
     "routing.cue=null": "routing.cue: Invalid option: expected one of \"auto\"|\"ollama\"|\"anthropic\"",
@@ -1797,6 +1829,9 @@
     "hebbian.weightFloor=2": "hebbian.weightFloor: Too big: expected number to be <=1",
     "hebbian.weightFloor=NaN": "hebbian.weightFloor: Invalid input: expected number, received NaN",
     "hebbian.weightFloor=\"text\"": "hebbian.weightFloor: Invalid input: expected number, received string",
+    "install.profile=\"\"": "install.profile: Invalid option: expected one of \"docker\"|\"native\"",
+    "install.profile=42": "install.profile: Invalid option: expected one of \"docker\"|\"native\"",
+    "install.profile=null": "install.profile: Invalid option: expected one of \"docker\"|\"native\"",
     "temporal.intentionHorizonDays=-1": "temporal.intentionHorizonDays: Too small: expected number to be >0",
     "temporal.intentionHorizonDays=0": "temporal.intentionHorizonDays: Too small: expected number to be >0",
     "temporal.intentionHorizonDays=0.5": "temporal.intentionHorizonDays: Invalid input: expected int, received number",
@@ -2409,6 +2444,13 @@
     "models.reflect=\"\"": "models.reflect: Too small: expected string to have >=1 characters",
     "models.reflect=42": "models.reflect: Invalid input: expected string, received number",
     "models.reflect=null": "models.reflect: Invalid input: expected string, received null",
+    "models.reflectNumCtx=-1": "models.reflectNumCtx: Too small: expected number to be >0",
+    "models.reflectNumCtx=0": "models.reflectNumCtx: Too small: expected number to be >0",
+    "models.reflectNumCtx=0.5": "models.reflectNumCtx: Invalid input: expected int, received number",
+    "models.reflectNumCtx=1.5": "models.reflectNumCtx: Invalid input: expected int, received number",
+    "models.reflectNumCtx=2": "ok",
+    "models.reflectNumCtx=NaN": "models.reflectNumCtx: Invalid input: expected number, received NaN",
+    "models.reflectNumCtx=\"text\"": "models.reflectNumCtx: Invalid input: expected number, received string",
     "routing.reflect=\"\"": "routing.reflect: Invalid option: expected one of \"auto\"|\"ollama\"|\"anthropic\"",
     "routing.reflect=42": "routing.reflect: Invalid option: expected one of \"auto\"|\"ollama\"|\"anthropic\"",
     "routing.reflect=null": "routing.reflect: Invalid option: expected one of \"auto\"|\"ollama\"|\"anthropic\"",
@@ -2712,6 +2754,6 @@
     "reserved var list": "AION_BUILD_SHA, AION_CAMPAIGN_INCIDENT_DIR, AION_GIT_USER_NAME, AION_HOOKS_INSTALLED, AION_REPO_HEAD_SHA, AION_REPO_PATH",
     "schema accepts DEFAULTS": "ok",
     "schema rejects an empty object": "rejected",
-    "default key order": "neo4j: uri,password | ollama: url,embedKeepAlive | models: embed,embedDimension,cue,reflect | anthropic: apiKey,model,promptCache | routing: cue,reflect | recall: maxHops,vectorLimit,maxFacts,maxEpisodes,maxNarratives,maxPreferences,maxResonant,maxIntentions,useContextResonance,intentionTriggers,intentionSituationFloor,sessionDedup,ownSessionFilter,associationStrength,adjacencyTopK,compressionThreshold,cueBudgetMs,cueCacheTtlMinutes,tokenBudget,vectorAdmissionFloor,corroborationFloor,bm25AdmissionMode,entityMatchThreshold,clusterCap,clusterCosineThreshold,packDuplicateSuppression,entityGlossCap,restatementFloor,decisionBoost,relatedClaimFloor,typedAdmission,typedAdmissionActivationFloor | search: methods,reranker,rrfConstant,mmrLambda,weights | activation: maxIterations,decayFactor,minActivation,maxNodesVisited,hubThreshold | hebbian: weightFloor,learningRate,decayRate,decayPeakDays,decaySigma,batchSize,flushCeiling,decayScanFraction | contextResonance: seedLimit,seedBudgetBase,seedBudgetGrowth,activationLimit,resonantLimit,contextSearchThreshold | reflection: stageTimeoutMs,maxEntities,minExtractionChars,entityDedupThreshold,entityNominationJaccardFloor,entityMergeMode,associationSemanticThreshold,associationSimilarLimit,maxCognitiveNodes,maxRelationships,supersedeMode,keyedCloseMode,supersedeAutoConfidence,supersedeNeighborThreshold,supersedeFamilyRelatednessFloor,maxSupersessionSubjects,maxContradictionNeighbors,maxContradictionJudgments,narrativeIdleMinutes,midSessionRollup,midSessionEpisodes,midSessionGapMinutes,maxNarrativeEpisodes,maxNarrativeEpisodeChars,keyedNarrativeEpisodes,keyedNarrativeSentences,keyedNarrativeEpisodeChars,narrativeSweepLimit | lanes: arrivalWindowMs,sessionArrivalMax,globalArrivalMax,hotSessionArrivalMax | redaction: entropyThreshold | maintenance: tier3,tier3Mode,autoMerge,tickMinutes,starvationCycles,urgencyThreshold,effectivenessFloor,costReferenceMs,costDecades,maxCostDivisor,vectorBackfillBatchSize,contextRefreshBatchSize,reconcileBatchSize,replayBatchSize,deadLetterBatchSize,redactionPurgeBatchSize,narrativeCleanupBatch,narrativeEdgeRepairBatch,retroSupersessionBatch,descriptionFreshness,descriptionRefreshBatch,descriptionRefreshMentionGrowth,backboneRepairBatch,orphanCleanupBatch,orphanForgetAfterDays,communityNodeLimit,communityMinNodes,bridgeMinCommunitySize,bridgeOverlapCeiling,proposalHygiene,hygienePollutedAgeHours,hygieneResidueAgeDays,hygieneJudgeBatch,proposalResolution,resolutionBatch,reinforcementFlush,memoryDecay,edgePrune,edgePruneUnreinforcedDays,edgePruneBatch,identifierDecay,identifierDecayBatch,identifierHalfLifeDays,identifierMentionFloor,claimDedup,claimDedupBatch,claimDedupCosineFloor,mergeDecisionReconcileBatch,chunkRenderedInputAllowance,chunkMaxSpanMs,narrativeSealBatch,episodeEvictMinAgeMs,episodeEvictBatch,narrativeRollup,narrativeRollupWindows,claimConsolidation,structuralDiscovery,structuralDiscoveryDegreeCeiling,structuralDiscoverySeedBatch,structuralDiscoveryBatch,intentionUpkeep,intentionUpkeepBatch,curiosity,curiosityBatch,recallProbe,recallProbeSample | temporal: readingHorizonDays,intentionHorizonDays,expiryAnnotation | sqlite: path,reinforcementQueueCap | operational: dataDir,mcpPort,workerCount,workerStaleClaimTimeoutMs,workerRetryBaseMs,workerRetryCapMs,workerMaxAttempts,workerBreakerThreshold,workerBreakerCooldownMs,workerVectorBatchSize,reconcileWarnThreshold,lagOldestUnclaimedWarnMs,lagQueueDepthWarnThreshold,sessionIdleExpiryMinutes | logging: filePath,level"
+    "default key order": "install: profile | neo4j: uri,password | ollama: url,embedKeepAlive | models: embed,embedDimension,cue,reflect,cueNumCtx,reflectNumCtx | anthropic: apiKey,model,promptCache | routing: cue,reflect | recall: maxHops,vectorLimit,maxFacts,maxEpisodes,maxNarratives,maxPreferences,maxResonant,maxIntentions,useContextResonance,intentionTriggers,intentionSituationFloor,sessionDedup,ownSessionFilter,associationStrength,adjacencyTopK,compressionThreshold,cueBudgetMs,cueCacheTtlMinutes,tokenBudget,vectorAdmissionFloor,corroborationFloor,bm25AdmissionMode,entityMatchThreshold,clusterCap,clusterCosineThreshold,packDuplicateSuppression,entityGlossCap,restatementFloor,decisionBoost,relatedClaimFloor,typedAdmission,typedAdmissionActivationFloor | search: methods,reranker,rrfConstant,mmrLambda,weights | activation: maxIterations,decayFactor,minActivation,maxNodesVisited,hubThreshold | hebbian: weightFloor,learningRate,decayRate,decayPeakDays,decaySigma,batchSize,flushCeiling,decayScanFraction | contextResonance: seedLimit,seedBudgetBase,seedBudgetGrowth,activationLimit,resonantLimit,contextSearchThreshold | reflection: stageTimeoutMs,maxEntities,minExtractionChars,entityDedupThreshold,entityNominationJaccardFloor,entityMergeMode,associationSemanticThreshold,associationSimilarLimit,maxCognitiveNodes,maxRelationships,supersedeMode,keyedCloseMode,supersedeAutoConfidence,supersedeNeighborThreshold,supersedeFamilyRelatednessFloor,maxSupersessionSubjects,maxContradictionNeighbors,maxContradictionJudgments,narrativeIdleMinutes,midSessionRollup,midSessionEpisodes,midSessionGapMinutes,maxNarrativeEpisodes,maxNarrativeEpisodeChars,keyedNarrativeEpisodes,keyedNarrativeSentences,keyedNarrativeEpisodeChars,narrativeSweepLimit | lanes: arrivalWindowMs,sessionArrivalMax,globalArrivalMax,hotSessionArrivalMax | redaction: entropyThreshold | maintenance: tier3,tier3Mode,autoMerge,tickMinutes,starvationCycles,urgencyThreshold,effectivenessFloor,costReferenceMs,costDecades,maxCostDivisor,vectorBackfillBatchSize,contextRefreshBatchSize,reconcileBatchSize,replayBatchSize,deadLetterBatchSize,redactionPurgeBatchSize,narrativeCleanupBatch,narrativeEdgeRepairBatch,retroSupersessionBatch,descriptionFreshness,descriptionRefreshBatch,descriptionRefreshMentionGrowth,backboneRepairBatch,orphanCleanupBatch,orphanForgetAfterDays,communityNodeLimit,communityMinNodes,bridgeMinCommunitySize,bridgeOverlapCeiling,proposalHygiene,hygienePollutedAgeHours,hygieneResidueAgeDays,hygieneJudgeBatch,proposalResolution,resolutionBatch,reinforcementFlush,memoryDecay,edgePrune,edgePruneUnreinforcedDays,edgePruneBatch,identifierDecay,identifierDecayBatch,identifierHalfLifeDays,identifierMentionFloor,claimDedup,claimDedupBatch,claimDedupCosineFloor,mergeDecisionReconcileBatch,chunkRenderedInputAllowance,chunkMaxSpanMs,narrativeSealBatch,episodeEvictMinAgeMs,episodeEvictBatch,narrativeRollup,narrativeRollupWindows,claimConsolidation,structuralDiscovery,structuralDiscoveryDegreeCeiling,structuralDiscoverySeedBatch,structuralDiscoveryBatch,intentionUpkeep,intentionUpkeepBatch,curiosity,curiosityBatch,recallProbe,recallProbeSample | temporal: readingHorizonDays,intentionHorizonDays,expiryAnnotation | sqlite: path,reinforcementQueueCap | operational: dataDir,mcpPort,workerCount,workerStaleClaimTimeoutMs,workerRetryBaseMs,workerRetryCapMs,workerMaxAttempts,workerBreakerThreshold,workerBreakerCooldownMs,workerVectorBatchSize,reconcileWarnThreshold,lagOldestUnclaimedWarnMs,lagQueueDepthWarnThreshold,sessionIdleExpiryMinutes | logging: filePath,level"
   }
 }

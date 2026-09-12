@@ -187,6 +187,33 @@ describe('OllamaProvider.generate', () => {
     ).resolves.toEqual({ cues: ['a'] });
   });
 
+  it('sends the context window on the request, beside the other model options', async () => {
+    // Ollama's own default is three different numbers depending on which of its docs you read,
+    // and a prompt over the window is truncated with no error: measured 2026-09-08, a
+    // 5,234-token prompt at num_ctx 4096 came back reporting prompt_eval_count 4096.
+    const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+      const parsed = JSON.parse(init?.body as string) as { options?: Record<string, number> };
+      expect(parsed.options).toEqual({ num_predict: 128, num_ctx: 16_384 });
+      return jsonResponse({ message: { role: 'assistant', content: '{"ok":true}' } });
+    });
+    const provider = new OllamaProvider({
+      baseUrl: 'http://localhost:11434',
+      embedModel: 'nomic-embed-text',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    await expect(
+      provider.generate({
+        model: 'qwen3:4b-instruct-2507',
+        messages: [{ role: 'user', content: 'reflect' }],
+        schema: {},
+        maxTokens: 128,
+        numCtx: 16_384,
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
   it('throws when the response has no message content', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ message: { role: 'assistant' } }));
     const provider = new OllamaProvider({

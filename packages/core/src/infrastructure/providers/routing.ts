@@ -32,6 +32,12 @@ export type RoleRoute = {
   readonly model: string;
   /** The Ollama tag configured for this role, whichever way it routes. */
   readonly localModel: string;
+  /**
+   * The context window the local call is sent under, from this role's own knob. Carried on the
+   * route rather than read at the call site so that every generation in the role is served under
+   * one window, and so a remote route still names the number the same role would use locally.
+   */
+  readonly numCtx: number;
   readonly reason: RouteReason;
 };
 
@@ -53,10 +59,15 @@ function localModelFor(config: Config, role: GenerationRole): string {
   return role === 'cue' ? config.models.cue : config.models.reflect;
 }
 
+function numCtxFor(config: Config, role: GenerationRole): number {
+  return role === 'cue' ? config.models.cueNumCtx : config.models.reflectNumCtx;
+}
+
 function resolveRole(config: Config, role: GenerationRole, keyPresent: boolean): RoleRoute {
   const localModel = localModelFor(config, role);
+  const numCtx = numCtxFor(config, role);
   const local = (reason: RouteReason): RoleRoute => {
-    return { role, provider: 'ollama', model: localModel, localModel, reason };
+    return { role, provider: 'ollama', model: localModel, localModel, numCtx, reason };
   };
   const pin: ProviderPin = config.routing[role];
 
@@ -72,13 +83,21 @@ function resolveRole(config: Config, role: GenerationRole, keyPresent: boolean):
       provider: 'anthropic',
       model: config.anthropic.model,
       localModel,
+      numCtx,
       reason: 'pinned-remote',
     };
   }
   if (!keyPresent) {
     return local('local-default');
   }
-  return { role, provider: 'anthropic', model: config.anthropic.model, localModel, reason: 'key' };
+  return {
+    role,
+    provider: 'anthropic',
+    model: config.anthropic.model,
+    localModel,
+    numCtx,
+    reason: 'key',
+  };
 }
 
 /**
@@ -152,7 +171,10 @@ export function evictableModels(routing: ProviderRouting): readonly string[] {
   ];
 }
 
-/** One line for a log or a status row: `cue=anthropic:claude-haiku-4-5 reflect=ollama:qwen3:8b`. */
+/**
+ * One line for a log or a status row:
+ * `cue=anthropic:claude-haiku-4-5 reflect=ollama:qwen3:4b-instruct-2507`.
+ */
 export function routingSummary(routing: ProviderRouting): string {
   return routeList(routing)
     .map((route) => `${route.role}=${route.provider}:${route.model}`)

@@ -35,6 +35,10 @@ export type ProviderRouterOptions = {
  * One role's `Provider`: the local embedder, and whichever backend the role routes to for
  * `generate`. Callers keep naming their own model from config; a remote route substitutes its
  * own, so no call site needs a second model knob for the route it happens to be on.
+ *
+ * This is also where the context window is stated. Every role call leaves here carrying the
+ * role's `num_ctx`, so no stage can reach Ollama on whatever default that build happens to
+ * derive, and a call site that sizes its own class keeps the value it set.
  */
 class RoutedProvider implements Provider {
   readonly #embedder: Provider;
@@ -78,7 +82,9 @@ class RoutedProvider implements Provider {
     };
 
     try {
-      const answer = await this.#generator.generate(req);
+      const answer = await this.#generator.generate(
+        req.numCtx === undefined ? { ...req, numCtx: this.#route.numCtx } : req,
+      );
       report(true);
       return answer;
     } catch (err) {

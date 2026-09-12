@@ -87,6 +87,11 @@ export class OllamaProvider implements Provider {
     if (req.temperature !== undefined) {
       modelOptions.temperature = req.temperature;
     }
+    // The window is always stated, never left to the model. `StructuredRequest.numCtx` carries
+    // what a silent overrun costs; `role-provider.ts` is what guarantees a role call names one.
+    if (req.numCtx !== undefined) {
+      modelOptions.num_ctx = req.numCtx;
+    }
 
     const response = await this.fetchImpl(`${this.baseUrl}/api/chat`, {
       method: 'POST',

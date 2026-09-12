@@ -88,7 +88,7 @@ describe('session close', () => {
       maxTokens: number;
       messages: readonly { content: string }[];
     };
-    expect(request.model).toBe('qwen3:8b');
+    expect(request.model).toBe(DEFAULTS.models.reflect);
     expect(request.temperature).toBe(0);
     expect(request.think).toBe(false);
     expect(request.signal.aborted).toBe(false);

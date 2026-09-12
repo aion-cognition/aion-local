@@ -22,6 +22,18 @@ export type StructuredRequest = {
   schema: JsonSchema;
   maxTokens?: number;
   temperature?: number;
+  /**
+   * `options.num_ctx` on the local provider: the context window this call is served under. The
+   * provider sends it on every role-routed generation and never trusts the model's own default,
+   * because that default is not one number. Ollama documents 4096 in its FAQ, 2048 in the
+   * Modelfile reference and a VRAM-derived value elsewhere, and overrunning it truncates in
+   * silence: measured 2026-09-08, a 5,234-token prompt sent at num_ctx 4096 came back reporting
+   * prompt_eval_count 4096, with 1,138 tokens dropped, no error and no warning. A judge reading a
+   * truncated record still answers, and answers confidently. The role's knob supplies the value;
+   * a caller that sizes its own call class may name one instead. Anthropic has no equivalent
+   * setting and ignores it.
+   */
+  numCtx?: number;
   signal?: AbortSignal;
   /**
    * Hybrid reasoning models (the qwen3 family) emit a reasoning block ahead of the

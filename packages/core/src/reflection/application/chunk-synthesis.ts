@@ -69,7 +69,8 @@ export type ChunkSynthesis = {
 };
 
 const DEFAULT_TIMEOUT_MS = 120_000;
-const DEFAULT_MODEL = 'qwen3:8b';
+/** The `models.reflect` default, for the caller that names no model. Keep the two in step. */
+const DEFAULT_MODEL = 'qwen3:4b-instruct-2507';
 
 /** The gap the render's own selection proves, rather than the one the plan guessed at. */
 function gapsWithRanges(

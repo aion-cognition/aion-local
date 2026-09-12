@@ -39,6 +39,7 @@ export type KnobTable = Readonly<Record<string, Readonly<Record<string, KnobDecl
 
 const searchMethod = z.enum(['vector', 'bm25', 'graph_traversal']);
 const providerPin = z.enum(['auto', 'ollama', 'anthropic']);
+const installProfile = z.enum(['docker', 'native']);
 
 /**
  * Every knob the program has, declared once, as `leaf: [envVar, schema, value]`. The schema
@@ -60,6 +61,24 @@ const providerPin = z.enum(['auto', 'ollama', 'anthropic']);
  * point. `operational.workerCount` defaults to 1, one worker per process.
  */
 export const KNOBS = {
+  /**
+   * Which substrate this install runs on, and the one knob that changes what `aion init`,
+   * `aion doctor` and `aion status` are looking at rather than how they behave once they find
+   * it. `docker` is the compose stack: init starts the two services and the addresses below
+   * default to compose's own names. `native` is Neo4j and the MCP server as host processes,
+   * where init verifies a Neo4j somebody else manages, writes a launchd job rather than
+   * starting a container, and both stores are directories. It is a knob rather than a flag on
+   * every command because doctor and status have to know which substrate to check without
+   * being told again, and `aion init --profile native` records it in `.env` for them.
+   *
+   * Nothing derives the addresses from it. `neo4j.uri`, `ollama.url`, `operational.dataDir`,
+   * `sqlite.path` and `logging.filePath` keep their own defaults and their own env vars, and
+   * the native install writes the values it needs into `.env` at init: a default that changed
+   * shape under another knob would make every one of them unreadable from its own declaration.
+   */
+  install: {
+    profile: ['AION_INSTALL_PROFILE', installProfile, 'docker'],
+  },
   neo4j: {
     uri: ['AION_NEO4J_URI', text, 'bolt://neo4j:7687'],
     password: ['AION_NEO4J_PASSWORD', z.string(), ''],
@@ -82,7 +101,24 @@ export const KNOBS = {
     embed: ['AION_EMBED_MODEL', text, 'snowflake-arctic-embed2'],
     embedDimension: ['AION_EMBED_DIMENSION', positiveInt, 1024],
     cue: ['AION_CUE_MODEL', text, 'qwen3:1.7b'],
-    reflect: ['AION_REFLECT_MODEL', text, 'qwen3:8b'],
+    // An instruct checkpoint, so it emits no reasoning block for `think: false` to switch off,
+    // and the one candidate measured on this hardware that the installed Ollama already runs.
+    // Measured 2026-09-08 against the previous default `qwen3:8b`, schema-constrained and
+    // uncached: 12.2s at 1,772 in / 514 out, 19.3s at 4,969 in, 46.8s at 12,488 in, which is
+    // about 40% off the 8b at the same shape. 2.5 GB on disk at q4_K_M and 4.2 GB resident at
+    // the window below, against 6.6 GB for the 8b.
+    reflect: ['AION_REFLECT_MODEL', text, 'qwen3:4b-instruct-2507'],
+    // The `options.num_ctx` each role's generations are served under. Two numbers rather than
+    // one because the windows answer different questions. Reflection reads rendered episode
+    // text, so its window is sized to the rendered-input allowance with room over it; the
+    // measured cost of holding 16384 open is 4.2 GB resident and a 22.8s cold load. The cue
+    // call is one query string and the only generation under a latency budget
+    // (`recall.cueBudgetMs`, 8s), and a cold load at 4-8k measured 4.6-6.4s against that same
+    // 22.8s, so its window is the small one. Neither is the model's own default: see
+    // `StructuredRequest.numCtx` for what trusting that costs. Embeddings are unaffected, since
+    // the embed model's window is a property of the vector space rather than of a call.
+    cueNumCtx: ['AION_CUE_NUM_CTX', positiveInt, 4_096],
+    reflectNumCtx: ['AION_REFLECT_NUM_CTX', positiveInt, 16_384],
   },
   anthropic: {
     /** Empty string means fully local; a non-empty key opts a call class into a remote provider. */

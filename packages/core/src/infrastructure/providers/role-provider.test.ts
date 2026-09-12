@@ -73,6 +73,33 @@ describe('what each role generates against', () => {
     ]);
   });
 
+  it('states each role own context window on every local call, unasked', async () => {
+    // The invariant behind the knob: no stage has to remember to size its call, and none of them
+    // reaches Ollama on whatever default that build derives. Two numbers because the two roles
+    // send different things — a query string against rendered episode text.
+    const { calls, impl } = recordingFetch();
+    const router = new ProviderRouter({ config: config(), fetchImpl: impl });
+
+    await router.forRole('cue').generate(request(DEFAULTS.models.cue));
+    await router.forRole('reflect').generate(request(DEFAULTS.models.reflect));
+
+    expect(calls.map((call) => (call.body.options as Record<string, number>).num_ctx)).toEqual([
+      DEFAULTS.models.cueNumCtx,
+      DEFAULTS.models.reflectNumCtx,
+    ]);
+  });
+
+  it('leaves a window the call site sized for itself alone', async () => {
+    const { calls, impl } = recordingFetch();
+    const router = new ProviderRouter({ config: config(), fetchImpl: impl });
+
+    await router
+      .forRole('reflect')
+      .generate({ ...request(DEFAULTS.models.reflect), numCtx: 40_960 });
+
+    expect((calls[0]?.body.options as Record<string, number>).num_ctx).toBe(40_960);
+  });
+
   it('sends both roles to Anthropic under the configured model when the key is set', async () => {
     const { calls, impl } = recordingFetch();
     const router = new ProviderRouter({ config: config({ key: 'sk-ant-test' }), fetchImpl: impl });
