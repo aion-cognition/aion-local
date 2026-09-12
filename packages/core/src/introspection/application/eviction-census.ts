@@ -25,7 +25,7 @@ import type { EvictionDemand } from '../domain/health.js';
  * and the sources behind it would never be reached.
  */
 
-/** C9 §4's selection page: rows examined per pass, apart from the attempts one pass spends. */
+/** The selection page: rows examined per pass, apart from the attempts one pass spends. */
 export const EVICTION_SCAN_PAGE = 200;
 
 export type EvictionCursor = { readonly sourceId: string };

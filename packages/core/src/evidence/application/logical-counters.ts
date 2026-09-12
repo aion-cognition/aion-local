@@ -6,7 +6,7 @@ import {
 import { durableRoleScope, nodeScopeDirection, type DurableRole } from '../domain/scopes.js';
 
 /**
- * The C8 §4 counter populations, read from the incidence records rather than from a stored number.
+ * The counter populations, read from the incidence records rather than from a stored number.
  *
  * Every count here is over the committed logical population: which SOURCE OCCURRENCES stand behind
  * a node, not which graph edges survive next to it. That is the whole point of the cut. An evicted

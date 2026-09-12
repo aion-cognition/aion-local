@@ -148,14 +148,19 @@ describe('the two readings when one of them cannot be taken', () => {
   it('carries a known pending publication through a census that failed', () => {
     pair();
     setPendingOperation(store.db, 'op-in-flight');
-    // The manifest itself is gone. The census cannot answer and the pending reading still can.
-    store.db.exec('DROP TABLE chunks');
+    // The manifest is out of reach. The census cannot answer and the pending reading still can.
+    // Renamed rather than dropped: the store this test tears is the one the next test reads.
+    store.db.prepare('ALTER TABLE chunks RENAME TO chunks_hidden').run();
 
-    const demand = readSealDemand(store.db, INPUT);
-    expect(demand.availability).toBe('unavailable');
-    expect(demand.eligibleGroups).toBeUndefined();
-    expect(demand.pendingPublishedRepair).toBe(true);
-    expect(demand.diagnostic).toContain('census failed');
+    try {
+      const demand = readSealDemand(store.db, INPUT);
+      expect(demand.availability).toBe('unavailable');
+      expect(demand.eligibleGroups).toBeUndefined();
+      expect(demand.pendingPublishedRepair).toBe(true);
+      expect(demand.diagnostic).toContain('census failed');
+    } finally {
+      store.db.prepare('ALTER TABLE chunks_hidden RENAME TO chunks').run();
+    }
   });
 
   it('reports a pending publication beside a measured census', () => {

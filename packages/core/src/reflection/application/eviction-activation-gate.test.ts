@@ -6,8 +6,8 @@ import { describe, expect, it } from 'vitest';
 /**
  * The line between a destructive capability existing and being reachable.
  *
- * C9 §2 is explicit that no writer the audit marks unknown may be enabled during M2 activation,
- * and the audit still carries a large owed body: the reflection stage writers, plasticity, merge
+ * No writer the compatibility audit marks unknown may be enabled while the contract is being
+ * activated, and the audit still carries a large owed body: the reflection stage writers, plasticity, merge
  * and unmerge, forget and unsupersede, and the introspection operations all mutate the graph
  * outside the publication protocol today. Eviction is therefore built and fenced rather than
  * built and live, and the fence is one positively verified fact: the eviction compatibility

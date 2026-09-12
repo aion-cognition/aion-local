@@ -37,7 +37,7 @@ import { EVICTION_ROLES } from '../domain/episode-eviction.js';
 /**
  * Whether a source's raw projection may be removed, asked of the durable records alone.
  *
- * Every one of C9 §4's seven conditions is positively verified here and nothing is inferred from
+ * Every one of the seven conditions is positively verified here and nothing is inferred from
  * an absence: a missing record is a pin with a name, never a condition that passed quietly. The
  * order runs cheapest-first and stops at the first pin, because a source is held by one unmet
  * condition exactly as firmly as by seven and the caller reports the reason rather than a list.

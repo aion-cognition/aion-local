@@ -143,8 +143,8 @@ function seal(
 /**
  * The clock the span trigger ages a tail on: ARRIVAL, not world time.
  *
- * Signed C3 §2 is explicit — the span measures elapsed capture and arrival age, not a backdated
- * `occurredAt` — and the scheduler that nominates a tail ages it the same way. Reading world time
+ * The span measures elapsed capture and arrival age, never a backdated `occurredAt`, and the
+ * scheduler that nominates a tail ages it the same way. Reading world time
  * here made the two disagree in both directions: a conversation about last year was permanently
  * overdue and never nominated, and a plan stated for next year was nominated as mature and then
  * refused by this decision forever. World time keeps every other job it has, the narrative's own

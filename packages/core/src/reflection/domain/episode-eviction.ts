@@ -28,7 +28,8 @@ const REGISTERED_NODE_LABEL = 'AionNode';
 /**
  * What a raw container may carry. `Memory` is the vector-index companion and `AionNode` the
  * registry label; a semantic label on top of those is a node that is a raw capture and something
- * else at the same time, which C9 §3 blocks rather than classifies.
+ * else at the same time. A mixed container is refused rather than classified: no rule here can say
+ * which of the two it is, and guessing would remove a node that was carrying meaning.
  */
 const RAW_NODE_LABELS: readonly string[] = ['Episode', 'Turn', 'Memory', REGISTERED_NODE_LABEL];
 
@@ -54,9 +55,9 @@ export const EVICTION_IGNORED_EDGE_FIELDS: readonly string[] = ['last_accessed_a
 /** Bumped only when the ignored set above changes; the manifest records what it was bound to. */
 export const IGNORED_FIELD_POLICY_REVISION = 1;
 
-/** C9 §4's internal attempt bounds. One source, and what one source may carry. */
+/** The internal attempt bounds. One source, and what one source may carry. */
 export const EVICTION_BOUNDS = {
-  /** One Episode plus C7's `turns.max(200)`. */
+  /** One Episode plus the 200 Turns an accepted source may own. */
   nodes: 201,
   edges: 4096,
   manifestBytes: 2 * 1024 * 1024,
@@ -280,7 +281,7 @@ export function classifyRemovalSet(edges: readonly IncidentEdge[]): EvictionClas
   };
 }
 
-/** The category/property digest C9 §3 requires: identity, category and preserved payload, sorted. */
+/** The category/property digest: identity, category and preserved payload, sorted. */
 export function categoryDigestOf(edges: readonly ClassifiedEdge[]): string {
   const rows = edges
     .map((entry) => [
