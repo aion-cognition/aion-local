@@ -219,14 +219,10 @@ type DurableMetadata = NonNullable<DurableReading['value']>;
 
 /**
  * What the citation records say. `none` is a read of the records, not an assumption about them: a
- * revision writes what it cited as it publishes, so an empty set is an empty set. `unavailable`
- * stays for the case where the read itself could not be taken.
+ * revision writes what it cited as it publishes, so an empty set is an empty set.
  */
 function citationLine(binding: DurableMetadata['narrativeBinding']): string {
-  if (binding.status === 'cited') {
-    return binding.revisionIds.join(', ');
-  }
-  return binding.status === 'none' ? 'none' : 'the citation records could not answer';
+  return binding.status === 'cited' ? binding.revisionIds.join(', ') : 'none';
 }
 
 /**

@@ -30,7 +30,7 @@ function metadata(sessions: readonly string[]): ItemMetadata {
     sources: ['episode-a'],
     unknownAttribution: false,
     ownership: ownership(sessions),
-    narrativeBinding: { status: 'unavailable' },
+    narrativeBinding: { status: 'none' },
   };
 }
 

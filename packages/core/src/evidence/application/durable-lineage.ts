@@ -32,13 +32,8 @@ export type DurableLineage = {
   readonly complete: boolean;
   readonly correction?: StatedCorrection;
   readonly confirmation?: StatedConfirmation;
-  /** The published revisions citing this node at the vantage asked for. */
+  /** The published revisions citing this node at the vantage asked for. An empty set is an answer. */
   readonly citedBy: readonly string[];
-  /**
-   * Whether the citation set is an answer rather than silence. True wherever the revision records
-   * could be read: they are the population, so an empty read is an empty set.
-   */
-  readonly citationsProved: boolean;
   /** Every scope this reading consulted, for the revision a writer fences on. */
   readonly dependencies: readonly EvidenceDependency[];
 };
@@ -76,7 +71,7 @@ function citationsOf(
   nodeId: string,
   at: Date | undefined,
   dependencies: EvidenceDependency[],
-): { readonly ids: readonly string[]; readonly proved: boolean } {
+): readonly string[] {
   const cited = readCitationsOf(db, nodeId, at);
   const scope = readRelationScope(db, {
     kind: 'node',
@@ -87,7 +82,7 @@ function citationsOf(
   if (scope.status === 'verified') {
     dependencies.push(scope.dependency);
   }
-  return { ids: cited.map((citation) => citation.narrativeNodeId), proved: true };
+  return cited.map((citation) => citation.narrativeNodeId);
 }
 
 export function durableLineage(
@@ -122,13 +117,11 @@ export function durableLineage(
     confirms === undefined ? undefined : stamp(values?.occurredAt, confirms.knownFrom);
   const by = typeof values?.by === 'string' ? values.by : undefined;
   const evidence = typeof values?.evidence === 'string' ? values.evidence : undefined;
-  const citations = citationsOf(db, nodeId, at, dependencies);
   return {
     roots: walk.roots,
     lineage: walk.lineage,
     complete: walk.complete && affordable,
-    citedBy: citations.ids,
-    citationsProved: citations.proved,
+    citedBy: citationsOf(db, nodeId, at, dependencies),
     dependencies,
     ...(corrects?.fromId === undefined || correctedAt === undefined
       ? {}

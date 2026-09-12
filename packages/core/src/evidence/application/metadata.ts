@@ -53,22 +53,19 @@ export type ItemMetadata = {
   readonly unknownAttribution: boolean;
   /** The caller-independent summary the serving layer derives its own/other verdict from. */
   readonly ownership: OwnershipSummary;
-  /**
-   * The published revisions citing this item. An unproved citation census answers unavailable
-   * rather than claiming no revision cites it.
-   */
+  /** The published revisions citing this item, or the read that says none do. */
   readonly narrativeBinding: NarrativeBinding;
   /** Explicit inspection keeps the node; default serving follows this separate family choice. */
   readonly representation?: NarrativeRepresentation;
 };
 
 /**
- * The committed citation population, with unknown census kept separate from verified empty.
+ * The committed citation population. Two answers and no third: the revision records are the
+ * population, so either some revision cites this item or none does.
  */
 export type NarrativeBinding =
   | { readonly status: 'cited'; readonly revisionIds: readonly string[] }
-  | { readonly status: 'none' }
-  | { readonly status: 'unavailable' };
+  | { readonly status: 'none' };
 
 export type MetadataInput = {
   readonly ids: readonly string[];
@@ -107,10 +104,7 @@ function issueOn(
  */
 function bindingOf(durable: DurableLineage): NarrativeBinding {
   const cited = durable.citedBy;
-  if (cited.length > 0) {
-    return { status: 'cited', revisionIds: cited };
-  }
-  return durable.citationsProved ? { status: 'none' } : { status: 'unavailable' };
+  return cited.length > 0 ? { status: 'cited', revisionIds: cited } : { status: 'none' };
 }
 
 /** A retained node the graph does not hold, read through the records that outlive its projection. */
@@ -396,12 +390,9 @@ function readOne(
     // Every scope the walk consulted travels with the answer, so a writer fencing on this
     // revision fences on the parents and citations the roots were derived through.
     dependencies.push(...durable.dependencies);
-    // The citation records answer for themselves. Until a producer writes them the honest answer
-    // is that the binding is unavailable, and it becomes an answer the moment they exist.
+    // The citation records answer for themselves, so this raises no issue of its own: an item
+    // nothing cites is a fact the rows carry, not a gap in the reading.
     const binding = bindingOf(durable);
-    if (binding.status === 'unavailable') {
-      nodeIssues.push(issueOn(address, 'narrative_revision', 'unverified_scope', false));
-    }
     const found = provenance.get(id);
     if (found === undefined && durable.roots.length === 0) {
       const residency = residencyWithoutProjection(deps.db, id);
