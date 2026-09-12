@@ -14,6 +14,7 @@ import {
   revalidateNarrativeRepresentations,
   type NarrativeRepresentation,
 } from '../../evidence/application/narrative-representation.js';
+import { GRAPH_NODE_SCOPE } from '../../evidence/domain/scopes.js';
 import {
   supersedeInTransaction,
   writeStampedDerivedNodeInTransaction,
@@ -36,6 +37,7 @@ import { PublicationOperation } from '../../infrastructure/publication/operation
 import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
 import type { PublicationContext } from '../../infrastructure/publication/types.js';
 import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
+import { readScopeMirror, recordScopeMirror } from '../../infrastructure/sqlite/evidence-scope.js';
 import { checkPresentCoverage } from '../../recall/application/coverage-checker.js';
 import { ROLLUP_SCOPES } from '../domain/rollup.js';
 
@@ -137,6 +139,16 @@ type CalendarData = z.infer<typeof Data>;
 /** What this publication would write over, absorb or close, which is what it has to own. */
 function population(data: CalendarData): readonly string[] {
   return [...new Set([...data.memberIds, ...data.closes])].filter((id) => id !== data.nodeId);
+}
+
+/**
+ * The narratives this rollup supersedes: every one it absorbs except the head it publishes into.
+ *
+ * Read from the plan by both halves rather than computed in the graph write and passed along, so
+ * the set the graph closed and the set the acknowledgment records cannot drift apart.
+ */
+function absorbedIds(data: CalendarData): readonly string[] {
+  return data.closes.filter((id) => id !== data.nodeId);
 }
 
 /** The raw-source coverage this close retires, kept apart from narrative membership. */
@@ -368,7 +380,7 @@ export const calendarRollupPublication = new PublicationOperation({
         });
       }
     }
-    const absorbed = data.closes.filter((id) => id !== data.nodeId);
+    const absorbed = absorbedIds(data);
     for (const oldId of absorbed) {
       await supersedeInTransaction(context.graph, {
         oldId,
@@ -407,6 +419,28 @@ export const calendarRollupPublication = new PublicationOperation({
       context.knownFrom,
       context.observedAckAt,
     );
+    // Superseding a narrative is a change to its own semantic state, exactly as it is when a
+    // family repair or an orphan suppression does it, so the evidence somebody else holds about
+    // that state stops being current HERE, in the operation that made the change. Left alone, a
+    // judgment fenced on the reading this rollup invalidated would still verify as current
+    // against a narrative the substrate has stopped standing behind.
+    //
+    // What this close retires is coverage rather than interpretation, which is the argument for
+    // leaving the mirror alone. It loses to the two primitives it runs: the same supersede and
+    // the same edge close its siblings mirror for.
+    for (const nodeId of absorbedIds(data)) {
+      const held = readScopeMirror(context.db, {
+        endpointId: nodeId,
+        relationClass: GRAPH_NODE_SCOPE,
+      });
+      recordScopeMirror(context.db, {
+        endpointId: nodeId,
+        relationClass: GRAPH_NODE_SCOPE,
+        mirroredRevision: (held?.mirroredRevision ?? 0) + 1,
+        operationId: context.operationId,
+        mirroredAt: new Date(context.knownFrom),
+      });
+    }
     return undefined;
   },
   discardSqlite(context, data) {
