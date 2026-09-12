@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import { handleReflection, type ReflectionIntakeDeps } from './intake.js';
+import { SOURCE_INDEX_JOB_TYPE } from './intake-queue.js';
+import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
 import { LaneAssigner } from './lanes.js';
 import { ReflectionOrchestrator } from './orchestrator.js';
 import { reconcileEnrichment } from './reconcile.js';
@@ -20,6 +21,7 @@ import {
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
 import { OllamaProvider } from '../../infrastructure/providers/ollama-provider.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { listQueueJobs } from '../../infrastructure/sqlite/reflection-queue-admin.js';
 import { listReflectionJobs } from '../../infrastructure/sqlite/reflection-queue.js';
 import { SessionManager } from '../../session/session-manager.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../domain/stage.js';
@@ -145,9 +147,19 @@ describe('a bulk-flagged flood ahead of one live turn', () => {
     });
     expect(live.lane).toBe('interactive');
 
-    const queued = listReflectionJobs(db);
-    expect(queued).toHaveLength(FLOOD_SIZE + 1);
-    expect(queued.filter((job) => job.lane === 'bulk')).toHaveLength(FLOOD_SIZE);
+    // One acceptance owes two rows: the `integrate` job this worker runs, and the `source_index`
+    // job the drainer owns. Both populations are asserted by name, because adding them together
+    // is what read a 21-job reflection backlog as 42.
+    const integrate = listQueueJobs(db, { jobType: INTEGRATE_JOB_TYPE });
+    expect(integrate).toHaveLength(FLOOD_SIZE + 1);
+    expect(integrate.filter((job) => job.lane === 'bulk')).toHaveLength(FLOOD_SIZE);
+
+    const indexed = listQueueJobs(db, { jobType: SOURCE_INDEX_JOB_TYPE });
+    expect(indexed).toHaveLength(FLOOD_SIZE + 1);
+    // The index lane is a literal, and `pending_ahead` reads the interactive lane only.
+    expect(indexed.filter((job) => job.lane === 'bulk')).toHaveLength(FLOOD_SIZE + 1);
+
+    expect(listReflectionJobs(db)).toHaveLength(2 * (FLOOD_SIZE + 1));
 
     const stage = new RecordingStage();
     const started = buildWorker(stage);
