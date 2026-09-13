@@ -1,9 +1,8 @@
 # Operating the substrate
 
-Day-to-day operation happens through `./bin/aion`. This page carries the semantics that
-matter when you run the sharper commands, plus the knobs an operator actually tunes. The
-command list itself is in the top-level README; `aion <command> --help` prints each one's
-flags.
+Day-to-day operation happens through `./bin/aion`. This page carries the semantics behind the
+sharper commands and the knobs an operator tunes. The command list is in the top-level README;
+`aion <command> --help` prints each one's flags.
 
 ## Install profiles
 
@@ -11,11 +10,11 @@ Two substrates, one substrate code. `AION_INSTALL_PROFILE` says which one this i
 `aion init` records it, and `aion doctor` and `aion status` read it back so they check the right
 thing without being told again.
 
-**Where the files go is decided before any of that.** The knob table's path defaults
-(`/data`, `/data/aion.sqlite`, `/data/logs/aion.jsonl`) are container paths, and every command
-opens a log file before it does anything else, so a process running on a host resolves them
-against the machine first: `~/.aion` and the two paths under it, created on demand. It is host
-context rather than profile — a bare `node packages/cli/dist/main.js` gets it too — and
+**Where the files go is settled before the profile is.** The knob table's path defaults
+(`/data`, `/data/aion.sqlite`, `/data/logs/aion.jsonl`) are container paths. Every command opens
+a log file before it does anything else, so a process running on a host resolves them against
+the machine first: `~/.aion` and the two paths under it, created on demand. Host context decides
+that rather than the profile, so a bare `node packages/cli/dist/main.js` gets it too.
 `AION_DATA_DIR` overrides both. `aion init` prints the resolved root on its first line.
 
 | | `docker` (default) | `native` |
@@ -26,7 +25,7 @@ context rather than profile — a bare `node packages/cli/dist/main.js` gets it 
 | Both stores | the `aion_aion-data` and `aion_aion-neo4j` volumes | directories under `~/.aion` and Neo4j's own data directory |
 | Ollama | on the host either way, reached at `host.docker.internal` | on the host, reached at `127.0.0.1` |
 
-Either way it is one command to running:
+Either way, one command brings it up:
 
 ```
 ./bin/aion init              # docker
@@ -34,18 +33,18 @@ Either way it is one command to running:
 ```
 
 `init` is idempotent on both. A re-run against a healthy install reports what is already there
-and changes nothing: no container is recreated, no launchd job is bounced, and no configuration
-file is rewritten.
+and changes nothing: it recreates no container, bounces no launchd job, and rewrites no
+configuration file.
 
 The flag was `--profile` for one release and is now `--install`, because `aion init full --profile
 native` put two different questions under one word. The old spelling still works and is not
 advertised.
 
 The flag chooses a profile once; it does not switch one. `--install docker` on a native install is
-refused, because the two profiles keep their stores in different places and moving between them
-means dropping both and initializing again. `--install native` on a docker-shaped config is not
-refused, since `docker` is the code default and a recorded default cannot be told from nobody
-having chosen.
+refused. The two profiles keep their stores in different places, so moving between them means
+dropping both and initializing again. `--install native` on a docker-shaped config is not refused,
+since `docker` is the code default and a recorded default cannot be told from nobody having
+chosen.
 
 ### Bringing up the native profile
 
@@ -57,7 +56,7 @@ npm ci && npm run build
 ./bin/aion-native init --install native
 ```
 
-That one command does all of it. In order:
+That one command does all of it, in order:
 
 1. Records the profile and its five addresses in `.env` (`AION_INSTALL_PROFILE`,
    `AION_NEO4J_URI`, `AION_OLLAMA_URL`, `AION_DATA_DIR`, `AION_SQLITE_PATH`, `AION_LOG_FILE`).
@@ -85,7 +84,7 @@ done.
 **What the launchd job does not do.** It reads `.env` as it was when init ran, because a launchd
 job inherits almost nothing and nothing in this build loads `.env` on the host. After editing
 `.env`, run init again (which rewrites and reloads the job) or
-`launchctl kickstart -k gui/$(id -u)/com.aion.mcp` if the file itself has not changed. Its
+`launchctl kickstart -k gui/$(id -u)/com.aion.mcp` if the file has not changed. Its
 `StandardOutPath` is `/dev/null`: the service's own logger writes the durable JSONL, and nothing
 rotates a launchd file. Its `StandardErrorPath` catches a failure that happens before the logger
 opens.
@@ -106,8 +105,8 @@ finishes it by hand. These are the ones worth knowing in advance:
 
 **The server version.** `compose.yaml` pins the pairing the substrate was measured against, Neo4j
 `2026.07.x` with graph-data-science `2026.07.0`. A native install takes whatever Neo4j it finds or
-Homebrew installs, and pairs the plugin to it. `aion doctor` reports which you have: a matched
-pair on a later series is a warning, since nobody has run the procedure census on it, and a
+Homebrew installs, and pairs the plugin to it. `aion doctor` reports which you have. A matched
+pair on a later series is a warning, since nobody has run the procedure census on it. A
 mismatched pair is a failure, because the plugin is compiled against the kernel it ships beside.
 
 ## API costs
@@ -116,7 +115,7 @@ Run `aion costs [--days N]` to group billed API responses by UTC day and calling
 The default window includes today and the preceding six days. Each row reports the model,
 call count, input and output tokens, cache-write and cache-read tokens, the cache-read share of that
 group's input tokens, usage-error count, and estimated dollars.
-Unknown models are marked `unpriced`; their charges are not silently counted as zero. A model with no
+Unknown models are marked `unpriced`; their charges are never counted as zero. A model with no
 price still reports its cache share, and a group that spent no input tokens reads `no-input`.
 
 The append-only SQLite `api_calls` ledger records successful HTTP responses, including answers
@@ -153,7 +152,7 @@ Semantic relationships, the tier-3 advisor, and cognitive restatement build sche
 entity merge judgment and consolidation synthesis accept caller-supplied schemas.
 Changing those schemas changes the cached block and can prevent reuse.
 
-Eligible prefixes that change can incur cache-write charges without subsequent savings.
+Eligible prefixes that change can incur cache-write charges without later savings.
 Recheck reuse when changing prompts, schemas, or models; the switch alone does not guarantee savings.
 
 ### Prompt cache measurements
@@ -207,8 +206,8 @@ reconcile count as an informational check and warns past `AION_RECONCILE_WARN_TH
 
 `--job-type <integrate | source_index>` narrows `ls`, `drop` and `promote` to one job type;
 `reconcile` and `index` do not take it. `drop` and `promote` default to `integrate` when it is
-omitted, so a plain `drop` leaves `source_index` rows alone and reports how many it skipped;
-pass `--job-type source_index` to drop those too. `promote` refuses `source_index` outright,
+omitted, so a plain `drop` leaves `source_index` rows alone and reports how many it skipped.
+Pass `--job-type source_index` to drop those too. `promote` refuses `source_index` outright,
 since the index drainer claims those rows by job type rather than by lane.
 
 ## Reviewing proposals
@@ -226,29 +225,30 @@ siblings of the same episode that name one of its subjects; `--claim-only` close
 claim, and `--episode` closes everything that observation produced.
 
 Only an entity-merge pair the dedup cascade's two judge passes split on reaches this list. A
-pair both passes agree on is merged during reflection, and the spellings one identity key
-cannot tell apart (`re-mark` against `remark`, an identity already answering to the other's
-name as an alias) are merged with no model call at all, by the cascade's tier 0 during
-reflection and by `merge_auto` sweeping the whole graph on the hour. `aion proposals` is
-where a person decides the residue first, ahead of `proposal_resolution` deciding it on the
-hour (below) and of `proposal_hygiene` ageing one out: past
+pair both passes agree on is merged during reflection. The spellings one identity key cannot
+tell apart (`re-mark` against `remark`, an identity already answering to the other's name as an
+alias) are merged with no model call at all, by the cascade's tier 0 during reflection and by
+`merge_auto` sweeping the whole graph on the hour.
+
+`aion proposals` is where a person decides the residue first, ahead of `proposal_resolution`
+deciding it on the hour (below) and of `proposal_hygiene` ageing one out. Past
 `AION_MAINTENANCE_HYGIENE_RESIDUE_AGE_DAYS` (or the shorter
 `AION_MAINTENANCE_HYGIENE_POLLUTED_AGE_HOURS` for a proposal whose source episode was pure
-tool exhaust, no conversation to judge) it dismisses the row and ledgers the class, the
-reason, and the pair, so a wrong dismissal is judged from a real record. `aion proposals
-reopen <id>` undoes any dismissal, hygiene's or a person's, and puts the row back in this
-queue. A merge proposal one of whose entities a later merge has since absorbed waits for no
-horizon at all: hygiene sweeps those at the top of every run and resolves each one with the
-side that went, because a pair with a closed side has nothing left for a person to decide.
+tool exhaust, no conversation to judge) hygiene dismisses the row and ledgers the class, the
+reason, and the pair, so a wrong dismissal is judged from a real record.
+
+A merge proposal one of whose entities a later merge has since absorbed waits for no horizon at
+all: hygiene sweeps those at the top of every run and resolves each one with the side that went,
+because a pair with a closed side has nothing left for a person to decide.
 `AION_AUTO_MERGE=false` turns the `merge_auto` sweep off, leaving the duplicate spellings in
 the graph for the next reflection to catch. `aion unmerge` reverses any entity merge one at a
-time and names the tier that made it, with the reasons that tier recorded.
+time (below).
 
-What reaches the entity half of this queue also depends on `AION_ENTITY_MERGE_MODE`. Under the
+What reaches the entity half of this queue depends on `AION_ENTITY_MERGE_MODE`. Under the
 shipped `unanimous` only the split pairs land here; under `propose` the pairs both passes agreed
 on land here too and nothing merges at tier 3.
 
-What reaches this queue depends on `AION_SUPERSEDE_MODE`. Under the shipped `unanimous`, the
+The contradiction half answers to `AION_SUPERSEDE_MODE`. Under the shipped `unanimous`, the
 pipeline closes what two independent judgments agree on and queues the rest, so a row here is
 one the second pass vetoed and the veto is its rationale. Under `propose` every judgment lands
 here and nothing closes on its own.
@@ -265,9 +265,10 @@ The `proposal_resolution` operation runs on the hour and takes the oldest open r
 queues. It reads more than the pass that filed a row was given: the pair, each claim's subject
 family with the description the substrate holds for each subject now, when each statement was
 observed, and the session each one came from. A merge pair gets the dedup cascade's own evidence
-plus each side's one-hop neighbourhood. Every call runs at temperature 0, so a judge re-asked the
-filing question returns the filing answer, and the wider reading is what lets a second look reach
-a different one.
+plus each side's one-hop neighbourhood.
+
+Every call runs at temperature 0, so a judge re-asked the filing question returns the filing
+answer. The wider reading is what lets a second look reach a different one.
 
 The same two passes then decide. Both affirm and the row is applied through the path
 `aion proposals apply` takes, at the same default blade and the same relatedness floor, stamped
@@ -276,7 +277,7 @@ Anything else dismisses the row. Either way the verdict and both passes' reasons
 ledger under `introspection:resolution:<table>:<id>`. A model call that throws or comes back
 unusable decides nothing, and the row waits for the next run.
 
-Every decision is reversed by the command that reverses a person's: `aion unsupersede` reopens a
+The commands that reverse a person's decision reverse these too: `aion unsupersede` reopens a
 close, `aion unmerge` splits a merge back out, `aion proposals reopen` puts a dismissed row back
 in the queue. `proposal_hygiene` stays behind this as the staleness backstop, ageing out a row
 resolution keeps failing on.
@@ -290,12 +291,14 @@ AION_SUPERSEDE_MODE=auto         # the legacy confidence gate, superseded by una
 ```
 
 `unanimous` puts every affirmative contradiction judgment through a second model call that
-argues the other side. The second call never sees the first one's reasoning, leads with the
-presumption that both statements stay, and checks two things: whether the older claim is
-actually made false, and whether the newer one is a coherent claim at all. A closure needs both
-passes. A veto names which check failed and why, and that sentence is the proposal row's
-rationale. The close itself takes the same path and the same blade `aion proposals apply` does,
-and is stamped `supersession_unanimous_auto` so lineage never reads as though a person decided.
+argues the other side. The second call never sees the first one's reasoning and leads with the
+presumption that both statements stay. It checks whether the older claim is actually made false,
+and whether the newer one is a coherent claim at all.
+
+A closure needs both passes. A veto names which check failed and why, and that sentence is the
+proposal row's rationale. The close itself takes the same path and the same blade
+`aion proposals apply` does, and is stamped `supersession_unanimous_auto` so lineage never reads
+as though a person decided.
 
 The default is a measurement, not a preference. `supersession-precision.int.test.ts` scores both
 judges over 24 designed pairs and asserts the shipped default matches what it measures: at or
@@ -334,9 +337,9 @@ AION_ENTITY_MERGE_MODE=propose    # the kill switch: queue every judged pair, me
 ```
 
 The same shape one tier down, over identities rather than claims. The dedup cascade nominates a
-pair from the name vectors and from shared episodes, measures what the two share, and puts the
-facts to two calls: one asks whether one referent explains both records, the second argues that
-something separates them. Under `unanimous` a pair both passes agree on merges, with its
+pair from the name vectors and from shared episodes, then measures what the two share. It puts
+the facts to two calls: one asks whether one referent explains both records, the second argues
+that something separates them. Under `unanimous` a pair both passes agree on merges, with its
 provenance and a decision record `aion unmerge` reads back. Under `propose` both passes still
 run and the pair goes to `aion proposals` instead, so the reasoning survives a deployment that
 wants a person in the loop.
@@ -364,8 +367,8 @@ aion unsupersede <node_id> [--yes]
 The undo for a close, whatever made it: a wrong judgment, a family cut too wide, or an
 autonomous close you disagree with. It previews what it would reopen and stops without `--yes`.
 
-Nothing is deleted. The `SUPERSEDES` edge is kept and closed in system time, and the claim gets
-its currency back, so `aion why` shows the close and the reopen both, and a `--knew-at` read
+It deletes nothing. The `SUPERSEDES` edge is kept and closed in system time, and the claim gets
+its currency back. `aion why` then shows the close and the reopen both, and a `--knew-at` read
 pinned before the reopen still reports the supersession the substrate held then. A forgotten
 node stays forgotten: that is a separate act with its own command.
 
@@ -384,9 +387,9 @@ and before this there was no way to say so.
 
 `aion status` prints a `lanes` section: one line per operation that acts on its own between
 ticks (`merge_auto`, `entity_dedup`, `supersession`, `keyed_close`, `proposal_resolution`,
-`proposal_hygiene`, `claim_dedup`, `tier3`), each read as `acting` or
-`off` from its own live knobs. Two states only, so the line answers "would this touch
-anything right now" without a third reading to interpret.
+`proposal_hygiene`, `claim_dedup`, `tier3`), each read as `acting` or `off` from its own live
+knobs. Two states only, so the line answers "would this touch anything right now" without a
+third reading to interpret.
 
 ## Resuming a narrative migration
 
@@ -420,13 +423,15 @@ aion replay usage [--live --yes]                  # re-applies access, reinforce
 ```
 
 `run` re-enters every reflection stage for the experiences it selects: the archive rather than a
-live transport, so a prompt or extraction change is re-derived from what the substrate was
-actually told instead of migrated in place. `usage` is the second half. It re-applies the
-access, reinforcement and decay events the usage stream recorded, on a graph `run` already
-rebuilt, in that order, since those events name nodes and edges the pipeline has to write first.
+live transport, so a prompt or extraction change is re-derived from what the substrate was told
+instead of migrated in place.
 
-Neither writes to the shipped substrate — the default `AION_SQLITE_PATH` or a managed
-`AION_NEO4J_URI` — unless `--live --yes` are both passed. Re-entering the pipeline inflates two
+`usage` is the second half. It re-applies the access, reinforcement and decay events the usage
+stream recorded, on a graph `run` already rebuilt, in that order, since those events name nodes
+and edges the pipeline has to write first.
+
+Neither writes to the shipped substrate (the default `AION_SQLITE_PATH` or a managed
+`AION_NEO4J_URI`) unless `--live --yes` are both passed. Re-entering the pipeline inflates two
 counters that record real observations rather than converge on one value (the MENTIONS salience
 bump and the co-occurrence edge count), and a replay's clock also feeds identifier decay. That is
 why the target is a scratch substrate by default.
@@ -464,7 +469,7 @@ aion unmerge apply <merged-id>                              # split one of those
 ```
 
 `unmerge` is the human end of entity deduplication, and it is deliberately not a maintenance
-operation. A bad merge is not measurable from inside the graph: the shape after a correct merge
+operation. A bad merge is not measurable from inside the graph. The shape after a correct merge
 and after a wrong one is the same, and the only thing that separates them is a person saying the
 two names were different things. `apply` prints the tier that made the merge and the reasons it
 recorded, so the reversal names the evidence that was wrong rather than only the node.
@@ -485,15 +490,16 @@ the stamp and adds the reversal after the forget rather than erasing it: a `knew
 before the reversal still finds the substrate believing the node was gone.
 
 It is not `aion unsupersede`. That reopens a close and leaves a forget standing; this drops a
-forget and leaves a supersession standing. Two suppressions, one act each, one undo each.
+forget and leaves a supersession standing.
 
 ## Standing intentions
 
 A Goal or a Plan comes back on its own, without being asked for. Recall reads the open ones
-after the second pass and serves the ones this moment matches in an `intentions` bucket of
-their own: the entity it is about is in play, the date its episode named has passed, or this
-situation resembles the one it was formed in. Provenance decides the bucket rather than the
-label, so a Goal the query itself found still answers in `facts`.
+after the second pass and serves the ones this moment matches, in an `intentions` bucket of
+their own. A moment matches when the entity the intention is about is in play, when the date its
+episode named has passed, or when this situation resembles the one it was formed in. Provenance
+decides the bucket rather than the label, so a Goal the query itself found still answers in
+`facts`.
 
 ```
 AION_RECALL_INTENTIONS=true                # the default: an intention can come back on a trigger
@@ -508,11 +514,14 @@ the entity and temporal triggers do not read it. Nothing here spends a model cal
 
 An intention is dated at write: `AION_INTENTION_HORIZON_DAYS` (default `30`) past its own
 episode's clock is when it stops standing and starts reading as expired, down-ranked and
-labeled, never dropped. `intention_upkeep` is the second half. Once a day it closes the Goals
-and Plans a whole further horizon past that, so what it takes is stale rather than merely
-expired: sixty days at the default. The close is an ordinary bitemporal close stamped with the
-operation's name, so `aion unsupersede` reopens one and a ledger row per close records which
-ones it took. `AION_MAINTENANCE_INTENTION_UPKEEP` (default `true`) is the kill switch, and
+labeled, never dropped.
+
+`intention_upkeep` is the second half. Once a day it closes the Goals and Plans a whole further
+horizon past that, so what it takes is stale rather than merely expired: sixty days at the
+default. The close is an ordinary bitemporal close stamped with the operation's name, so
+`aion unsupersede` reopens one and a ledger row per close records which ones it took.
+
+`AION_MAINTENANCE_INTENTION_UPKEEP` (default `true`) is the kill switch, and
 `AION_MAINTENANCE_INTENTION_UPKEEP_BATCH` (default `50`) bounds one run, higher than the
 model-calling batches because this operation asks nothing.
 
@@ -564,9 +573,9 @@ than it is answered is nagging.
 
 `recall_probe` is how the substrate measures its own memory. Once a day it takes a few
 experiences it was told about more than a day ago, asks for each of them back in the words they
-arrived in, and scores whether the pack answered. Three things count as an answer: the episode
-itself, something extraction pulled out of it, or the narrative that compressed it. The rate is
-a lifetime total, so it fills in a few questions a day.
+arrived in, and scores whether the pack answered. An answer is the episode itself, something
+extraction pulled out of it, or the narrative that compressed it. The rate is a lifetime total,
+so it fills in a few questions a day.
 
 The same run reads the other half of the question. Of the items still on record as served to a
 session, first handed over more than a day ago, it counts how many a later episode went on to
@@ -604,18 +613,17 @@ plan in three groups, and asks twice.
 - **remove** is what this install put there and can prove it: the launchd job, the config lines
   still carrying the values init wrote, a plugin jar init downloaded, and the data root. On the
   docker profile it is `compose down --volumes` instead.
-- **manual** fires only when there is no install record at all — a native install from before
-  the manifest, or one assembled by hand. It prints one instruction: check the plugins
+- **manual** fires only when there is no install record at all (a native install from before
+  the manifest, or one assembled by hand). It prints one instruction: check the plugins
   directory and `neo4j.conf` by hand before removing anything there. When a manifest exists,
-  anything this install did not set up — a Neo4j already running, a plugin jar somebody placed
-  — is left out of the plan rather than listed here.
+  anything this install did not set up (a Neo4j already running, a plugin jar somebody placed)
+  is left out of the plan rather than listed here.
 - **keep** is the shared tools. Homebrew's Neo4j, Ollama and the models are never removed as a
   side effect; the commands to remove them yourself are printed in a block at the end.
 
-Init writes what it installed to `install-manifest.json` in the data root, and that record is what
-makes the first column possible. An install with no manifest (one that predates it, or one
-assembled by hand) still has everything uninstall can name for itself removed, and the rest listed
-as present and not provably ours.
+The install manifest is what makes the **remove** group possible. An install with no manifest
+still has everything uninstall can name for itself removed, and the rest listed as present and
+not provably ours.
 
 The second question is the data root, and `--yes` does not answer it: the path has to be typed
 back. That directory is the memory store, and `--yes` exists so a script can re-run an install
@@ -704,7 +712,7 @@ nothing.
 **The service arms it at start**, after it activates the coverage contract, through the same
 audited operation and against the same precondition table a person used to run by hand. The
 manual step was removed on 2026-09-12. A fresh substrate therefore comes up armed on its first
-start once the checks below pass; a substrate where one of them fails comes up unarmed with that
+start once the checks below pass. A substrate where one of them fails comes up unarmed, with that
 refusal readable in `aion evict status` and `aion doctor`, and the next start asks again. Nothing
 else reaches the act: not `aion init`, not the maintenance catalog, and no command.
 
@@ -793,41 +801,45 @@ ever opened, `disarmed` is one somebody opened and then stopped, and both remove
 ## Logs
 
 `aion logs` tails it: `-n` lines (50 by default), `--level` filters by floor, `-f` follows, and the
-first line is the file it read. Following survives a rotation — the file being replaced under it is
-what the size going backwards means, and it reopens from the start of the new one.
+first line is the file it read. Following survives a rotation: the size going backwards means the
+file was replaced under it, and the tail reopens from the start of the new one.
 
 Everything writes structured JSONL to one file, `/data/logs/aion.jsonl` on the data volume by
 default and `~/.aion/logs/aion.jsonl` on the native profile. The service tees the same records to
-stdout, which `docker logs aion-aion-mcp-1` reads on the docker profile; the launchd job sends
+stdout, which `docker logs aion-aion-mcp-1` reads on the docker profile. The launchd job sends
 that copy to `/dev/null`, since nothing rotates a launchd file and the JSONL is the durable copy.
-A native install's pre-logger crash output lands in `aion-mcp.launchd.err.log` beside the JSONL. A CLI run does not tee: stdout is where a command writes its answer, so a log record
-there would break the single JSON object `--json` promises. The service logs under the name
-`aion-mcp`, and every CLI run under its command's name. `AION_LOG_LEVEL` moves the level
-(`debug` through `fatal`); writes are synchronous, so a crash keeps the tail that explains it.
-The container's stdout copy is capped by the compose `logging` block (10 MB × 3); the file on
-the volume is the uncapped durable record. The file ages out on its own. `AION_LOG_RETENTION_DAYS` (default `1`, fractions accepted) is the
-window: a file whose last write is older than it becomes `aion.jsonl.1` when the next process
-opens a logger, and a rolled copy with nothing to replace it and an age past the window is
-deleted. So the disk holds the current window and the one before it. Enforcement runs wherever a
-logger opens, which is every CLI command and every service start, so both profiles get it without
-a second place to wire it; the container's stdout copy keeps the compose json-file cap as a belt.
-The first start after an upgrade ages out whatever the old build left and writes one line saying
-so. This is the file logger only — the graph's transaction logs are Neo4j's own
-`db.tx_log.rotation.retention_policy`.
+A native install's pre-logger crash output lands in `aion-mcp.launchd.err.log` beside the JSONL.
 
-The harness hooks are the one component outside
-the containers; each fire appends one line to
+A CLI run does not tee: stdout is where a command writes its answer, so a log record there would
+break the single JSON object `--json` promises. The service logs under the name `aion-mcp`, and
+every CLI run under its command's name. `AION_LOG_LEVEL` moves the level (`debug` through
+`fatal`); writes are synchronous, so a crash keeps the tail that explains it.
+
+The container's stdout copy is capped by the compose `logging` block (10 MB × 3); the file on
+the volume is the uncapped durable record. The file ages out on its own.
+`AION_LOG_RETENTION_DAYS` (default `1`, fractions accepted) is the window: a file whose last
+write is older than it becomes `aion.jsonl.1` when the next process opens a logger, and a rolled
+copy with nothing to replace it and an age past the window is deleted. So the disk holds the
+current window and the one before it.
+
+Enforcement runs wherever a logger opens, which is every CLI command and every service start, so
+both profiles get it without a second place to wire it. The first start after an upgrade ages out
+whatever the old build left and writes one line saying so. This is the file logger only. The
+graph's transaction logs are Neo4j's own `db.tx_log.rotation.retention_policy`.
+
+The harness hooks are the one component outside the containers; each fire appends one line to
 `~/.aion/hook-state/hooks.log` on the host.
 
 ## Configuration
 
 Every runtime knob is an `AION_*` environment variable, declared with its type and default in
-`packages/core/src/infrastructure/config/knobs.ts`, which folds in the `maintenance`,
-`reflection` and `temporal` groups' own tables from the files beside it. `.env` is for
-what an install has to decide: endpoints, models, the key, the behavior switches. Values
-copied into `.env` stop following the code that calibrated them, so leave a tuning knob
-alone unless a measurement says otherwise. An unknown `AION_*` variable fails the boot
-loudly; a knob that once existed and was retired is ignored with no complaint.
+`packages/core/src/infrastructure/config/knobs.ts`. That file folds in the `maintenance`,
+`reflection` and `temporal` groups' own tables from the files beside it.
+
+`.env` is for what an install has to decide: endpoints, models, the key, the behavior switches.
+Values copied into `.env` stop following the code that calibrated them, so leave a tuning knob
+alone unless a measurement says otherwise. An unknown `AION_*` variable fails the boot loudly;
+a knob that once existed and was retired is ignored with no complaint.
 
 `proposal_hygiene`'s four: `AION_MAINTENANCE_PROPOSAL_HYGIENE` (default `true`) is its kill
 switch. `AION_MAINTENANCE_HYGIENE_POLLUTED_AGE_HOURS` (default `24`) is the fast horizon for
@@ -841,7 +853,7 @@ no fresh mention, unless it is a merge target, carries a typed-knowledge edge, o
 `AION_MAINTENANCE_IDENTIFIER_MENTION_FLOOR` (default `5`) episodes have mentioned it.
 
 `claim_dedup` merges a recently-extracted claim into its nearest current neighbor once a
-two-pass judge unanimously calls the pair one assertion restated: the older claim survives, the
+two-pass judge unanimously calls the pair one assertion restated. The older claim survives, the
 newer one's source episode folds onto it, and the newer closes with the same `SUPERSEDES`
 lineage a contradiction close writes, so `aion unsupersede` reverses it like any other close.
 `AION_MAINTENANCE_CLAIM_DEDUP` (default `true`) is its kill switch. `AION_MAINTENANCE_CLAIM_DEDUP_BATCH`
@@ -852,13 +864,13 @@ ledgered under a permanent key on the unordered pair, so a re-run never pays for
 
 The narrative chunk lifecycle and the eviction that follows it carry five knobs of their own, all
 unmeasured defaults rather than calibrated ones. `AION_MAINTENANCE_CHUNK_MAX_SPAN_MS` (default
-`86400000`) is how long a session's unsealed tail may stand before the span trigger seals it, and
+`86400000`) is how long a session's unsealed tail may stand before the span trigger seals it.
 `AION_MAINTENANCE_CHUNK_RENDERED_INPUT_ALLOWANCE` (default `16384`) is the rendered-input budget a
 chunk is sealed and published under. `AION_MAINTENANCE_NARRATIVE_SEAL_BATCH` (default `2`) bounds
 publication attempts per invocation, where one attempt is one chunk revision rather than one source
 or one model call. `AION_MAINTENANCE_EPISODE_EVICT_MIN_AGE_MS` (default `86400000`) is how long a
 source's complete coverage must stand before its raw projection may go, measured from recorded
-clocks and never from `occurred_at`, and `AION_MAINTENANCE_EPISODE_EVICT_BATCH` (default `8`) bounds
+clocks and never from `occurred_at`. `AION_MAINTENANCE_EPISODE_EVICT_BATCH` (default `8`) bounds
 eviction attempts per invocation, one source each.
 
 ## Reflection concurrency

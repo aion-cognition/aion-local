@@ -1,20 +1,19 @@
 # Aion Local
 
 Aion Local is a local-first cognitive memory substrate for AI coding agents. It exposes four
-MCP tools, `recall` and `reflection` for memory, `source_search` and `source` for reading the
-captured archive directly, backed by a Neo4j graph, a SQLite queue, and Ollama models running
-on the host. Agents that use it remember: what a session stored, a later
-session recalls, with the decisions, the reasons, and the corrections intact.
+MCP tools: `recall` and `reflection` for memory, `source_search` and `source` for reading the
+captured archive directly. A Neo4j graph, a SQLite queue, and Ollama models running on the
+host back them. What one session stores, a later session recalls, with the decisions, the
+reasons, and the corrections intact.
 
 Memory here is a process, not storage. Recall constructs context instead of searching for
-matches, reflection turns raw conversation into structured knowledge in the background, and
-an introspection loop maintains the graph on its own. Every write is bitemporal and
-idempotent: correcting a fact supersedes the old node instead of deleting it, so nothing is
-ever hard-deleted and the substrate can answer what it believed at any point in time.
+matches. Reflection turns raw conversation into structured knowledge in the background, and an
+introspection loop maintains the graph on its own. Every write is bitemporal and idempotent:
+correcting a fact supersedes the old node instead of deleting it. Nothing is ever hard-deleted,
+so the substrate can answer what it believed at any point in time.
 [docs/whitepaper.md](docs/whitepaper.md) explains the thinking; this page gets you running.
 
-The substrate never leaves the machine. Generation is the one part that can, and whether it
-does is what separates the two profiles below.
+The substrate never leaves the machine. Generation is the one part that can.
 
 ## Quickstart
 
@@ -24,8 +23,8 @@ Node and npm come into it only for the two optional pieces below, `npm link` and
 harness hooks.
 
 Without Docker, the same substrate runs as host processes: `npm ci && npm run build`, then
-`./bin/aion-native init --install native`, which installs and configures Neo4j, brings up the
-server as a launchd job, and ends with a `doctor` report.
+`./bin/aion-native init --install native`. That command installs and configures Neo4j, brings
+up the server as a launchd job, and ends with a `doctor` report.
 [docs/operations.md](docs/operations.md) has that path and its failure remedies.
 
 Clone this repo (or unpack the release archive), then:
@@ -37,32 +36,32 @@ cd aion-local
 
 `init` provisions the whole substrate: starts Neo4j, pulls and verifies the Ollama models,
 applies the graph schema, creates the Member, Workspace and Substrate backbone nodes, starts
-the MCP server, and prints a registration command. Along the way it asks which profile you
-want, and for a member name (defaulting to your git user.name): that names the graph node your
-sessions attach to... the person this memory belongs to. The registration command it
-prints at the end:
+the MCP server, and prints a registration command. It asks which profile you want, and for a
+member name (defaulting to your git user.name). That name identifies the graph node your
+sessions attach to, the person this memory belongs to. The registration command it prints at
+the end:
 
 ```
 claude mcp add -s user --transport http aion http://127.0.0.1:8765/mcp
 ```
 
-Run that once. Every later Claude Code session then connects with no per-session setup.
+Run that once. Every later Claude Code session connects with no per-session setup.
 `init` is idempotent: rerun it any time and it reports what already exists instead of
 failing or duplicating work.
 
 Check the install with `./bin/aion doctor`, which verifies every substrate invariant against
-the live stack and names anything broken. An archive install has no git history to stamp the
-image with, so `doctor` reports one service-freshness warning there; it is cosmetic.
+the live stack. An archive install has no git history to stamp the image with, so `doctor`
+reports one service-freshness warning there; it is cosmetic.
 
 ## Where generation runs
 
 Everything runs locally by default and nothing here needs an API key. "Profile" means the install
-profile — docker or native, which machine the substrate runs on. Where generation runs is a
-separate question answered by knobs, and the answer is local unless you change it.
+profile (docker or native), which machine the substrate runs on. Where generation runs is a
+separate question, answered by the knobs below.
 
-Routing resolves once at boot (`packages/core/src/infrastructure/providers/routing.ts`) and every
-difference below reads the resolved route: an `AION_ANTHROPIC_API_KEY` sends both generation roles
-to Anthropic, `AION_CUE_PROVIDER` and `AION_REFLECT_PROVIDER` override that per role in either
+Routing resolves once at boot (`packages/core/src/infrastructure/providers/routing.ts`), and every
+difference below reads the resolved route. An `AION_ANTHROPIC_API_KEY` sends both generation roles
+to Anthropic. `AION_CUE_PROVIDER` and `AION_REFLECT_PROVIDER` override that per role in either
 direction, and a role pinned to Anthropic with no key runs local and says so.
 
 **Keyed.** With both provider pins at `auto`, both generation roles run on `claude-haiku-4-5`:
@@ -81,35 +80,37 @@ routed: one model owns the vector space for the life of the substrate.
 What else the route decides:
 
 - **How wide a narrative reads.** One session synthesis reads 120 episodes and answers in 12
-  sentences on the keyed route, against 40 and 6 locally, at 4,000 characters an episode
-  against 2,000 (`packages/core/src/reflection/domain/narrative-scale.ts`). Neither route clips
-  a session longer than its own cap: it is narrated in chunks and the chunk texts folded once,
+  sentences on the keyed route, against 40 and 6 locally. The keyed route reads 4,000 characters
+  an episode, the local route 2,000
+  (`packages/core/src/reflection/domain/narrative-scale.ts`). Neither route clips a session
+  longer than its own cap: a long session is narrated in chunks and the chunk texts folded once,
   so the local route pays more calls for the same coverage.
-- **What a capture costs, not whether you get one.** Hooks are route-agnostic: they fire on every
-  install and hand the turn to whichever route this one resolved. `aion doctor` reports which
-  model digests them as `hooks-route`. [docs/harness.md](docs/harness.md) states the cadence.
+- **What a capture costs.** Hooks are route-agnostic: they fire on every install and hand the
+  turn to whichever route this one resolved. `aion doctor` reports which model digests them as
+  `hooks-route`. [docs/harness.md](docs/harness.md) states the cadence.
 - **What a failed generation call costs.** The Anthropic provider retries a throttled or failed
   answer and trips a circuit breaker on a bad stretch; the Ollama provider has neither, and a
   failed call costs its stage. [docs/degradation.md](docs/degradation.md) carries both rungs,
   the keyed narrative knobs, and the case where a key is pinned to a role that has none.
 
 `init` takes one of two generation profiles and asks when you do not name one. Both install the
-Claude Code harness hooks, which turn the agent's judgment call about when to remember into a
-fixed cadence: recall at session start and on a substantial prompt, capture on compaction, stop,
-subagent stop, and session end.
+Claude Code harness hooks. The hooks turn the agent's judgment call about when to remember into
+a fixed cadence: recall at session start and on a substantial prompt, capture on compaction,
+stop, subagent stop, and session end.
 
 - `aion init local` provisions the substrate and routes every generation role to the host Ollama.
 - `aion init full` asks for an Anthropic key, records it in `.env`, and routes generation there.
 
-The key is optional spend rather than a capability. Hooks used to be the keyed profile's alone,
-because the local model of that build could not keep up with a capture on every turn; it can, and
-that rule is gone. To add a key to an existing install, put it in `.env` as
-`AION_ANTHROPIC_API_KEY=...` and rerun `./bin/aion init`; the service restarts with it and routing
-follows. Removing it and rerunning init routes everything back to local models the same way.
+The key is optional spend rather than a capability. Hooks once belonged to the keyed profile
+alone, because the local model of that build could not keep up with a capture on every turn. The
+current local model keeps up, so that rule is gone. To add a key to an existing install, put it
+in `.env` as `AION_ANTHROPIC_API_KEY=...` and rerun `./bin/aion init`; the service restarts with
+it and routing follows. Removing it and rerunning init routes everything back to local models the
+same way.
 
-`aion hooks install | uninstall | status` does the hook half on its own, and
-`--harness codex` points the same commands at `$CODEX_HOME/hooks.json` and the aion server
-block in the `config.toml` beside it. The hook client runs on host Node from
+`aion hooks install | uninstall | status` does the hook half on its own. `--harness codex`
+points the same commands at `$CODEX_HOME/hooks.json` and the aion server block in the
+`config.toml` beside it. The hook client runs on host Node from
 `packages/cli/dist`, so hooks (unlike the substrate) need one host build first:
 `npm ci && npm run build`. Every hook fails open: a service that is down or a payload it
 cannot read exits 0 and the turn proceeds. See [docs/harness.md](docs/harness.md) for what
@@ -118,18 +119,18 @@ each hook does, what codex does differently, and the settings JSON for a manual 
 ## The memory tools
 
 **recall** searches persistent memory and returns a `MemoryPack`: facts, episodes,
-narratives, standing intentions a trigger condition brought back, and resonant associations,
-each item carrying its rank, confidence, rationale, and currency. The pack includes
-`rendered_text`, a block ready to drop into agent reasoning,
-and it says what it is short of: degraded stages and not-yet-enriched episodes are named in
-one plain line. `as_of` asks what was true at a past date; `knew_at` asks what the substrate
-believed at one. An empty pack is a valid, honest answer.
+narratives, standing intentions a trigger condition brought back, and resonant associations.
+Each item carries its rank, confidence, rationale, and currency. The pack includes
+`rendered_text`, a block ready to drop into agent reasoning, and it says what it is short of:
+one plain line names the degraded stages and the not-yet-enriched episodes. `as_of` asks what
+was true at a past date; `knew_at` asks what the substrate believed at one. An empty pack is a
+valid, honest answer.
 
 **reflection** stores what just happened. The payload takes conversation turns, tool
-executions, and observations; credentials are redacted before anything is written, and
+executions, and observations. Credentials are redacted before anything is written, and
 resending the same payload returns the original episode instead of a duplicate. The call
-returns as soon as the episode is durably stored... enrichment runs behind it, interactive
-work first, bulk imports behind that.
+returns as soon as the episode is durably stored. Enrichment runs behind it, interactive work
+first and bulk imports behind that.
 
 The other two tools, `source_search` and `source`, read the captured archive directly rather
 than the graph: the same two jobs as the CLI's `source-search` and `source` commands below.
@@ -171,13 +172,12 @@ does not work and says so: the CLI orchestrates the repo it lives in.
 - `logs`: tail the substrate's own log file, with the path it read printed first
 - `uninstall`: remove what init put on this machine, and say what it left
 
-The commands with teeth make you say so: `queue drop`, `queue reconcile --re-enqueue`,
-`forget`, `unforget`, `unsupersede`, `evict disarm` and `evict rearm` preview what they would do
-and stop without `--yes`, and
-`proposals`, `maintain`, and `unmerge` act only through an explicit `apply` or `run`
-subcommand. `replay run` guards harder: it refuses to write to the shipped substrate at all
-unless both `--live` and `--yes` are passed, since a replay re-entering the pipeline inflates
-counters a live read counts as real observations. Their full
+The commands with teeth make you say so. `queue drop`, `queue reconcile --re-enqueue`,
+`forget`, `unforget`, `unsupersede`, `evict disarm` and `evict rearm` preview what they would
+do and stop without `--yes`. `proposals`, `maintain`, and `unmerge` act only through an
+explicit `apply` or `run` subcommand. `replay run` guards harder: it refuses to write to the
+shipped substrate at all unless both `--live` and `--yes` are passed, since a replay
+re-entering the pipeline inflates counters a live read counts as real observations. Their full
 semantics, the logging layout, and the knobs an operator tunes are in
 [docs/operations.md](docs/operations.md).
 
@@ -222,7 +222,7 @@ npm run format:check      # prettier --check .
 
 A change gates on all of those, plus the scripted re-exercise batteries and `./bin/aion
 doctor` green against the live stack. `AGENTS.md` holds the full gate definition. Integration
-tests read `AION_OLLAMA_URL`; when running them on the host rather than in the container,
+tests read `AION_OLLAMA_URL`; when you run them on the host rather than in the container,
 export it first:
 
 ```
@@ -235,11 +235,11 @@ a host run measures the same remote judge the service routes to. Those two keys 
 values loaded from the file.
 
 With no key anywhere, the gate batteries skip and say so. The reflect role would route to the
-local instruct model, and every floor and pinned default they assert on was measured against
-the remote judge, so the numbers would describe a judge the service does not run.
-`TEST_AION_GENERATION=local` forces that local route on purpose and skips them the same way,
-with one exception: the supersession battery reads a judge pair written for the local model, so
-it scores either route and only its assertion about the shipped default stays keyed.
+local instruct model. Every floor and pinned default they assert on was measured against the
+remote judge, so the numbers would describe a judge the service does not run.
+`TEST_AION_GENERATION=local` forces that local route on purpose and skips them the same way.
+The supersession battery is the one exception: it reads a judge pair written for the local
+model, so it scores either route, and only its assertion about the shipped default stays keyed.
 
 ## Status
 
@@ -248,8 +248,8 @@ surface, the reflection pipeline, Hebbian reinforcement and decay, the introspec
 scheduling thirty-one maintenance operations, per-role Anthropic routing with model
 reconciliation, the harness hooks, and the CLI above. Unit tests pass deterministically; the
 integration suite runs against a live Neo4j and host Ollama. Engrams, described in the
-whitepaper, are designed and not yet built, and the `preferences` pack bucket has no producer
-yet and stays structurally absent rather than empty.
+whitepaper, are designed and not yet built. The `preferences` pack bucket has no producer yet
+and stays structurally absent rather than empty.
 
 ## License
 

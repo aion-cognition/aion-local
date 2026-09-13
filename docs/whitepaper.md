@@ -1,29 +1,26 @@
 # Aion: what this is and why
 
 Adapted from the Aion whitepaper, "Aion: Active Cognitive Substrate," by Ryan Huber. This is
-the short version, for someone who just cloned the repo and wants to know what the system is
-and why it is built this way. The full paper carries the algorithms and the parameter tables.
-Pointers to the rest of these docs are at the bottom.
+the short version for someone who just cloned the repo. The full paper carries the algorithms
+and the parameter tables.
 
 ## Memory is a process
 
 Most agent memory is retrieval. Log the conversation, embed the text, answer a query by
 nearest-neighbor search. That works for question-answering over static documents. It fails for
-an agent that runs over months, and it fails in three specific ways.
+an agent that runs over months.
 
 **Retrieval is not recall.** A search engine returns documents ranked by similarity. Recall is
 constructive: it assembles context from different memory structures, weighted by recency,
-strength, and associative activation. Search finds what matches; recall constructs what
-matters.
+strength, and associative activation.
 
 **Storage is not memory.** A vector database stores embeddings. A memory system maintains
 structure: weighted relationships that strengthen with use and fade with neglect, narrative
-compressions, and nodes for goals, decisions, and insights. Storage is necessary for memory. It
-is not memory.
+compressions, and nodes for goals, decisions, and insights. Storage is necessary for memory.
 
 **Conversation is not experience.** In most agent stacks, tool execution results are consumed
 in one turn and thrown away. An agent that searches the web does not learn from the search. A
-memory that sees only conversational text misses half of what the agent did, which is why the
+memory that sees only conversational text misses half of what the agent did. That is why the
 `reflection` tool takes `tool_executions` and `observations` alongside `turns`.
 
 ## What remembering requires
@@ -32,7 +29,7 @@ The requirements come from ordinary remembering, taken seriously as a specificat
 
 Prior knowledge does not become irrelevant when things change. It turns into lessons that
 inform how thinking happens next. So no pathway is ever deleted: weights fade to a floor and
-stop there, and that accumulated structure is what past experience contributes to recall.
+stop there. That accumulated structure is what past experience contributes to recall.
 
 Nobody remembers a book word for word. What stays is the gist, and the sense of where to look
 when the detail matters. That is the narrative layer: compressed summaries stand in for their
@@ -45,23 +42,24 @@ different graphs.
 
 Then there is the recall that arrives on its own. The actor's name shows up after you quit
 trying to remember it. That kind of recall is associative, keyed to the situation rather than
-the question. Context resonance is a mechanism for it. Partial is the honest word.
+the question, and context resonance is a partial mechanism for it.
 
 And most of memory's work happens while attention is elsewhere: consolidation, reorganization,
 repair. Reflection and introspection are that half of the system, the part that runs when
-nothing is being asked. A memory with only a read path has no such half, and after enough time
-that absence shows.
+nothing is asked. A memory with only a read path has no such half, and after enough time that
+absence shows.
 
 ## Correction without deletion
 
-A fact that turns out to be wrong is still something the substrate believed, and that record is
-how an agent explains why it once reasoned the way it did. So correcting a fact supersedes it:
-the old node's intervals close and `(new)-[:SUPERSEDES]->(old)` is written in the same
-transaction. Interpretation is never deleted, and a repo-wide test fails the build on any Cypher
-delete outside the three files it pins by name. One of those three is the exception, and it is
-bounded to the raw layer: `episode_evict` removes an Episode or Turn projection once a published
-narrative covers it and the experience archive still holds the captured parts, so the record
-outlives the projection. `aion evict status | disarm | rearm` is the operator's fence over it.
+A fact that turns out to be wrong is still something the substrate believed. That record is how
+an agent explains why it once reasoned the way it did. So correcting a fact supersedes it: the
+old node's intervals close and `(new)-[:SUPERSEDES]->(old)` is written in the same transaction.
+
+Interpretation is never deleted, and a repo-wide test fails the build on any Cypher delete
+outside the three files it pins by name. One of those three is the exception, bounded to the raw
+layer. `episode_evict` removes an Episode or Turn projection once a published narrative covers it
+and the experience archive still holds the captured parts, so the record outlives the projection.
+`aion evict status | disarm | rearm` is the operator's fence over it.
 
 That is also why every node carries two time intervals rather than one. World time
 (`valid_from` / `valid_until`) is when the fact was true. System time (`tx_from` / `tx_until`)
@@ -69,14 +67,18 @@ is when the substrate held the belief. `as_of` asks what was true last month, `k
 what this system thought last month. One interval cannot answer both, and the gap between the
 two answers is where a correction lives.
 
-Default recall does not filter superseded knowledge out. It labels it. Every returned item
-carries `current`, `superseded`, or `expired`. A superseded item carries a pointer to what
-replaced it and when, and ranks at half weight wherever it competes with the current fact. An
-expired one has aged past the `valid_horizon` it was written with; on the read path the horizon
-only changes the label, so an aged-out reading ranks normally and still says what it measured. A
-standing intention is the one exception: once its horizon passes it stops triggering, because
-volunteering a plan whose own date has gone by is where a label arrives too late. Filtering
-superseded knowledge out would make the substrate look like it had always been right.
+Default recall does not filter superseded knowledge out. It labels it, because filtering would
+make the substrate look like it had always been right. Every returned item carries `current`,
+`superseded`, or `expired`.
+
+A superseded item carries a pointer to what replaced it and when, and ranks at half weight
+wherever it competes with the current fact. An expired one has aged past the `valid_horizon` it
+was written with. On the read path the horizon only changes the label, so an aged-out reading
+ranks normally and still says what it measured.
+
+A standing intention is the one exception. Once its horizon passes it stops triggering, because
+volunteering a plan whose own date has gone by is where a label arrives too late.
+
 `aion forget` is the one suppression and still not a deletion: it sets `forgotten_at`, default
 recall stops serving the node, and a time-travel read still returns it.
 
@@ -86,12 +88,14 @@ agent then reasons from.
 
 A refusal is the other honest answer, and it is not an empty pack. A time-travel read pinned
 before the substrate's history floor, or a `knew_at` later than the request clock, comes back as
-`coverage_refusal` rather than as a pack, naming one of four reasons: `before_horizon`,
-`future_knowledge`, `coverage_store_unavailable`, `coverage_changed`. It carries what was asked
-and the bounds it was judged against, so the caller can correct the request without a second
-round trip. The first two are settled before a session is resolved and before any provider call,
-so such a request costs nothing; the other two can also arrive at the end of a read that already
-did its work, and a refusal never says the work did not happen. A pack with no items says the
+`coverage_refusal` rather than as a pack. The refusal names one of four reasons:
+`before_horizon`, `future_knowledge`, `coverage_store_unavailable`, `coverage_changed`. It also
+carries what was asked and the bounds it was judged against, so the caller can correct the
+request without a second round trip.
+
+The first two reasons are settled before a session is resolved and before any provider call, so
+such a request costs nothing. The other two can also arrive at the end of a read that already did
+its work, and a refusal never says the work did not happen. A pack with no items says the
 opposite thing, which is why the two are separate shapes.
 
 ## The three loops
@@ -100,9 +104,8 @@ Three loops run over one graph, and their separation is a correctness requiremen
 
 **Recall constructs.** It is synchronous and sits inside the agent's reasoning cycle: cue
 extraction, seed selection, spreading activation, fusion, resonance, pack assembly, all inside
-a time and token budget. As a side effect it nominates the pairs that fired together and whose
-ends both reached the pack the caller was handed, off the latency path. Remembering strengthens
-the pathways that made remembering possible.
+a time and token budget. Off the latency path, it also nominates the pairs that fired together
+and whose ends both reached the pack the caller was handed.
 
 **Reflection distills.** It is asynchronous and runs after an episode is durably stored, from a
 queue row. It extracts entities, deduplicates them against the graph, infers associations,
@@ -121,9 +124,9 @@ would degrade recall until the pipeline caught up. Under recall's latency budget
 would skip deduplication and simplify extraction. Triggered by usage, introspection would never
 maintain a quiet system and would repair a busy one at the worst possible moment.
 
-They interact through the substrate, not through calls: reflection enriches what recall reads
-and recomputes the context vectors resonance queries, and introspection repairs what both
-depend on while folding the pairs recall nominated into edge weights.
+They interact through the substrate, not through calls. Reflection enriches what recall reads
+and recomputes the context vectors resonance queries. Introspection repairs what both depend on
+and folds the pairs recall nominated into edge weights.
 
 ## Context resonance
 
@@ -133,20 +136,21 @@ of its neighbors' content vectors, recomputed when the neighborhood changes.
 
 Resonance is a second retrieval pass over that second index. After the first pass anchors, the
 activation-weighted mean of the context vectors of the items it actually admitted becomes a
-query against the context index, excluding everything the first pass already produced. Averaging
-the whole activated set instead lands near the substrate's center of mass and answers a nonsense
-query as readily as a real one, so the centroid is built from the anchors and nothing else. What
-comes back lives in a similar relational neighborhood while its words may share nothing with the
-query.
+query against the context index. That query excludes everything the first pass already produced.
+
+Averaging the whole activated set instead lands near the substrate's center of mass, and answers
+a nonsense query as readily as a real one. So the centroid is built from the anchors and nothing
+else. What comes back lives in a similar relational neighborhood while its words may share
+nothing with the query.
 
 The mechanism models a familiar experience. You think about a project deadline, and a memory of
 a different project surfaces, one with similar team structure and similar pressure. The content
 differs. The context is similar.
 
-Resonant items land in their own pack bucket and never compete with a fused score, so a pack
-keeps what matched the question separate from what resonated with the situation. The stage
-declines to run on a query nothing anchored, since resonating from an unanchored pack searches
-the shape of nothing.
+Resonant items land in their own pack bucket and never compete with a fused score. A pack keeps
+what matched the question separate from what resonated with the situation. The stage declines to
+run on a query nothing anchored, since resonating from an unanchored pack searches the shape of
+nothing.
 
 ## Hebbian plasticity
 
@@ -156,11 +160,13 @@ Hebb's principle as a structural metaphor and claims no biological fidelity. Rei
 bounded, so an edge gains less the stronger it already is and no weight passes 1.
 
 Decay is a bell curve against staleness, not a monotonic slide. It peaks at a configurable
-window of disuse and falls off on both sides: an edge touched yesterday decays slowly because
-it may still matter, and one idle for a year decays slowly because it has already settled near
-the floor. An edge idle for exactly the peak window decays fastest, which is where trimming it
-buys the most signal-to-noise. The floor is the most important parameter. No edge reaches zero,
-so a faded pathway still carries activation if the cue is strong enough. Faded, not gone.
+window of disuse and falls off on both sides. An edge touched yesterday decays slowly because it
+may still matter, and one idle for a year decays slowly because it has already settled near the
+floor. An edge idle for exactly the peak window decays fastest, which is where trimming it buys
+the most signal-to-noise.
+
+The floor is the most important parameter. No edge reaches zero, so a faded pathway still
+carries activation if the cue is strong enough.
 
 Reinforcement is generated on the recall path and executed by introspection in batches, so
 plasticity is eventually consistent and recall latency is untouched.
@@ -173,24 +179,27 @@ At dozens of nodes these are visible by inspection. At thousands they are invisi
 recall degrades, and human curation stops being a strategy.
 
 One tick runs four phases. **Observe** assembles one health snapshot of graph structure, queue
-lag, enrichment coverage, plasticity, proposals, duplicate spellings still on the graph and
-redaction residue, every collector caught on its own. **Act** then runs at most one operation, under bounded scope, a protected
-relationship set, and a ledger claim on its time window so nothing runs twice.
+lag, enrichment coverage, plasticity, proposals, duplicate spellings still on the graph, and
+redaction residue. Each collector is caught on its own. **Act** then runs at most one operation,
+under bounded scope, a protected relationship set, and a ledger claim on its time window so
+nothing runs twice.
 
 **Decide**, in between, is pure: the same snapshot always produces the same answer, so a
-decision is arguable from the numbers. An operation that names a critical condition the
-snapshot meets preempts the whole catalog, and that preemption expires once it stops moving the
-metric it declared, because a condition can stand for weeks and nothing else may wait that
-long. Otherwise operations score on their own relevance, weighted down when their runs stop
-improving anything and up the longer they wait, so nothing starves. The model-guided tier is
-the last fallback, on by default and propose-only here.
+decision is arguable from the numbers. An operation that names a critical condition the snapshot
+meets preempts the whole catalog. That preemption expires once it stops moving the metric it
+declared, because a condition can stand for weeks and nothing else may wait that long.
 
-**Learn** is what makes the loop a loop. An operation declares the one metric it exists to
-move. The engine reads it before the run and again on a later tick, when the system has
-settled, and records improved, unchanged, or failed. Those counts are the weight the next
-decision reads. An operation the snapshot carries no metric for records the run as unmeasured
-and is weighted on nothing, because the only verdict available without a metric is the
-operation's own report of what it did.
+Otherwise operations score on their own relevance, weighted down when their runs stop improving
+anything and up the longer they wait, so nothing starves. The model-guided tier is the last
+fallback, on by default and propose-only here.
+
+**Learn** is what makes the loop a loop. An operation declares the one metric it exists to move.
+The engine reads it before the run and again on a later tick, when the system has settled, and
+records improved, unchanged, or failed. Those counts are the weight the next decision reads.
+
+An operation the snapshot carries no metric for records the run as unmeasured and is weighted on
+nothing. Without a metric the only verdict available is the operation's own report of what it
+did.
 
 ## The MemoryPack is the contract
 
@@ -201,15 +210,18 @@ confidence behind its admission, a rationale naming which method found it and th
 path, and a currency marker. The pack also carries a rendered text block, the extracted cues,
 and stage timings.
 
-The pack is a self-contained context supplement, not a ranked result list. Ranking and
-admission are separate: an item reaches the pack only on absolute evidence, however well it
-ranks against its neighbors. And a pack says what it is short of. A degraded cue model, a
-spread that stopped on its budget, episodes stored but not yet enriched: all of it lands in one
-plain line at the top of the text block, so a client reading only the text sees the same
-honesty as one reading the metadata. `intentions` is the one bucket that answers a question the
-caller did not ask: a standing goal or plan whose trigger condition this moment meets, brought
-back on the entity it is about, the date it named, or a situation that resembles the one it was
-formed in. `preferences` has no producer yet, so it is structurally absent rather than empty.
+The pack is a self-contained context supplement, not a ranked result list. Ranking and admission
+are separate: an item reaches the pack only on absolute evidence, however well it ranks against
+its neighbors.
+
+A pack also says what it is short of. A degraded cue model, a spread that stopped on its budget,
+episodes stored but not yet enriched: all of it lands in one plain line at the top of the text
+block. A client reading only the text sees the same honesty as one reading the metadata.
+
+`intentions` is the one bucket that answers a question the caller did not ask. It returns a
+standing goal or plan whose trigger condition this moment meets. It is brought back on the
+entity it is about, the date it named, or a situation that resembles the one it was formed in.
+`preferences` has no producer yet, so it is structurally absent rather than empty.
 
 ## Cue extraction is inference-first
 
@@ -218,28 +230,29 @@ cues. It is one model call, with no keyword extractor, no stopword list, and no 
 it.
 
 That is a rule. Degradation here means doing less inference, never switching to heuristics. A
-keyword fallback looks like resilience and is not: it silently answers a different question
-from the one the pipeline was built around, at the moment the caller can least tell. So the
-fallback is the caller's own text verbatim: a raw-query cue, plus the summary at its damped
-weight when one was sent. Nothing derives terms from either, and the pack records that it
+keyword fallback looks like resilience and is not. It silently answers a different question from
+the one the pipeline was built around, at the moment the caller can least tell.
+
+So the fallback is the caller's own text verbatim: a raw-query cue, plus the summary at its
+damped weight when one was sent. Nothing derives terms from either, and the pack records that it
 degraded.
 
 Redaction is the one place inference is deliberately not used: credential detection is
 deterministic and rule-based, because a leak cannot wait on a model's judgment.
 
-## Engrams: designed, not built
+## Engrams are designed, not built
 
 The design models memory as nodes and weighted edges, and recall returns activated nodes. The
-activation patterns themselves are transient, computed per query and then discarded. A
-situation the agent has met many times strengthens the edges among its parts, but the pattern
-as a whole is never an object, so the system cannot match a current situation against a stored
-pattern, complete a partial one, or abstract across similar patterns into schemas.
+activation patterns themselves are transient, computed per query and then discarded. A situation
+the agent has met many times strengthens the edges among its parts, but the pattern as a whole
+is never an object. So the system cannot match a current situation against a stored pattern,
+complete a partial one, or abstract across similar patterns into schemas.
 
 An engram would be a persistent representation of a recurring activation pattern: its
 constituents and their weights, a signature vector, a consolidation state. Spreading activation
-becomes a detection mechanism that can persist what it finds. This is designed and not built.
-No engram code exists in this repo. It is named here because it is the ceiling of the current
-design, and naming a ceiling beats implying there is none.
+becomes a detection mechanism that can persist what it finds. No engram code exists in this
+repo. It is named here because it is the ceiling of the current design, and naming a ceiling
+beats implying there is none.
 
 ## How this repo maps to the paper
 
@@ -249,16 +262,17 @@ context resonance, bounded reinforcement and bell-curve decay with a floor, the 
 maintenance loop, idempotent consolidation through an operations ledger, and the MemoryPack
 contract all carry over.
 
-The surface is four MCP tools. `recall` and `reflection` are the memory contract; `source_search`
+The surface is four MCP tools. `recall` and `reflection` are the memory contract. `source_search`
 and `source` read the captured record behind it, which is what stays answerable after a graph
 projection is gone. Neo4j holds the graph and its vector and full-text indexes. SQLite holds the
 reflection queue, the append-only experience archive `aion replay` and `aion timeline` read back,
 the full-text index over captured parts that `source_search` queries, the insert-only usage
 stream that records what recall and the weight sweeps did, the operations ledger, the proposal
 queues, and the last-pack cache.
-Generation runs on Ollama on the host. Set an Anthropic key and the two
-generation roles, cue extraction and reflection, route to Haiku instead of the local instruct
-model. Embeddings stay local either way, because the vector space is the substrate.
+
+Generation runs on Ollama on the host. Set an Anthropic key and the two generation roles, cue
+extraction and reflection, route to Haiku instead of the local instruct model. Embeddings stay
+local either way, because the vector space is the substrate.
 
 Where this build differs from the paper:
 

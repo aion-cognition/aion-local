@@ -3,11 +3,11 @@
 ## What they are
 
 Hooks that put recall and reflection on a schedule. Claude Code and Codex both run them. What
-follows describes the Claude profile, and the Codex section names what the second harness does
-differently. Without them the agent decides when to call the tools, guided by the descriptions
-and the usage protocol. That is a judgment call the model makes hundreds of times a session, and
-it makes it inconsistently: a long session ends with no reflection, a new topic starts with no
-recall, and a compaction throws away work nobody stored.
+follows describes the Claude profile, and the Codex section covers the differences. Without them
+the agent decides when to call the tools, guided by the descriptions and the usage protocol. The
+model makes that judgment call hundreds of times a session, and it makes it inconsistently. A
+long session ends with no reflection, a new topic starts with no recall, and a compaction throws
+away work nobody stored.
 
 The shims replace the judgment with a cadence. Session start recalls. A substantial prompt
 recalls. Compaction, stop, subagent stop, and session end capture. Nothing changes in the
@@ -22,24 +22,24 @@ generation runs.
 named. `aion init full` asks for an Anthropic key, records it in `.env`, and routes generation
 there instead. The shims push a lot of small capture work, and capture is Haiku-grade: read
 a turn, shape it, store it. On the local route that same volume queues behind the one reflect
-model every other caller is already waiting on. Routing generation to `claude-haiku-4-5` is
-what makes the cadence affordable. Embeddings stay local either way, because the vector space
-is the substrate.
+model every other caller is already waiting on. Routing generation to `claude-haiku-4-5` makes
+the cadence affordable. Embeddings stay local either way, because the vector space is the
+substrate.
 
 `AION_CUE_PROVIDER=ollama` routes cue extraction locally while reflection stays keyed.
-Hooks remain enabled because their rule reads the reflect route. The cue pin saves all cue
-generation API charges; its quality and latency comparison is still pending.
+Hooks stay enabled because their rule reads the reflect route. The setting saves every API
+charge for cue generation. Its quality and latency are still unmeasured.
 
 Hooks are route-agnostic. They install on every profile, fire on every install, and hand the turn
-to whichever generation route this install resolved; the local route is a route. That was not
-always true — install refused without a key, the server refused capture on a local route, and the
-client stripped its own entries on its next fire — and all three came from a build whose local
-model could not keep up with a capture on every turn. It can: local reflection measured 18.5s a
-call. A key is optional spend, not a capability.
+to whichever generation route this install resolved. The local route is a route. That was not
+always true. Install refused without a key, the server refused capture on a local route, and the
+client stripped its own entries on its next fire. All three came from a build whose local model
+could not keep up with a capture on every turn. It can: local reflection measured 18.5s a call.
+A key is optional spend, not a capability.
 
-`aion doctor` reports which model digests a capture as `hooks-route`, and `bin/aion` looks in both
-`~/.claude/settings.json` and `$CODEX_HOME/hooks.json` to decide whether hooks are installed at
-all. `aion hooks install` does the hook half on its own, on any install.
+`aion doctor` reports which model digests a capture as `hooks-route`. To decide whether hooks are
+installed, `bin/aion` looks in both `~/.claude/settings.json` and `$CODEX_HOME/hooks.json`.
+`aion hooks install` does the hook half on its own, on any install.
 
 ## The events
 
@@ -77,21 +77,21 @@ itself. The model never sees it happen and the turn ends when it would have ende
 
 `--stop-mode instruct` blocks the stop instead: exit code 2, with an instruction on stderr
 telling the model to call the reflection tool with what the turn established. The model
-summarizes its own work, which is better material than a raw transcript, and the next stop
-sees the tool call in the tail and lets the turn end.
+summarizes its own work, which is better material than a raw transcript. The next stop sees
+the tool call in the tail and lets the turn end.
 
 The trade is UX. Instruct mode adds a round trip to the end of every substantive turn and the
-user watches it happen. Push is silent. Start on push; move to instruct if the stored episodes
+user watches it happen. Push is silent. Start on push. Move to instruct if the stored episodes
 read as transcript rather than as conclusions.
 
-Instruct mode honors `stop_hook_active` strictly. A block while a block is already being
-processed would never settle.
+Instruct mode honors `stop_hook_active` strictly. A block while another block is still
+processing would never settle.
 
 ## One session, one Session node
 
 The hooks pass the harness session id as the `session_id` tool argument. A tool call the model
-makes for itself can leave that argument out, and the server then falls back to the MCP
-transport's own uuid, so one session writes to two Session nodes.
+makes for itself can leave that argument out. The server then falls back to the MCP transport's
+own uuid, and one session writes to two Session nodes.
 
 The PreToolUse hook closes that gap before the call leaves the client. It matches
 `mcp__aion__reflection` and `mcp__aion__recall` and returns the arguments with `session_id` set
@@ -107,39 +107,38 @@ to the id the harness gave it:
 ```
 
 Reflection writes, so the harness session id always wins there, including over an id the model
-supplied itself. Recall only reads, so an id it passed on purpose stays and only an absent one
-is filled in. A call that already carries the right id gets no rewrite, which keeps the normal
-permission flow for the common case. The hook reads stdin and writes stdout with no round trip,
-because it sits in front of every recall and reflection the model makes.
+supplied itself. Recall only reads, so an id it passed on purpose stays and the hook fills in
+only an absent one. A call that already carries the right id gets no rewrite. The hook reads
+stdin and writes stdout with no round trip, because it sits in front of every recall and
+reflection the model makes.
 
-Both profiles install it. A session running aion hooks holds the invariant either way. The
-frame omits `permissionDecision`, so approval stays with the normal permission flow.
+Both profiles install it, so a session running aion hooks holds the invariant. The frame omits
+`permissionDecision`, so approval stays with the normal permission flow.
 
 ## Research capture
 
 `--with-research-capture`, on by default on either hook profile, installs a PostToolUse hook
 matching Slack, Linear, and Notion tool calls. It buffers the tool name, a summary of the
-arguments, and up to 2000 characters of the result, and the next flush folds them into the
+arguments, and up to 2000 characters of the result. The next flush folds them into the
 reflection as tool executions. Research a session did once then survives the session.
 `--no-research-capture` leaves it out, on full or lite alike.
 
-One caution stands. Redaction is deterministic and it targets credentials: keys, tokens,
-connection strings. It does not detect patient data or other regulated content, so the
-capture is only as clean as the channels it reads. The owner turned it on for this install
-knowing that; a deployment where sensitive data can land in those tools should pass
-`--no-research-capture` until someone scopes the channels.
+Redaction is deterministic and it targets credentials: keys, tokens, connection strings. It
+does not detect patient data or other regulated content, so the capture is only as clean as
+the channels it reads. The owner turned it on for this install knowing that. Pass
+`--no-research-capture` on a deployment where sensitive data can land in those tools, until
+someone scopes the channels.
 
 ## Manual install
 
-`aion hooks install` writes to `~/.claude/settings.json`, backing the file up first and
-preserving every key and every hook that is not ours. Aion entries are recognized by
+`aion hooks install` writes to `~/.claude/settings.json`. It backs the file up first and keeps
+every key and every hook that is not ours. The installer recognizes aion entries by
 `hook-main.js` in the command path, so a second install replaces them rather than stacking.
 
-Run through `./bin/aion`, the CLI sits inside a container that can reach neither the host repo
-nor the host's Claude settings. It prints the block to merge by hand instead of failing. The
-block looks like this, with the absolute path to your own checkout. Research capture is on by
-default, so the eighth entry, PostToolUse, is part of it; pass `--no-research-capture` and merge
-only the first seven.
+When run through `./bin/aion`, the CLI sits inside a container that can reach neither the host
+repo nor the host's Claude settings. It prints the block to merge by hand instead of failing. The
+block looks like this, with the absolute path to your own checkout. The eighth entry,
+PostToolUse, is research capture. Pass `--no-research-capture` and merge only the first seven.
 
 ```json
 {
@@ -235,9 +234,9 @@ only the first seven.
 ```
 
 `async: true` keeps a capture-only hook off the turn's critical path. SessionStart and
-UserPromptSubmit cannot use it, because their output is the context they inject. Stop cannot
-either, because it may block. PreToolUse cannot either, because the tool call waits on the
-arguments it returns.
+UserPromptSubmit cannot use it, because their output is the context they inject. Stop cannot,
+because it may block. PreToolUse cannot, because the tool call waits on the arguments it
+returns.
 
 `aion hooks status` prints which entries are installed, their flags, and whether the build
 exists. `aion hooks uninstall` removes exactly those entries.
@@ -253,21 +252,21 @@ npm run build
 aion hooks install --harness codex
 ```
 
-That writes `$CODEX_HOME/hooks.json` (`~/.codex/hooks.json` when `CODEX_HOME` is unset) and adds
-an `[mcp_servers.aion]` block to the `config.toml` beside it, so the tools stay reachable for the
-calls the model makes itself. The config write is append-only, because codex reads its model, its
-approvals, and every other server out of that file. `--profile`, `--stop-mode`,
+That writes `$CODEX_HOME/hooks.json` (`~/.codex/hooks.json` when `CODEX_HOME` is unset). It also
+adds an `[mcp_servers.aion]` block to the `config.toml` beside it, so the tools stay reachable
+for the calls the model makes itself. The config write is append-only, because codex reads its
+model, its approvals, and every other server out of that file. `--profile`, `--stop-mode`,
 `--with-research-capture`, and `--no-research-capture` mean there what they mean on the Claude
 side. `aion hooks uninstall --harness codex` and `aion hooks status --harness codex` read the same
 pair. Uninstall leaves the server block, since a model calling recall on its own still needs it.
 
 Codex runs each hook command through a login shell, so your rc files execute on every fire.
 Anything they print on stdout breaks a Stop hook, where non-JSON stdout on a sync hook is a
-failure, and pollutes a SessionStart injection. Run `zsh -lc 'node --version'` before installing:
-it should print the version and nothing else.
+failure. It also pollutes a SessionStart injection. Run `zsh -lc 'node --version'` before
+installing: it should print the version and nothing else.
 
 The entries are the Claude ones, edited where codex differs. Every command ends in
-`--harness codex`, which is what tells the client which parser to use. SessionEnd carries
+`--harness codex`, which tells the client which parser to use. SessionEnd carries
 `timeout: 3`, the most codex allows there against a default of 1 that node startup alone can eat.
 SessionStart takes no matcher, so all four start sources fire and there is one less thing to
 re-trust. The research matcher is unanchored (`mcp__(slack|linear|notion|Notion)`), because codex
@@ -281,37 +280,36 @@ A reinstall with different flags changes those entries and codex will ask again.
 by default (features.hooks); if /hooks shows them disabled, enable the feature first.
 ```
 
-Trust is keyed by group and handler index, so the merge puts our groups back at the index the
-last install left them on and never inserts ahead of a group that is not ours. A hook someone
-else trusted keeps its trust through an aion install.
+Trust is keyed by group and handler index. The merge puts our groups back at the index the last
+install left them on, and never inserts ahead of a group that is not ours. A hook someone else
+trusted keeps its trust through an aion install.
 
 ### What differs from the Claude profile
 
 SessionEnd drops the cursor file and does nothing else. Codex clamps that event to three seconds
-and never parses what it writes, leaving no room for a round trip, so Stop and PreCompact carry
-the close flush. Tool results buffered after the last Stop flush are dropped at session end.
+and never parses what it writes, which leaves no room for a round trip. Stop and PreCompact carry
+the close flush instead. Session end drops any tool results buffered after the last Stop flush.
 
-The session-id stamp approves the call it rewrites. Codex honors `updatedInput` only next to a
-`permissionDecision` of `allow` and ignores it on its own, so the PreToolUse frame carries the
-pair and the one rewritten recall or reflection call is auto-approved. A call that already carries
-the right session id is not rewritten, and it takes the normal permission flow.
+The PreToolUse hook approves the call it rewrites. Codex honors `updatedInput` only next to a
+`permissionDecision` of `allow` and ignores it on its own. The PreToolUse frame carries the pair,
+so the one rewritten recall or reflection call is auto-approved. The hook does not rewrite a call
+that already carries the right session id, and that call takes the normal permission flow.
 
 Recall injections arrive as developer-role messages. The text is the same block the Claude
 profile injects as additional context.
 
 Capture reads the rollout file rather than a Claude transcript. Turns come off the `event_msg`
-lines; everything else on disk is context codex assembled for the model. The byte cursor is keyed
-to a hash of the rollout's first line, so a file codex rewrote in place is read from its tail
-instead of from an offset that no longer describes it. An ephemeral run passes no rollout path and
-captures nothing.
+lines. Everything else on disk is context codex assembled for the model. The byte cursor is keyed
+to a hash of the rollout's first line. When codex rewrites a file in place, the read starts from
+its tail instead of from an offset that no longer describes it. An ephemeral run passes no
+rollout path and captures nothing.
 
 ### One memory system
 
 Leave `features.memories` off while the aion hooks are installed. Codex ships its own memory
-consolidation, and running both writes the same sessions into two stores the model reads
-separately, with nobody reconciling them. They do not collide on a turn either way: a codex
-consolidation runs managed hooks only, and the aion Stop hook sits in the user layer, so it never
-fires on one.
+consolidation. Running both writes the same sessions into two stores, which the model reads
+separately and nobody reconciles. They do not collide on a turn either way: a codex consolidation
+runs managed hooks only, and the aion Stop hook sits in the user layer, so it never fires on one.
 
 ## How the client works
 
@@ -323,14 +321,12 @@ the subtree and fails the build on any other import.
 Per fire it opens a streamable-HTTP MCP session against `http://127.0.0.1:8765/mcp`
 (`AION_MCP_PORT` moves the port), makes one tool call, and deletes the session. The harness
 session id travels as the `session_id` tool argument, which overrides the transport identity.
-`pre-tool-use` puts the same argument on the model's own calls, so both land in one memory
-stream rather than two.
 
 `pre-tool-use` and `post-tool-use` are the two exceptions to the round trip: neither opens an
-MCP session at all.
+MCP session.
 
 The transcript is JSONL written by the harness for its own use, and its line shape drifts.
-Every read is defensive: an unparseable line is skipped, and a message is recognized by walking
+Every read is defensive: the client skips an unparseable line, and finds a message by walking
 the shapes that plausibly carry one rather than by asserting a schema.
 
 ## State files

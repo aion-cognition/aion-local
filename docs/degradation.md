@@ -3,22 +3,21 @@
 ## Principle
 
 Degradation means doing less inference, never switching to heuristics: a broken cue model
-loses ranking signal, it never falls back to keyword matching (PRD §6.1). Every degraded
+loses ranking signal and never falls back to keyword matching (PRD §6.1). Every degraded
 answer names itself in `metadata.degraded`, a list of `{stage, reason}` entries, one per
 rung that fired. An empty pack beats a noisy one: a floor nothing clears, or a substrate
-with nothing relevant, returns cleanly empty rather than padded with weak matches.
+with nothing relevant, returns empty rather than padded with weak matches.
 
 ## The ladder
 
-Each mode below states the trigger, what the pipeline does, the exact shape the caller
-receives, how to diagnose it live, and how it recovers. Eleven modes, and each one names the
-evidence behind it. Four were induced live against a throwaway Neo4j plus host Ollama (both
-Ollama outages, both Neo4j outages). Three are covered by the unit suite, which is enough
-because they need only process inputs (cue extraction, context resonance, intention triggers).
-One is read off the MCP SDK's own behavior (client disconnect), and one is traced through the
-startup path without a probe (SQLite unwritable). The two remote modes are traced through the
-provider and the routing rule, both under the unit suite, and neither has been induced against
-the live API. Numbers are wall-clock from those runs, not guarantees.
+Eleven modes. Each names the evidence behind it. Four were induced live against a throwaway
+Neo4j plus host Ollama (both Ollama outages, both Neo4j outages). Three are covered by the
+unit suite, which is enough because they need only process inputs (cue extraction, context
+resonance, intention triggers). One is read off the MCP SDK's own behavior (client
+disconnect), and one is traced through the startup path without a probe (SQLite unwritable).
+The two remote modes are traced through the provider and the routing rule, both under the
+unit suite, and neither has been induced against the live API. Numbers are wall-clock from
+those runs, not guarantees.
 
 ### Cue extraction failure (timeout, model error, malformed output)
 
@@ -30,21 +29,21 @@ catches all three under one rung. `callCueModel` wraps the call in an `AbortCont
 keyed to `AION_CUE_BUDGET_MS`; an abort is classified `timeout`, anything else
 `model_error` (`cues.ts:187-212`). A response that parses but fails
 `CueModelOutputSchema.safeParse` is `invalid_output` (`cues.ts:321-325`). All three call
-`degradedResult`, which builds cues from the caller's own query and summary text verbatim
+`degradedResult`. It builds cues from the caller's own query and summary text verbatim
 (query at weight 3, summary at weight 1) and never derives terms from it (`cues.ts:242-256`).
 Only a successful extraction is cached (`cues.ts:326`), so a degraded call never poisons a
 later one for the same input.
 
 **What the caller sees.** A normal `MemoryPack`. `metadata.degraded` carries one entry:
 `{stage: "cues", reason: "timeout" | "model_error" | "invalid_output"}`. BM25 and entity
-resolution still run on the raw-query cue, so a real item can still come back.
+resolution still run on the raw-query cue, so a real item can come back.
 
 **Diagnose.** `aion doctor`'s `ollama-round-trip` check catches a broken or unreachable
 model before a caller hits it. Live, the service logs `cue extraction degraded` with the
 model name and reason (`cues.ts:317`, `:323`). `aion last` prints `degraded  cues: <reason>`
-above the pack (`packages/cli/src/last.ts:106-108`). Across calls rather than for one, `aion
-status`'s `recall` line prints the share of recent recalls that answered without the cue model,
-and reads as `no recalls yet` rather than as healthy until the first one lands. The
+above the pack (`packages/cli/src/last.ts:106-108`). Across calls rather than one, `aion
+status`'s `recall` line prints the share of recent recalls that answered without the cue
+model. It reads as `no recalls yet` rather than as healthy until the first one lands. The
 introspection loop reads the same number off the health snapshot.
 
 **Recovers.** Automatically, next call. No state to reset.
@@ -66,10 +65,10 @@ one list (`recall.ts:208-217`). With no vectors, BM25, entity resolution, recenc
 graph traversal carry the recall alone.
 
 **What the caller sees.** A `MemoryPack` with `metadata.degraded` holding **two** entries:
-`[{stage: "cues", reason: "model_error"}, {stage: "embed", reason: "model_error"}]`. This
-is what closes the old gap: before the fix, `metadata.degraded` could only ever hold one
-`cues` entry, so a dead cue model and a dead Ollama produced an identical pack and the
-caller could not tell "ranking is thinner" from "the whole inference stack is down."
+`[{stage: "cues", reason: "model_error"}, {stage: "embed", reason: "model_error"}]`. Before
+the fix, `metadata.degraded` could only ever hold one `cues` entry. A dead cue model and a
+dead Ollama then produced an identical pack, and the caller could not tell "ranking is
+thinner" from "the whole inference stack is down."
 
 Re-verified live (`AION_OLLAMA_URL=http://127.0.0.1:9`, throwaway Neo4j, real episode
 seeded): `metadata.degraded` came back exactly
@@ -86,20 +85,20 @@ in the same request. `aion last` prints two `degraded` lines.
 it after the write transaction has already committed (`intake.ts:291`, the `attachVectors`
 call).
 
-**What happens.** Nothing, to the experience. `projectEpisodeInTransaction` commits the
-`Episode`, its `Turn` nodes, and every backbone edge with no `content_vec` property at all,
-run from the publication's graph-apply phase
+**What happens.** Nothing happens to the experience. `projectEpisodeInTransaction` commits
+the `Episode`, its `Turn` nodes, and every backbone edge with no `content_vec` property at
+all, run from the publication's graph-apply phase
 (`reflection/application/experience-store.ts:126-168`, called from `applyGraph` at
-`reflection/application/intake-publication.ts:396`); `enqueueSourceWork`, inside the
+`reflection/application/intake-publication.ts:396`). `enqueueSourceWork`, inside the
 publication's `acknowledgeSqlite` phase, inserts the integrate job
 (`reflection/application/intake-publication.ts:481`), and `notifyEnqueued` wakes the worker
-(`intake.ts:113-127`, called at `intake.ts:329`); only then does `attachVectors` embed
+(`intake.ts:113-127`, called at `intake.ts:329`). Only then does `attachVectors` embed
 (`intake.ts:291`). The call throws, is caught inside `attachVectors` itself, logged as
 `content vectors deferred; the episode is stored and queued`, and intake returns normally
 (`intake.ts:199-211`). A `:Memory` node without `content_vec` is itself the pending marker;
 there is no flag property to keep in sync with it
 (`packages/core/src/infrastructure/graph/pending-vectors.ts`). The older `storeEpisode` path
-in `experience-store.ts` still exists, but now serves only `aion replay`, not live intake.
+in `experience-store.ts` still exists. Only `aion replay` uses it now, not live intake.
 
 **What the caller sees.** The ordinary ack, `{episode_id, queued: true}`. No MCP error.
 `ReflectionNotStoredError` no longer has an `embed` stage at all: the only way intake can
@@ -107,7 +106,7 @@ refuse is an unreachable graph.
 
 Until the backfill runs, the episode is reachable by BM25, entity resolution, recency, and
 traversal, and invisible to vector search, the same shape as the recall-side outage above,
-and for the same reason. It is ranking that is missing, not the memory.
+and for the same reason.
 
 **Diagnose.** `aion doctor`'s `ollama-round-trip` check. Live, the warn line above names the
 episode id and how many nodes are waiting. `findPendingVectorNodes(driver, limit)` returns
@@ -117,15 +116,15 @@ the outstanding set directly.
 `findPendingVectorNodes` is the backfill (`reflection/application/vectors.ts`); the
 reflection worker runs it in its startup drain (P3) and `vector_backfill` schedules it as a
 maintenance operation (P5). Re-running it over already-vectorized nodes is a no-op, so a
-partial drain simply resumes.
+partial drain resumes.
 
 Verified against a throwaway Neo4j plus an Ollama pointed at the discard port
 (`reflection/application/intake-vectors.int.test.ts`, 9/9 pass): the episode, both turns,
 `PARTICIPATES_IN`, and the turn `FOLLOWS` chain all present, the queue row present, the
 enqueue callback fired, and `content_vec` absent on all three nodes.
-`findPendingVectorNodes` then returned exactly those three ids, `attachContentVectors`
+`findPendingVectorNodes` then returned exactly those three ids, and `attachContentVectors`
 against live Ollama filled all three at the configured dimension (1024,
-`snowflake-arctic-embed2`), a second pass wrote the same vectors and left the pending set
+`snowflake-arctic-embed2`). A second pass wrote the same vectors and left the pending set
 empty. The failing embed call itself costs 12ms (`TypeError: fetch failed`), measured
 against `http://127.0.0.1:9`.
 
@@ -134,22 +133,21 @@ against `http://127.0.0.1:9`.
 **Trigger.** A key is set, so both generation roles route to `claude-haiku-4-5`, and the API
 answers 429, 5xx, or nothing at all: a rate limit, a regional outage, an expired key.
 
-**What happens.** Three attempts, then the breaker.
-`requestAnthropicJson` retries a 429 or any 5xx up to `MAX_ATTEMPTS` (3), waiting the
-`retry-after` header when the response carries one and `attempt * 2000` ms when it does not,
-capped at 30s and cut short by the caller's own signal
-(`packages/core/src/infrastructure/providers/anthropic-provider.ts:11`, `:218`, `:287-294`). A
-4xx that is not a 429 is not retried; it reaches the caller on the first answer. Every call goes
-through a `CircuitBreaker` (`anthropic-provider.ts:392-396`) that opens after 5 consecutive
-failures, fast-fails for 60s, then allows one trial call; a failed trial re-opens for another
-cooldown (`circuit-breaker.ts:32-34`). An abort is not counted, so a stage deadline or a
-shutdown never opens it. With the breaker open, a queued episode costs one call per cooldown
-instead of three HTTP attempts each.
+**What happens.** Three attempts, then the breaker. `requestAnthropicJson` retries a 429 or
+any 5xx up to `MAX_ATTEMPTS` (3). It waits the `retry-after` header when the response carries
+one and `attempt * 2000` ms when it does not, capped at 30s and cut short by the caller's own
+signal (`packages/core/src/infrastructure/providers/anthropic-provider.ts:11`, `:218`,
+`:287-294`). A 4xx that is not a 429 is not retried; it reaches the caller on the first
+answer. Every call goes through a `CircuitBreaker` (`anthropic-provider.ts:392-396`) that
+opens after 5 consecutive failures, fast-fails for 60s, then allows one trial call. A failed
+trial re-opens it for another cooldown (`circuit-breaker.ts:32-34`). An abort is not counted,
+so a stage deadline or a shutdown never opens it. With the breaker open, a queued episode
+costs one call per cooldown instead of three HTTP attempts each.
 
 **What the caller sees.** On the write path, nothing: the episode is already stored and
-queued before any generation runs, so the failure lands on the reflection job. The job fails,
-the worker holds its claim through a backoff (5s base, doubling to a 300s cap) and retries up to
-`AION_WORKER_MAX_ATTEMPTS` (5). A job that spends its attempts is left in the queue with its
+queued before any generation runs, so the failure lands on the reflection job. The job fails.
+The worker holds its claim through a backoff (5s base, doubling to a 300s cap) and retries up
+to `AION_WORKER_MAX_ATTEMPTS` (5). A job that spends its attempts is left in the queue with its
 last error, skipped by claiming, and becomes maintenance's to re-enqueue
 (`packages/core/src/reflection/application/worker.ts:411-421`). A session narrative fails the
 same way: `narrateSession` logs `narrative compression failed` and returns
@@ -158,11 +156,11 @@ cue call degrades exactly as the first rung above describes, with `reason: model
 
 **Diagnose.** The service log's `generation routed` debug line carries every call's provider,
 model and duration; a failing run shows `ok: false`. A log line is gone on the next rotation,
-so the same outcomes also count in the meta table: `aion stats`'s `generation by route` section
-prints calls, failure share and mean cost per role and provider, and the counters survive a
-restart. A route nothing has called reads as `never called` rather than as a clean record.
-`aion doctor`'s model check names the roles routed to anthropic. `aion status` prints the same
-routing line, and `aion queue ls` shows the backlog the outage is building.
+so the same outcomes also count in the meta table. `aion stats`'s `generation by route`
+section prints calls, failure share and mean cost per role and provider, and the counters
+survive a restart. A route nothing has called reads as `never called` rather than as a clean
+record. `aion doctor`'s model check names the roles routed to anthropic. `aion status` prints
+the same routing line, and `aion queue ls` shows the backlog the outage is building.
 
 **Recovers.** Automatically. The breaker's next trial call closes it, and the queue drains the
 episodes that failed while it was open. Nothing is lost: every episode was stored before its
@@ -179,9 +177,9 @@ latency or embedding work. A cache hit avoids the cue call on either route.
 
 The operational pin was applied on 2026-09-06. The shipped default remains `auto`.
 The before/after day of `aion costs` and the recall-quality comparison are pending after
-metering and hardening merge. No measured dollar-per-day saving or pack-quality result is
-available yet. Earlier local cue measurements were 527-937ms warm and 2288ms cold; those
-numbers do not establish the pin's quality or its latency under current load.
+metering and hardening merge, so no dollar-per-day saving or pack-quality result is measured
+yet. Earlier local cue measurements were 527-937ms warm and 2288ms cold; those numbers do not
+establish the pin's quality or its latency under current load.
 
 Compare the recall batteries and cue latency against the 2000ms evaluation target before
 changing the default. `AION_CUE_BUDGET_MS` remains the separate 8000ms hang guard.
@@ -229,9 +227,8 @@ is what makes "nothing attempted" distinguishable from "everything rejected."
 (`recall.ts:294-296`) and the pack assembles empty.
 
 **What the caller sees.** `metadata.degraded: [{stage: "graph", reason: "unavailable"}]`.
-This is the other half of the fix: before it, this same outage produced a normal-looking
-empty pack with **no** degradation marker at all, byte-identical to a genuine "nothing
-matches" miss.
+Before the fix, this same outage produced a normal-looking empty pack with **no** degradation
+marker at all, byte-identical to a genuine "nothing matches" miss.
 
 `rendered_text` now carries it too. `assemblePack` builds one plain line from the three
 honesty signals and renders it directly under the heading, before any bucket:
@@ -246,11 +243,10 @@ No memories matched this query.
 
 The line names each degradation rung, then a spread that stopped on the activation budget
 (`metadata.truncated`), then the calling session's un-enriched episode count
-(`metadata.pending_enrichment`), joined by `; `. It is absent entirely on a healthy pack and
-present on an empty one, which is where a caller most needs it. This closes the gap the
-previous revision of this page recorded: an agent reading only the tool's text content, not
-`structuredContent.metadata`, could not tell an outage from an honest miss, and one exercise
-angle lost a full baseline run to exactly that.
+(`metadata.pending_enrichment`), joined by `; `. It is absent on a healthy pack and present
+on an empty one, which is where a caller most needs it. Before the line existed, an agent
+reading only the tool's text content, not `structuredContent.metadata`, could not tell an
+outage from an honest miss, and one exercise angle lost a full baseline run to exactly that.
 
 Re-verified live before the fix (`docker stop` on the harness Neo4j mid-service, then a
 recall against a warm session): resolved in 16.6-17.6s across two runs (down from the pre-fix
@@ -269,8 +265,8 @@ reconnects on its own once Neo4j answers again.
 
 ### Context resonance failure (graph error on the second pass)
 
-**Trigger.** The second pass's graph reads, the context-vector fetch that builds the centroid
-or the search against the context index, fail after the first pass has already produced a
+**Trigger.** The second pass's graph reads (the context-vector fetch that builds the centroid,
+or the search against the context index) fail after the first pass has already produced a
 pack.
 
 **What happens.** `resonate` (`packages/core/src/recall/application/resonance.ts:161-187`)
@@ -284,8 +280,8 @@ it to `degradations` (`recall.ts:279-291`), the list `metadata.degraded` is buil
 bucket and no `metadata.degraded` entry naming resonance. This is the one rung on this ladder
 that stays silent to the caller by design: the module comment calls swallowing the error the
 right trade ("losing a whole recall to the associative stage would be the wrong trade every
-time"), and the cost is that the same empty resonant bucket looks identical whether the query
-genuinely had no associative match or the graph read failed underneath it.
+time"). The cost is that the same empty resonant bucket looks identical whether the query had
+no associative match or the graph read failed underneath it.
 
 **Diagnose.** Not visible over MCP. Live, the service log's `resonanceSkipped: "unavailable"`
 field on the `recall served` line is the only signal; `aion doctor`'s `neo4j-bolt` check
@@ -314,7 +310,7 @@ returns its empty pack rather than failing on a stage that had nothing to add to
 **What the caller sees.** The pack the query already produced, with no `intentions` bucket
 and no `metadata.degraded` entry naming it. Silent to the caller by the same trade context
 resonance makes: an intention is something the substrate volunteered, and losing a whole
-recall over one would be the wrong exchange every time. The cost is that an absent bucket
+recall over one would be the wrong trade every time. The cost is that an absent bucket
 reads the same whether no intention was due or the read failed under it.
 
 **Diagnose.** Not visible over MCP. Live, the `intentionsSkipped: "unavailable"` field on the
@@ -328,8 +324,8 @@ Verified by the unit suite, not live-induced: `intentions.test.ts` rejects the d
 thrown past the stage.
 
 Two other skips share that empty bucket and are not degradation. `AION_RECALL_INTENTIONS=false`
-turns the stage off, which restores the pack exactly as it was before intentions had triggers,
-and a time-traveled read (`as_of` or `knew_at`) evaluates no trigger at all: asking what the
+turns the stage off, which restores the pack exactly as it was before intentions had triggers.
+A time-traveled read (`as_of` or `knew_at`) evaluates no trigger at all: asking what the
 substrate held last month is a question about the past, and a trigger is the substrate acting
 in the present. Both are reported as their own `intentionsSkipped` values.
 
@@ -342,10 +338,10 @@ for that identity). `SessionManager.ensureSession` caches resolved identities in
 is unaffected by the outage.
 
 **What happens.** `storeExperience` calls `sessions.ensureSession`, which reaches
-`ensureGraphSession` (`infrastructure/graph/sessions.ts:95`) and issues a write. It fails;
+`ensureGraphSession` (`infrastructure/graph/sessions.ts:95`) and issues a write. It fails.
 `isGraphUnavailable` (`infrastructure/graph/errors.ts:15`) recognizes the driver's
-`ServiceUnavailable`/`SessionExpired` codes (or an unlabeled connection-acquisition
-timeout) and `storeExperience` wraps it in `ReflectionNotStoredError('graph', err)`
+`ServiceUnavailable`/`SessionExpired` codes, or an unlabeled connection-acquisition timeout.
+`storeExperience` then wraps it in `ReflectionNotStoredError('graph', err)`
 (`reflection/application/experience-store.ts:226-227`) rather than letting the raw
 `Neo4jError` escape. This is the one refusal the write path still makes: an unreachable
 graph has nowhere to put the experience, so answering `queued: true` would lose it for good.
@@ -375,9 +371,9 @@ with no queue row and no enqueue callback.
 ### Driver timeouts, underneath both Neo4j modes
 
 `GraphConnection`'s constructor used to take the neo4j-driver defaults as-is: 60s to
-acquire a pooled connection, 30s of transaction retries. Both meet or exceed the
-MCP SDK client's own 60s request timeout, which is why the pre-fix numbers above include a
-case where the server's named error never reached the caller at all. The connection is now
+acquire a pooled connection, 30s of transaction retries. Both meet or exceed the MCP SDK
+client's own 60s request timeout. That is why the pre-fix numbers above include a case where
+the server's named error never reached the caller at all. The connection is now
 constructed with `connectionTimeout: 5000`, `connectionAcquisitionTimeout: 10_000`,
 `maxTransactionRetryTime: 10_000`
 (`packages/core/src/infrastructure/graph/connection.ts:205-207`, applied at `:224-226`). A
@@ -398,9 +394,9 @@ no guard; the raw `EEXIST` or `ENOENT` propagates out of `bootstrapService`, and
 called (`packages/mcp/src/run.ts:37-40`). No listener binds; no partial service exists.
 
 **What the caller sees.** Nothing over MCP; there is no server to connect to. An operator
-reading `docker logs` sees a raw errno, not a domain error: `bootstrap.ts` defines
+reading `docker logs` sees a raw errno, not a domain error. `bootstrap.ts` defines
 `GraphUnreachableError` and `SchemaNotInitializedError` for the neighboring startup checks
-(`bootstrap.ts:65-77`) but nothing names the SQLite path, so the message reads
+(`bootstrap.ts:65-77`), but nothing names the SQLite path, so the message reads
 `aion-mcp: Error: EEXIST: file already exists, mkdir '...'` rather than "aion could not
 open its SQLite store at `<path>`."
 
@@ -422,13 +418,13 @@ aion-mcp`.
 **What happens.** The in-flight call keeps running to completion server-side; nothing
 cancels it. A client-side `transport.close()` sends no MCP `DELETE` (verified against the
 SDK: `Client.close()` aborts the local transport and never issues the request
-`onsessionclosed` depends on (EX-32), so the server-side session for that client stays in
+`onsessionclosed` depends on, EX-32). The server-side session for that client stays in
 the session map (`packages/mcp/src/session-registry.ts`) rather than closing right away. Two
-backstops bound it instead of a leak: the registry evicts down to `MAX_SESSIONS = 512` on
-every new session past the cap (logged as `mcp session evicted`), and `SessionIdleSweeper`
-(`packages/mcp/src/session-idle-sweeper.ts`) closes any session with no request in
-`AION_SESSION_IDLE_EXPIRY_MINUTES` (default 30), independent of the count. Closing a
-session either way runs the same teardown as an explicit DELETE: the narrative-close hook
+backstops bound the map instead of leaving it to leak: the registry evicts down to
+`MAX_SESSIONS = 512` on every new session past the cap (logged as `mcp session evicted`), and
+`SessionIdleSweeper` (`packages/mcp/src/session-idle-sweeper.ts`) closes any session with no
+request in `AION_SESSION_IDLE_EXPIRY_MINUTES` (default 30), independent of the count. Closing
+a session either way runs the same teardown as an explicit DELETE: the narrative-close hook
 fires and the session leaves the map, so a request that arrives after gets the same clean
 `unknown session` 404 a never-opened one would.
 
@@ -509,7 +505,7 @@ the bulk lane.
 The same lag is visible without touching the queue directly. `/health` and `aion status`
 report queue depth per lane, the oldest unclaimed job's age, the exhausted-attempts count,
 the reinforcement queue's cumulative dropped-row counter, and the p95 of intake-to-enriched
-lag over a rolling window of completed jobs; `aion doctor`'s `queue-lag` check warns (never
+lag over a rolling window of completed jobs. `aion doctor`'s `queue-lag` check warns (never
 fails) past `AION_LAG_OLDEST_UNCLAIMED_WARN_MS` / `AION_LAG_QUEUE_DEPTH_WARN_THRESHOLD`. The
 reflection ack carries `pending_ahead` (unclaimed interactive-lane jobs ahead of it at
 enqueue time), and a recall pack's metadata carries `pending_enrichment`: the calling
@@ -534,7 +530,7 @@ collector is not scored this cycle; its pre-run reading waits for a whole snapsh
 
 **An operation throws.** It costs its own turn and nothing else. The failure is recorded
 against that operation, which lowers its effectiveness and therefore its urgency on later
-cycles, and the ledger entry for the window says `failed` with the message. The loop outlives
+cycles. The ledger entry for the window says `failed` with the message. The loop outlives
 every tick: a tick that could not finish is logged and the next one starts clean.
 
 **Two service instances tick at once.** Each operation claims a calendar-aligned time bucket
@@ -562,7 +558,7 @@ grows unbounded.
 
 **A pending-vector node still has no expiry of its own.** Nothing in the graph ages one out:
 it stays vectorless until a drain reaches it. That is deliberate (the marker is the absence
-of the property, so there is no flag to go stale). What changed is that the drain is no
-longer only the worker's startup pass: the `vector_backfill` operation reads the same parity
-the doctor reports and embeds what it finds, and a parity under 0.8 on a substrate of at
-least 20 vector-bearing nodes is a tier-1 condition that preempts the routine catalog.
+of the property, so there is no flag to go stale). The drain is no longer only the worker's
+startup pass: the `vector_backfill` operation reads the same parity the doctor reports and
+embeds what it finds, and a parity under 0.8 on a substrate of at least 20 vector-bearing
+nodes is a tier-1 condition that preempts the routine catalog.
