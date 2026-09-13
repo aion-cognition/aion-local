@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { AdmissionReport } from './admission.js';
 import type { BucketCaps } from './pack-buckets.js';
 import { assemblePack } from './pack.js';
-import { RESONANCE_PATH, contextCentroid, resonantItem } from './resonance.js';
+import { RESONANCE_PATH, contextCentroid, resonantItem, usableForCentroid } from './resonance.js';
 import type { SeedCandidate } from '../../infrastructure/graph/seed-queries.js';
 import type { Vector } from '../../infrastructure/providers/types.js';
 
@@ -39,6 +39,7 @@ const ADMISSION: AdmissionReport = {
   droppedNearDuplicate: 0,
   anchored: true,
   typedAdmitted: 0,
+  pathAdmitted: 0,
 };
 
 function candidate(id: string, content = `content of ${id}`, why?: string): SeedCandidate {
@@ -101,6 +102,30 @@ describe('contextCentroid', () => {
 
   it('has no centroid when every activation score is zero, rather than dividing by zero', () => {
     expect(contextCentroid([{ nodeId: 'a', score: 0 }], vectors([['a', [1, 0]]]))).toBeUndefined();
+  });
+});
+
+describe('usableForCentroid', () => {
+  function node(nodeId: string, score: number, cueSupported = true, isStructural = false) {
+    return { nodeId, score, isStructural, cueSupported };
+  }
+
+  it('keeps a node a cue-seeded path contributed to', () => {
+    expect(usableForCentroid([node('a', 0.9)])).toEqual([node('a', 0.9)]);
+  });
+
+  it('excludes a node whose activation no cue-seeded path reached', () => {
+    expect(usableForCentroid([node('a', 0.9), node('b', 0.4, false)])).toEqual([node('a', 0.9)]);
+  });
+
+  it('excludes a structural node even at a high activation score', () => {
+    expect(usableForCentroid([node('a', 0.9), node('plumbing', 5, true, true)])).toEqual([
+      node('a', 0.9),
+    ]);
+  });
+
+  it('returns empty when nothing supported and nonstructural activated', () => {
+    expect(usableForCentroid([node('a', 0.4, false), node('plumbing', 1, true, true)])).toEqual([]);
   });
 });
 

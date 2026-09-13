@@ -41,6 +41,14 @@ export type ActivationSeed = {
   /** From seed selection's currency-annotated read; absent is treated as current. */
   readonly currency?: CurrencyAnnotation;
   readonly isStructural?: boolean;
+  /**
+   * Whether a cue found this seed: any strategy but recency, which nominates on what was
+   * touched lately rather than on anything the query asked (`RECENCY_RELEVANCE` is zero for
+   * the same reason). Absent is treated as false, so a caller that says nothing seeds the
+   * spread with no cue support at all. Set by `toActivationSeed` in `application/candidates.ts`
+   * from the seed's own provenance.
+   */
+  readonly cueSupported?: boolean;
 };
 
 /**
@@ -77,6 +85,18 @@ export type ActivatedNode = {
   readonly currency: CurrencyAnnotation;
   /** The Member and the global Workspace: traversed, never packed, never reinforced. */
   readonly isStructural: boolean;
+  /**
+   * Whether any path that contributed activation to this node started at a cue-found seed.
+   * Support rides along every contribution: a node inherits it from the source it was reached
+   * from, structural hops included, and one supported path is enough however many unsupported
+   * ones also arrived. A seed keeps its own support and can also gain it, since a cue reaching
+   * an already-nominated node is real evidence the run found rather than a relabelling.
+   *
+   * It travels beside the score and never inside it. Nothing here reads it, weights it, or
+   * lets it change which path wins; the centroid in `domain/resonance.ts` is its only consumer,
+   * and it answers the question a node's own label cannot: where its activation came from.
+   */
+  readonly cueSupported: boolean;
   /**
    * The strongest single hop of CONTRADICTS, SUPERSEDES, or CAUSES evidence that reached this
    * node, independent of which path is `pathSummary`'s: a node whose strongest overall route is
@@ -159,6 +179,8 @@ type SpreadState = {
   readonly paths: Map<string, string>;
   readonly currency: Map<string, CurrencyAnnotation>;
   readonly structural: Set<string>;
+  /** Nodes some cue-seeded path contributed to; the union of every such arrival, never a score. */
+  readonly cueSupported: Set<string>;
   /** The strongest single contribution seen per node; decides which path is reported. */
   readonly strongest: Map<string, number>;
   /** The strongest single typed-edge contribution seen per node, tracked apart from `strongest`. */
@@ -175,6 +197,7 @@ function initialize(seeds: readonly ActivationSeed[]): SpreadState {
     paths: new Map(),
     currency: new Map(),
     structural: new Set(),
+    cueSupported: new Set(),
     strongest: new Map(),
     typedEvidence: new Map(),
     seeds: new Set(),
@@ -198,6 +221,9 @@ function initialize(seeds: readonly ActivationSeed[]): SpreadState {
     state.currency.set(seed.nodeId, annotation);
     if (seed.isStructural === true) {
       state.structural.add(seed.nodeId);
+    }
+    if (seed.cueSupported === true) {
+      state.cueSupported.add(seed.nodeId);
     }
     state.frontier.add(seed.nodeId);
   }
@@ -244,6 +270,15 @@ function propagate(
   state.currency.set(neighbor.nodeId, neighbor.currency);
   if (neighbor.isStructural) {
     state.structural.add(neighbor.nodeId);
+  }
+
+  // Every contribution carries its origin forward, above the seed and strongest-path returns
+  // below: a cue reaching a node the recency leg had already nominated is support that run
+  // found, and a node whose dominant route is unsupported still counts a weaker supported one.
+  // Structural nodes relay it like any other, since the plumbing is how a cue reaches what
+  // sits behind it.
+  if (state.cueSupported.has(neighbor.sourceId)) {
+    state.cueSupported.add(neighbor.nodeId);
   }
 
   // Tracked apart from `strongest` below: a node's dominant route can be an ordinary
@@ -294,6 +329,7 @@ function collect(state: SpreadState, budget: ActivationBudget): ActivatedNode[] 
       pathSummary: state.paths.get(nodeId) ?? nodeId,
       currency: state.currency.get(nodeId) ?? CURRENT,
       isStructural: state.structural.has(nodeId),
+      cueSupported: state.cueSupported.has(nodeId),
       ...(typedEvidence === undefined ? {} : { typedEvidence }),
     });
   }

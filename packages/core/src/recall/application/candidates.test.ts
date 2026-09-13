@@ -52,6 +52,7 @@ function activated(nodeId: string, score: number, pathSummary: string): Activate
     pathSummary,
     currency: { currency: 'current' },
     isStructural: false,
+    cueSupported: true,
   };
 }
 
@@ -133,7 +134,33 @@ describe('a seed as a fusion candidate', () => {
         currency: 'superseded',
         supersededBy: { id: 'old-successor', at: SUPERSEDED_AT },
       },
+      cueSupported: true,
     });
+  });
+
+  it('enters the spread cue-supported when a strategy that measures the query found it', () => {
+    expect(
+      toActivationSeed(seed('found', [{ strategy: 'vector', score: 0.9, relevance: 0.9 }]))
+        .cueSupported,
+    ).toBe(true);
+  });
+
+  it('enters the spread unsupported when recency alone nominated it', () => {
+    expect(
+      toActivationSeed(seed('stale', [{ strategy: 'recency', score: 0.5, relevance: 0 }]))
+        .cueSupported,
+    ).toBe(false);
+  });
+
+  it('enters the spread cue-supported when another strategy shares the nomination', () => {
+    expect(
+      toActivationSeed(
+        seed('corroborated', [
+          { strategy: 'vector', score: 0.7, relevance: 0.7 },
+          { strategy: 'recency', score: 0.5, relevance: 0 },
+        ]),
+      ).cueSupported,
+    ).toBe(true);
   });
 });
 

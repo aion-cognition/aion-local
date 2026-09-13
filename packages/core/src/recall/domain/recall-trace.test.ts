@@ -20,6 +20,7 @@ const ADMISSION: AdmissionReport = {
   droppedNearDuplicate: 0,
   anchored: true,
   typedAdmitted: 0,
+  pathAdmitted: 0,
 };
 
 function input(overrides: Partial<RecallTraceInput> = {}): RecallTraceInput {

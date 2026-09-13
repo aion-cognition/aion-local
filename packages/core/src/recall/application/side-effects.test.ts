@@ -53,6 +53,7 @@ function activatedNode(nodeId: string, score = 1, isStructural = false): Activat
     pathSummary: nodeId,
     currency: { currency: 'current' },
     isStructural,
+    cueSupported: true,
   };
 }
 
@@ -68,6 +69,7 @@ const NOTHING_ADMITTED: AdmissionReport = {
   droppedNearDuplicate: 0,
   anchored: false,
   typedAdmitted: 0,
+  pathAdmitted: 0,
 };
 
 function completion(overrides: Partial<RecallCompletion> = {}): RecallCompletion {

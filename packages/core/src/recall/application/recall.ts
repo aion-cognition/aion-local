@@ -133,28 +133,23 @@ export async function handleRecall(
     options.checked?.context.mode ??
     readModeFor(payload, { now, expiryAnnotation: deps.config.temporal.expiryAnnotation });
 
-  // Resolved, not created. Recall produces no content, so a read-only session mints no
-  // Session node, no INITIATED_BY, no WITHIN_WORKSPACE and no link in the FOLLOWS chain;
-  // intake is what brings the node into existence, on the first thing worth remembering.
+  // Resolved, not created. Recall produces no content, so a read-only session mints no Session
+  // node, no INITIATED_BY, WITHIN_WORKSPACE or FOLLOWS link; intake mints one on the first thing
+  // worth remembering.
   const sessionId = deps.sessions.sessionIdFor(payload.session_id ?? options.identity);
 
-  // A compaction summarizes the caller's own transcript, and nothing here can tell which of
-  // what it served survived that summary. Leaving the served-items ledger untouched risks
-  // withholding text the caller no longer holds. The caller names the epoch itself; recall
-  // has no other way to learn one happened.
-  //
-  // Staged rather than done here. The run computes against an empty served set in memory and the
-  // durable rows go only at the successful-read boundary, so a read that then refuses does not
-  // take the caller's holdings with it.
+  // A compaction summarizes the caller's transcript and nothing here can tell what survived it,
+  // so the caller names the epoch itself. Staged rather than done here: the run computes against
+  // an empty served set in memory, and the durable rows go only at the successful-read boundary,
+  // so a read that then refuses does not take the caller's holdings with it.
   const resetDelivery = payload.reset_delivery_suppression === true;
 
   // One indexed read over the durable records, so it costs a point read rather than a graph
   // walk and answers the same for an evicted source as for a resident one.
   const obligations = sessionObligations(deps, sessionId);
 
-  // Redacted before the cue model or the embedder sees any of it: both are inference calls
-  // over caller-supplied text, and a secret-shaped token in the query is the same leak surface
-  // intake already closes for a stored payload.
+  // Redacted before the cue model or the embedder sees any of it: both are inference calls over
+  // caller-supplied text, the same leak surface intake already closes for a stored payload.
   const { value: cueInput } = redactPayload(
     {
       query: payload.query,
@@ -185,9 +180,8 @@ export async function handleRecall(
   // what the substrate held, and a reset is a caller saying it no longer holds what it captured.
   const ownFilter = deps.config.recall.ownSessionFilter && !isTimeTravel(mode) && !resetDelivery;
 
-  // The bound the pre-limit ordering trusts a stored ownership summary up to, read before
-  // nomination runs. It takes no guard, recovers no receipt and waits for nothing: an absent or
-  // stale bound costs the ordering its discount and never costs an answer a memory.
+  // The bound the pre-limit ordering trusts a stored ownership summary up to. Takes no guard,
+  // recovers no receipt: an absent or stale bound costs the ordering its discount, never a memory.
   const hint = ownFilter ? ownershipNominationHint(deps.db) : undefined;
 
   const selection = await timed(() =>
@@ -202,9 +196,8 @@ export async function handleRecall(
   );
   const { seeds } = selection.value;
 
-  // Every rung that fired, in the order the stages run. A pack with no items and no entries
-  // here is a real miss; the same pack with a `graph` entry is an outage, and the caller
-  // reads the two differently.
+  // Every rung that fired, in the order the stages run: a pack with a `graph` entry here is an
+  // outage, and the same empty pack with no entries is a real miss, read differently by the caller.
   const degradations: Degradation[] = [];
   if (cues.value.degradation !== undefined) {
     degradations.push(cues.value.degradation);
@@ -248,21 +241,22 @@ export async function handleRecall(
       mmrLambda: deps.config.search.mmrLambda,
       clusterCap: deps.config.recall.clusterCap,
       clusterCosineThreshold: deps.config.recall.clusterCosineThreshold,
+      pathStrengthSlots: deps.config.recall.pathStrengthSlots,
       labelBoosts: labelBoosts(cues.value.cues, deps.config.recall.decisionBoost),
       ...(vectors === undefined ? {} : { vectors }),
     });
   });
 
-  // The second pass, after fusion rather than straight after activation: the items fusion
-  // admitted are what the centroid averages and what caps the bucket, and excluding them is
-  // also what keeps a resonant discovery out of every other bucket.
+  // After fusion so it can exclude what the first pass already produced, not because it needs
+  // fusion's admission: the centroid averages the activated set minus structural plumbing and
+  // whatever no cue-seeded path reached, so a query fusion answers with nothing can still get a
+  // real second way in.
   const resonance = await timed<ResonanceResult>(() =>
     resonate(
       { driver: deps.driver, config: deps.config, logger: deps.logger },
       {
         activated: activation.value.activated,
         exclude: firstPassIds(seeds, activation.value.activated, fusion.value.items),
-        anchoredIds: new Set(fusion.value.items.map((item) => item.id)),
         mode,
       },
     ),

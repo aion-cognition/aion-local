@@ -41,6 +41,10 @@ export const RRF: FusionOptions = {
   mmrLambda: 0.5,
   clusterCap: 2,
   clusterCosineThreshold: 0.95,
+  // Off by default here: the ranking and admission cases this fixture backs are not about the
+  // disclosed path-strength lane, and a nonzero default would quietly change every one of them
+  // the moment an unmeasured arrival showed up in a fixture. Tests for the lane itself set this.
+  pathStrengthSlots: 0,
 };
 
 export type CandidateOverrides = {

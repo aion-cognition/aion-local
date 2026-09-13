@@ -134,14 +134,19 @@ Every node carries two embeddings. The content vector encodes what the node is a
 embedding of its text. The context vector encodes what it connects to, a strength-weighted mean
 of its neighbors' content vectors, recomputed when the neighborhood changes.
 
-Resonance is a second retrieval pass over that second index. After the first pass anchors, the
-activation-weighted mean of the context vectors of the items it actually admitted becomes a
-query against the context index. That query excludes everything the first pass already produced.
+Resonance is a second retrieval pass over that second index. The activation-weighted mean of the
+context vectors of the whole activated set becomes a query against the context index, excluding
+everything the first pass already produced. It runs whether or not fusion admitted anything: the
+query fusion answers with nothing is precisely the one that most needs a second way in.
 
-Averaging the whole activated set instead lands near the substrate's center of mass, and answers
-a nonsense query as readily as a real one. So the centroid is built from the anchors and nothing
-else. What comes back lives in a similar relational neighborhood while its words may share
-nothing with the query.
+Averaging the raw activated set lands near the substrate's center of mass and answers a nonsense
+query as readily as a real one, so the mean excludes a node that is the graph's own connective
+tissue rather than a memory, and a node no cue ever reached: "touched lately" is not evidence
+about the query. The test is where a node's activation came from, not what the node is called.
+Support travels with the spread, so a seed the recency leg nominated counts the moment a
+cue-found seed reaches it across the graph, and a memory the walk found by leaving a recency seed
+does not, however many real edges it crossed. What comes back lives in a similar relational
+neighborhood while its words may share nothing with the query.
 
 The mechanism models a familiar experience. You think about a project deadline, and a memory of
 a different project surfaces, one with similar team structure and similar pressure. The content
@@ -149,8 +154,8 @@ differs. The context is similar.
 
 Resonant items land in their own pack bucket and never compete with a fused score. A pack keeps
 what matched the question separate from what resonated with the situation. The stage declines to
-run on a query nothing anchored, since resonating from an unanchored pack searches the shape of
-nothing.
+run only when nothing but recency or structural plumbing activated, since resonating from that
+alone searches the shape of nothing.
 
 ## Hebbian plasticity
 

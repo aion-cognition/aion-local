@@ -45,14 +45,40 @@ function activated(...ids: readonly string[]): readonly ActivatedNode[] {
     pathSummary: '(seed)',
     currency: { currency: 'current' },
     isStructural: false,
+    cueSupported: true,
   }));
+}
+
+/** A node the spread reached with no cue-seeded path behind any of its activation. */
+function unsupported(nodeId: string, score: number): ActivatedNode {
+  return {
+    nodeId,
+    score,
+    hops: 0,
+    pathSummary: '(seed)',
+    currency: { currency: 'current' },
+    isStructural: false,
+    cueSupported: false,
+  };
+}
+
+/** Cue-supported on purpose: the structural flag alone has to be enough to exclude it. */
+function structural(nodeId: string, score: number): ActivatedNode {
+  return {
+    nodeId,
+    score,
+    hops: 1,
+    pathSummary: '(seed)',
+    currency: { currency: 'current' },
+    isStructural: true,
+    cueSupported: true,
+  };
 }
 
 function input(overrides: Partial<ResonanceInput> = {}): ResonanceInput {
   return {
     activated: activated('a', 'b'),
     exclude: new Set(['a', 'b']),
-    anchoredIds: new Set(['a', 'b']),
     mode: withCurrency(),
     ...overrides,
   };
@@ -96,6 +122,19 @@ function routed(cypher: string): 'context-vectors' | 'search' | 'hydrate' {
   return 'hydrate';
 }
 
+function searchingDriver(hits: readonly FakeRow[], candidates: readonly FakeRow[]): Driver {
+  return answeringWith((cypher) => {
+    const target = routed(cypher);
+    if (target === 'context-vectors') {
+      return [contextVectorRow('a', [1, 0]), contextVectorRow('b', [0, 1])];
+    }
+    if (target === 'search') {
+      return hits;
+    }
+    return candidates;
+  });
+}
+
 describe('context resonance when it declines to search', () => {
   it('does not run at all when the setting is off', async () => {
     const config: Config = {
@@ -116,11 +155,16 @@ describe('context resonance when it declines to search', () => {
     expect(result.activated).toBe(0);
   });
 
-  // The centroid is the shape of what the query found. When the gate admitted nothing on its
-  // own evidence there is no such shape, and searching from one anyway is how an off-topic
-  // pack fills itself.
-  it('declines a query the first pass could not anchor', async () => {
-    const result = await resonate(deps(unreachableDriver()), input({ anchoredIds: new Set() }));
+  // The centroid is the shape of the query's own evidence. When every activated node is either
+  // structural plumbing or activation no cue ever reached there is no such shape, and searching
+  // from one anyway is how an off-topic pack fills itself with whatever was touched lately.
+  it('declines a query where nothing but recency and structural plumbing activated', async () => {
+    const result = await resonate(
+      deps(unreachableDriver()),
+      input({
+        activated: [unsupported('a', 1), structural('plumbing', 1)],
+      }),
+    );
 
     expect(result.skipped).toBe('no_anchor');
     expect(result.items).toEqual([]);
@@ -150,19 +194,6 @@ describe('context resonance when it declines to search', () => {
 });
 
 describe('context resonance when it searches', () => {
-  function searchingDriver(hits: readonly FakeRow[], candidates: readonly FakeRow[]): Driver {
-    return answeringWith((cypher) => {
-      const target = routed(cypher);
-      if (target === 'context-vectors') {
-        return [contextVectorRow('a', [1, 0]), contextVectorRow('b', [0, 1])];
-      }
-      if (target === 'search') {
-        return hits;
-      }
-      return candidates;
-    });
-  }
-
   it('returns each hit at its own context similarity, explained as resonance', async () => {
     const result = await resonate(
       deps(searchingDriver([hitRow('r1', 0.84)], [candidateRow('r1')])),
@@ -194,7 +225,7 @@ describe('context resonance when it searches', () => {
     expect(result.items.map((item) => item.id)).toEqual(['r1', 'r2']);
   });
 
-  it('averages only the activated nodes the first pass admitted', async () => {
+  it('averages the whole activated set, minus recency-only and structural nodes', async () => {
     const asked: string[] = [];
     const driver = answeringWith((cypher) => {
       const target = routed(cypher);
@@ -217,15 +248,18 @@ describe('context resonance when it searches', () => {
 
     await resonate(
       deps(recording),
-      input({ activated: activated('a', 'b', 'c'), anchoredIds: new Set(['a']) }),
+      input({
+        activated: [...activated('a'), unsupported('c', 0.9), structural('plumbing', 0.5)],
+      }),
     );
 
-    // 'b' and 'c' were reached, not admitted. Averaging them in is what walks the centroid
-    // toward the middle of the substrate, where the busiest nodes sit close to everything.
+    // No cue-seeded path reached 'c' and 'plumbing' is structural; neither carries evidence
+    // about the query, so the centroid is asked over 'a' alone even though fusion never told
+    // this stage what it admitted.
     expect(asked).toEqual(['a']);
   });
 
-  it('returns no more resonant hits than the first pass admitted items', async () => {
+  it('searches at the full configured resonant limit, not capped by how much activated', async () => {
     const limits: number[] = [];
     const driver = answeringWith((cypher) => {
       const target = routed(cypher);
@@ -250,9 +284,10 @@ describe('context resonance when it searches', () => {
       },
     } as unknown as Driver;
 
-    await resonate(deps(recording), input({ anchoredIds: new Set(['a']) }));
+    // Only one node in the whole activated set, well under `resonantLimit`.
+    await resonate(deps(recording), input({ activated: activated('a') }));
 
-    expect(limits).toEqual([1]);
+    expect(limits).toEqual([DEFAULTS.contextResonance.resonantLimit]);
     expect(DEFAULTS.contextResonance.resonantLimit).toBeGreaterThan(1);
   });
 
@@ -267,6 +302,27 @@ describe('context resonance when it searches', () => {
       input(),
     );
 
+    expect(result.items.map((item) => item.id)).toEqual(['r1']);
+  });
+});
+
+/**
+ * The case R3 exists for: fusion's own admission is no longer the gate. `exclude` reflects a
+ * pack fusion left empty (only seeds and the activated set, no admitted items), and the stage
+ * still searches from what the spread found because that finding carries genuine evidence.
+ */
+describe('context resonance when fusion admitted nothing', () => {
+  it('still searches from a genuinely activated node, which is the case this pass exists for', async () => {
+    const result = await resonate(
+      deps(searchingDriver([hitRow('r1', 0.9)], [candidateRow('r1')])),
+      input({
+        activated: activated('a'),
+        // Fusion admitted no items, so the exclude set holds only the seed itself.
+        exclude: new Set(['a']),
+      }),
+    );
+
+    expect(result.skipped).toBeUndefined();
     expect(result.items.map((item) => item.id)).toEqual(['r1']);
   });
 });

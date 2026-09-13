@@ -55,7 +55,9 @@ no notion of episodes, cues, or memory packs beyond those primitives.
   `activation-weights.ts` (the per-relationship-type propagation table),
   `admission.ts` (the evidence rules and the floors), `arrival-scoring.ts` (cosines for what
   the spread reached), `seed-selection.ts` (the budget curve and the per-leg reservations),
-  `fusion.ts` (weighted RRF, the admission decision, and the currency policy), `ranking.ts`
+  `fusion.ts` (weighted RRF, the admission decision, and the currency policy),
+  `path-admission.ts` (the disclosed path-strength lane, after `fuse`'s ordinary gate has
+  refused everyone), `ranking.ts`
   (the ordering machinery fusion hands its admitted list to: MMR, the near-duplicate cluster
   cap, cosine), `facts.ts` (the restatement floor and the gloss cap), `resonance.ts` (the
   centroid and the shape of a resonant item), `intention-triggers.ts` (whether a standing
@@ -302,15 +304,24 @@ intention pass, assembly, and the three subtractions below it carry no timing.
    explained by its strongest leg; two different nodes carrying the same sentence both go
    through, because whether they are one claim is decided in assembly, at step 11. An item the
    spread reached and no strategy seeded is scored against the query cues on its own content
-   vector.
-6. **Context resonance.** A second pass, after fusion because it needs to know the first one
-   anchored: the activation-weighted mean of the activated set's context vectors becomes a
-   query against the context vector index, above
-   `AION_CONTEXT_RESONANCE_CONTEXT_SEARCH_THRESHOLD` and excluding every id the first pass
-   already produced. What comes back is related by the shape of its neighborhood rather than
-   by its words, so it lands in `resonant` under its own rationale and never competes with a
-   fused score. The stage is skippable (`AION_RECALL_USE_CONTEXT_RESONANCE`), timed like
-   every other stage, and declines to run at all on a query nothing anchored.
+   vector. A fifth, disclosed door runs last, over whoever the first four refused for want of any
+   measurement at all: the path-strength lane (`path-admission.ts`) admits up to
+   `AION_RECALL_PATH_STRENGTH_SLOTS` (default 2) of the strongest-activation arrivals per pack,
+   marked `path_strength` in `admitted_by` so a reader sees which door they came through. It is
+   not a floor rule and never competes with one; the floors refuse a candidate first, every time,
+   and the lane's own knob at 0 leaves the pack exactly as the four-door gate alone would produce.
+6. **Context resonance.** A second pass, after fusion so it can exclude what the first pass
+   already produced rather than because it depends on what fusion admitted: the
+   activation-weighted mean of the activated set's context vectors becomes a query against the
+   context vector index, above `AION_CONTEXT_RESONANCE_CONTEXT_SEARCH_THRESHOLD` and excluding
+   every id the first pass already produced. The mean excludes a structural node and a node no
+   cue-seeded path contributed activation to (the spread carries that support outward from the
+   seeds and the centroid reads it), so it also runs, on purpose, when fusion admitted nothing at
+   all but the spread still found something real. What comes back is
+   related by the shape of its neighborhood rather than by its words, so it lands in `resonant`
+   under its own rationale and never competes with a fused score. The stage is skippable
+   (`AION_RECALL_USE_CONTEXT_RESONANCE`), timed like every other stage, and declines to run only
+   when nothing but recency or structural plumbing activated.
 7. **Intention triggers.** A third pass, after resonance because it reads that stage's
    centroid. One bounded read of the open intentions that carry a trigger condition, then three
    comparisons per row against what the run already holds: the subject entity in the activated

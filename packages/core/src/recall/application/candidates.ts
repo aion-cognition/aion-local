@@ -70,11 +70,20 @@ function annotationOf(candidate: SeedCandidate): CurrencyAnnotation {
   return { currency: candidate.currency, supersededBy: candidate.supersededBy };
 }
 
+/**
+ * The spread starts here, and each seed says whether a cue put it there. Every strategy but
+ * recency measures the query; "touched lately" measures nothing about it, which is why the
+ * recency leg's contribution carries `relevance: 0` (`RECENCY_RELEVANCE` in
+ * `seed-selection.ts`). One other strategy behind the same seed is enough, and the spread
+ * carries that answer outward from here so the centroid can ask where a node's activation came
+ * from rather than what the node is called (`cueSupported` in `domain/activation.ts`).
+ */
 export function toActivationSeed(seed: Seed): ActivationSeed {
   return {
     nodeId: seed.id,
     currency: annotationOf(seed),
     ...(seed.isStructural === undefined ? {} : { isStructural: seed.isStructural }),
+    cueSupported: seed.provenance.some((entry) => entry.strategy !== 'recency'),
   };
 }
 

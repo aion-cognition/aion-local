@@ -48,6 +48,9 @@ export type Rationale = z.infer<typeof RationaleSchema>;
  * is an activation-only arrival whose strongest inbound CONTRADICTS, SUPERSEDES, or CAUSES edge
  * cleared its own activation floor, admitted at the lower corroboration floor instead of the
  * vector one: evidence the graph carries that a cosine against the query cannot see.
+ * `path_strength` is the disclosed lane: an activation-only arrival no floor could judge at all
+ * (no cosine, no exact match), let in on its own activation path within a bounded per-pack slot
+ * count. Not a floor rule; the floors refuse it first, every time.
  */
 export const AdmissionRuleSchema = z.enum([
   'vector_floor',
@@ -56,16 +59,16 @@ export const AdmissionRuleSchema = z.enum([
   'bm25_any',
   'context_threshold',
   'typed_admission',
+  'path_strength',
 ]);
 
 export type AdmissionRule = z.infer<typeof AdmissionRuleSchema>;
 
 /**
- * The rule that admitted the item and the measurements that qualified under it, each rendered
- * as the method and what it returned ('vector 0.56', 'bm25 exact'). Without this an item prints
- * one number that no floor necessarily judged: an item admitted on a verbatim lexical hit used
- * to print whatever weak cosine some other leg happened to measure, so a pack could show 0.53
- * under a 0.55 floor and read as a gate with a hole in it.
+ * The rule that admitted the item and the measurements that qualified under it, rendered as the
+ * method and what it returned ('vector 0.56', 'bm25 exact'). Without this an item admitted on a
+ * verbatim lexical hit used to print whatever weak cosine some other leg happened to measure, so
+ * a pack could show 0.53 under a 0.55 floor and read as a gate with a hole in it.
  */
 export const AdmittedBySchema = z.strictObject({
   rule: AdmissionRuleSchema,
@@ -145,15 +148,11 @@ export const MAX_DERIVATION_ROOTS = 3;
 
 /**
  * What the item descends from, and who else in the pack descends from the same place.
- *
  * `shared_with` is the part a reader cannot reconstruct: two claims extracted from one capture
  * read as two witnesses, and a pack that admits both without saying so lets one source count
- * twice. The field names the other items rather than asserting agreement between them.
- *
- * `complete` is false when the chain was cut at `MAX_DERIVATION_ROOTS`, or when a source the
- * caller named did not resolve to anything the substrate holds. No lineage is invented to fill
- * the gap, so `roots` is empty on an item whose only stated source resolved to nothing: the
- * field is there to say the chain is short, not to name something in its place.
+ * twice. `complete` is false when the chain was cut at `MAX_DERIVATION_ROOTS`, or when a named
+ * source resolved to nothing the substrate holds; no lineage is invented to fill that gap, so
+ * `roots` stays empty rather than naming something in its place.
  */
 export const DerivationSchema = z.strictObject({
   roots: z.array(z.string().min(1)).max(MAX_DERIVATION_ROOTS),
@@ -178,16 +177,12 @@ export const ClaimedCorrectionSchema = z.strictObject({
 export type ClaimedCorrection = z.infer<typeof ClaimedCorrectionSchema>;
 
 /**
- * One recalled memory, shaped identically across every bucket. `currency` and
- * `superseded_by` carry lineage annotation on every item, not just facts. Default recall
- * is currency-aware, not currency-filtered, so any bucket may surface a superseded node.
- * `occurred_at` is the temporal context for episodes; other buckets omit it.
- *
- * `rank` and `confidence` are what let a reader compare two items. `rationale.score` cannot:
- * it is the producing method's own number, so a BM25 hit normalized to the best hit of its
- * cue prints 1.00 next to a cosine of 0.62 and the list reads as though the lexical hit were
- * the stronger one (the printed score measured as rising while the list went down, on 27% of
- * adjacent pairs).
+ * One recalled memory, shaped identically across every bucket. `currency` and `superseded_by`
+ * carry lineage annotation on every item, not just facts: default recall is currency-aware, not
+ * currency-filtered, so any bucket may surface a superseded node. `occurred_at` is the temporal
+ * context for episodes; other buckets omit it. `rank` and `confidence` are what let a reader
+ * compare two items; `rationale.score` cannot, since it is the producing method's own number, and
+ * a BM25 hit normalized to its cue's best hit prints 1.00 next to a cosine of 0.62.
  */
 export const MemoryPackItemSchema = z.strictObject({
   id: z.string().min(1),
@@ -376,6 +371,12 @@ export const AdmissionReportSchema = z.strictObject({
    * parsing.
    */
   typed_admitted: z.number().int().nonnegative().optional(),
+  /**
+   * Admitted through the disclosed path-strength lane (`path_strength` in `admitted_by`), on
+   * activation alone, bounded to `AION_RECALL_PATH_STRENGTH_SLOTS` per pack. Counted apart and
+   * optional for the same reasons `typed_admitted` is.
+   */
+  path_admitted: z.number().int().nonnegative().optional(),
   /** Cosine at or above which one measurement admits an item on its own. */
   vector_floor: z.number().min(0).max(1),
   /** Cosine at or above which a measurement counts as one unit of corroboration. */

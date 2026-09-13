@@ -194,6 +194,7 @@ describe('spreadActivation', () => {
         pathSummary: 'seed-a',
         currency: { currency: 'current' },
         isStructural: false,
+        cueSupported: false,
       },
     ]);
     expect(run.termination).toBe('frontier_exhausted');
@@ -584,6 +585,112 @@ describe('typed evidence', () => {
 
     expect(typedEvidenceOf(run, 'co-occurring')).toBeUndefined();
     expect(typedEvidenceOf(run, 'similar')).toBeUndefined();
+  });
+});
+
+function supportOf(run: ActivationRun, nodeId: string): boolean | undefined {
+  return run.activated.find((node) => node.nodeId === nodeId)?.cueSupported;
+}
+
+describe('cue support along the spread', () => {
+  it('carries a cue-found seed’s support outward, structural hops included', async () => {
+    const run = await spreadActivation(
+      fetchOver({
+        edges: [
+          { from: 'query', to: 'session', type: 'PARTICIPATES_IN' },
+          { from: 'session', to: 'sibling', type: 'PARTICIPATES_IN' },
+        ],
+        structural: ['session'],
+      }),
+      { seeds: [{ nodeId: 'query', cueSupported: true }], budget: BASE_BUDGET },
+    );
+
+    expect(supportOf(run, 'session')).toBe(true);
+    expect(supportOf(run, 'sibling')).toBe(true);
+  });
+
+  it('leaves a recency seed’s whole walk unsupported, however far it reaches', async () => {
+    const run = await spreadActivation(
+      fetchOver({
+        edges: [
+          { from: 'recent', to: 'session', type: 'PARTICIPATES_IN' },
+          { from: 'session', to: 'sibling', type: 'PARTICIPATES_IN' },
+        ],
+        structural: ['session'],
+      }),
+      { seeds: [{ nodeId: 'recent' }], budget: BASE_BUDGET },
+    );
+
+    // The sibling is neither a seed nor structural, so its own labels say nothing about where
+    // its 0.567 came from. Only the origin of the walk does.
+    expect(scoreOf(run, 'sibling')).toBeGreaterThan(BASE_BUDGET.minActivation);
+    expect(supportOf(run, 'sibling')).toBe(false);
+  });
+
+  it('supports a seed a cue-found seed also reaches, since the nomination came first', async () => {
+    const run = await spreadActivation(
+      fetchOver({ edges: [{ from: 'query', to: 'recent', type: 'RELATED_TO' }] }),
+      {
+        seeds: [{ nodeId: 'query', cueSupported: true }, { nodeId: 'recent' }],
+        budget: BASE_BUDGET,
+      },
+    );
+
+    expect(scoreOf(run, 'recent')).toBeGreaterThan(1);
+    expect(supportOf(run, 'recent')).toBe(true);
+  });
+
+  it('keeps a node supported when an unsupported path also arrives at it first', async () => {
+    const run = await spreadActivation(
+      fetchOver({
+        edges: [
+          { from: 'a-recent', to: 'shared', type: 'RELATED_TO' },
+          { from: 'b-query', to: 'shared', type: 'RELATED_TO' },
+        ],
+      }),
+      {
+        // Equal scores, so the batch expands them in id order: the unsupported seed reaches
+        // `shared` before the supported one does, and the union has to survive that order.
+        seeds: [{ nodeId: 'a-recent' }, { nodeId: 'b-query', cueSupported: true }],
+        budget: BASE_BUDGET,
+      },
+    );
+
+    expect(supportOf(run, 'shared')).toBe(true);
+  });
+
+  it('changes nothing a score, a path, or a budget depends on', async () => {
+    const fixture: Fixture = {
+      edges: [
+        { from: 'one', to: 'hub', type: 'PARTICIPATES_IN' },
+        { from: 'two', to: 'hub', type: 'MENTIONS' },
+        { from: 'hub', to: 'far', type: 'RELATED_TO', strength: 0.8 },
+        { from: 'one', to: 'two', type: 'CONTRADICTS' },
+      ],
+      degrees: { hub: 40 },
+      structural: ['hub'],
+    };
+    const seeds = [{ nodeId: 'one' }, { nodeId: 'two' }];
+
+    const unsupported = await spreadActivation(fetchOver(fixture), {
+      seeds,
+      budget: BASE_BUDGET,
+    });
+    const supported = await spreadActivation(fetchOver(fixture), {
+      seeds: seeds.map((seed) => ({ ...seed, cueSupported: true })),
+      budget: BASE_BUDGET,
+    });
+
+    // Support is bookkeeping beside the arithmetic. Strip the one field and the two runs are
+    // the same run: same scores, same hops, same reported paths, same order, same termination.
+    const withoutSupport = (run: ActivationRun) =>
+      run.activated.map(({ cueSupported: _cueSupported, ...rest }) => rest);
+    expect(withoutSupport(supported)).toEqual(withoutSupport(unsupported));
+    expect(supported.iterations).toBe(unsupported.iterations);
+    expect(supported.nodesVisited).toBe(unsupported.nodesVisited);
+    expect(supported.termination).toBe(unsupported.termination);
+    expect(supported.activated.every((node) => node.cueSupported)).toBe(true);
+    expect(unsupported.activated.some((node) => node.cueSupported)).toBe(false);
   });
 });
 

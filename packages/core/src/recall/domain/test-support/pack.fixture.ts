@@ -87,6 +87,7 @@ export function report(items: readonly FusedItem[]): AdmissionReport {
     droppedNearDuplicate: 0,
     anchored: items.length > 0,
     typedAdmitted: 0,
+    pathAdmitted: 0,
   };
 }
 

@@ -12,6 +12,7 @@ import {
   type Measurement,
   type TypedInboundEvidence,
 } from './admission.js';
+import { admitByPathStrength, admitEntry } from './path-admission.js';
 import { applyClusterCap, mmrOrder } from './ranking.js';
 import type { Currency, SupersededBy } from '../../infrastructure/graph/read-modes.js';
 import type { Vector } from '../../infrastructure/providers/types.js';
@@ -148,6 +149,14 @@ export type FusionOptions = {
    * same map rather than fetching its own (see `ranking.ts`).
    */
   readonly vectors?: ReadonlyMap<string, Vector>;
+  /**
+   * The disclosed path-strength lane's own budget (`AION_RECALL_PATH_STRENGTH_SLOTS`): how many
+   * activation-only arrivals with no qualifying cosine and no exact match may still reach the
+   * pack, on the strength of their own accumulated activation alone. Zero turns the lane off and
+   * leaves the gate exactly as it was before it existed; the floor policy itself is untouched
+   * either way.
+   */
+  readonly pathStrengthSlots: number;
 };
 
 /**
@@ -163,7 +172,8 @@ export function reciprocalRank(rank: number, k: number): number {
   return 1 / (k + rank + 1);
 }
 
-type Accumulator = {
+/** Exported for `path-admission.ts`, which folds an admitted entry in the same shape `fuse` does. */
+export type Accumulator = {
   best: FusionCandidate;
   score: number;
   relevance: number;
@@ -194,8 +204,11 @@ function prefer(held: Accumulator, candidate: FusionCandidate): boolean {
   return candidate.rationale.method.localeCompare(held.best.rationale.method) < 0;
 }
 
-/** The strongest boost any of the item's labels carries; 1 when none of them carries one. */
-function boostFor(
+/**
+ * The strongest boost any of the item's labels carries; 1 when none of them carries one.
+ * Exported for `path-admission.ts`, which ranks through `admitEntry` the same way `fuse` does.
+ */
+export function boostFor(
   labels: readonly string[],
   boosts: Readonly<Record<string, number>> | undefined,
 ): number {
@@ -222,7 +235,7 @@ const MENTION_SALIENCE_WEIGHT = 0.1;
  * the baseline nothing should rank below. Combines with `boostFor` by multiplication, the same
  * way the two priors would combine if `labelBoosts` ever named an Entity label.
  */
-function mentionSalience(mentionCount: number | undefined): number {
+export function mentionSalience(mentionCount: number | undefined): number {
   if (mentionCount === undefined || mentionCount <= 1) {
     return 1;
   }
@@ -316,6 +329,7 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
   const items: FusedItem[] = [];
   const decisions: AdmissionDecision[] = [];
   const methodStats = new Map<Rationale['method'], MethodLegStat>();
+  const unmeasuredArrivals: Accumulator[] = [];
   let droppedBelowFloor = 0;
   let droppedUnmeasured = 0;
   let droppedUnmeasuredArrival = 0;
@@ -348,6 +362,10 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
       if (entry.activation !== undefined) {
         droppedUnmeasuredArrival += 1;
         rejected('unmeasured_arrival');
+        // Kept for the disclosed path-strength lane below. Recorded as refused either way: the
+        // lane runs after every ordinary decision is final, and whether it later rescues a few
+        // of these changes nothing about how many the floors themselves turned away.
+        unmeasuredArrivals.push(entry);
         continue;
       }
       rejected('unmeasured');
@@ -357,53 +375,14 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
     if (evidence.rule === 'typed_admission') {
       typedAdmitted += 1;
     }
-    const superseded = entry.best.currency === 'superseded';
-    const ranked =
-      entry.score *
-      boostFor(entry.best.labels, options.labelBoosts) *
-      mentionSalience(entry.best.mentionCount);
-    const fusedScore = superseded ? ranked * SUPERSEDED_RANK_WEIGHT : ranked;
-    decisions.push({
-      id: entry.best.id,
-      reason: 'admitted',
-      measurements: [...entry.evidence],
-      relevance: entry.relevance,
-      ...(entry.activation === undefined ? {} : { activation: entry.activation }),
-      rule: evidence.rule,
-      score: evidence.score,
-      fusedScore,
-    });
-    items.push({
-      ...entry.best,
-      relevance: entry.relevance,
-      // What the rule read, not the best number anything measured. An item admitted on a
-      // verbatim lexical hit used to print whatever weak cosine another leg returned for it,
-      // which is how a pack showed 0.53 beside a 0.55 floor and read as a gate with a hole.
-      measured: evidence.score,
-      admittedBy: evidence,
-      // The merged evidence, not the winning candidate's own: the gate counted every
-      // measurement, and a reader of the item downstream has to see the same set.
-      evidence: [...entry.evidence],
-      // The merged typed evidence, for the same reason: the ledger writer downstream reads this
-      // off the item rather than re-deriving it from the rationale string.
-      ...(entry.typedEvidence === undefined ? {} : { typedEvidence: entry.typedEvidence }),
-      score: fusedScore,
-    });
-
-    // A find two or more methods both made is shared for every one of them, not credited to
-    // whichever `prefer` picked to explain the item: that credited a shared find to its
-    // strongest leg alone and left every other contributing method reading as a sole find of
-    // zero, which is what made activation's real share invisible in `aion stats`.
-    const shared = entry.methodContribution.size > 1;
-    for (const [method, contribution] of entry.methodContribution) {
-      const stat = methodStats.get(method) ?? { sole: 0, shared: 0, rrfContribution: 0 };
-      methodStats.set(method, {
-        sole: stat.sole + (shared ? 0 : 1),
-        shared: stat.shared + (shared ? 1 : 0),
-        rrfContribution: stat.rrfContribution + contribution,
-      });
-    }
+    admitEntry(entry, evidence, options, items, decisions, methodStats);
   }
+
+  // The disclosed lane, after the ordinary gate has finished with every candidate: it needs the
+  // whole rejected population to rank against, which a per-candidate rule cannot see. Never
+  // flips `anchored`: that flag means the query's own evidence cleared something, and a path
+  // admission is evidence of graph reach, not of answering the query.
+  const pathAdmitted = admitByPathStrength(unmeasuredArrivals, options, items, decisions, methodStats);
 
   items.sort(compareFused);
   // Merging by id above is the whole of the identity question fusion can answer. Two ids carrying
@@ -451,6 +430,7 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
       droppedNearDuplicate: items.length - capped.length,
       anchored,
       typedAdmitted,
+      pathAdmitted,
       decisions: decisions.slice(0, ADMISSION_DECISION_CAP),
       decisionsTruncated: decisions.length > ADMISSION_DECISION_CAP,
     },

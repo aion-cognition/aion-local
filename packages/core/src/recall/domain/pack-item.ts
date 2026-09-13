@@ -55,6 +55,7 @@ const RULE_PHRASES: Readonly<Record<AdmissionRule, string>> = {
   bm25_any: 'uncalibrated lexical hit',
   context_threshold: 'context threshold',
   typed_admission: 'typed tier',
+  path_strength: 'path strength',
 };
 
 /**

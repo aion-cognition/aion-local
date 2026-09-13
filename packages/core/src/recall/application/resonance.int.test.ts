@@ -299,6 +299,7 @@ function activationOf(...ids: readonly string[]): readonly ActivatedNode[] {
     pathSummary: '(seed)',
     currency: { currency: 'current' },
     isStructural: false,
+    cueSupported: true,
   }));
 }
 
@@ -321,7 +322,6 @@ describe('a substrate with no context vectors written yet', () => {
       {
         activated: activationOf(ANCHOR_ID, ACTIVE_TEAM_ID),
         exclude: new Set([ANCHOR_ID, ACTIVE_TEAM_ID]),
-        anchoredIds: new Set([ANCHOR_ID, ACTIVE_TEAM_ID]),
         mode: withCurrency(),
       },
     );
@@ -412,6 +412,28 @@ describe('once reflection has summarized every neighborhood', () => {
     expect(pack.metadata.admission.admitted).toBeGreaterThan(0);
   });
 
+  /**
+   * The case R3 exists for. `exclude` here holds only the seed itself, the same shape fusion
+   * leaves it in when it admits nothing at all, and the second pass still finds the target
+   * because the anchor's own activation carries real evidence: a cue-seeded path reached it.
+   * Resonance no longer asks what fusion admitted before deciding whether to run. The sibling
+   * surfaces too, since its neighborhood is nearly the anchor's own; the target's presence
+   * beside it is the acceptance claim, not the exact ranking between the two.
+   */
+  it('fires from a genuinely activated node even when fusion admitted nothing at all', async () => {
+    const result = await resonate(
+      { driver: harness.driver, config: config(), logger },
+      {
+        activated: activationOf(ANCHOR_ID),
+        exclude: new Set([ANCHOR_ID]),
+        mode: withCurrency(),
+      },
+    );
+
+    expect(result.skipped).toBeUndefined();
+    expect(result.items.map((item) => item.id)).toContain(TARGET_ID);
+  });
+
   // How much of the activated set had been through reflection's last stage when the second
   // pass ran, which tells a quiet stage apart from a cold substrate.
   it('reports how much of the activated set carried a context vector', async () => {
@@ -420,7 +442,6 @@ describe('once reflection has summarized every neighborhood', () => {
       {
         activated: activationOf(ANCHOR_ID, ACTIVE_TEAM_ID, SIBLING_ID),
         exclude: new Set([ANCHOR_ID, ACTIVE_TEAM_ID, SIBLING_ID]),
-        anchoredIds: new Set([ANCHOR_ID, ACTIVE_TEAM_ID, SIBLING_ID]),
         mode: withCurrency(),
       },
     );

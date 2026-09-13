@@ -799,6 +799,13 @@ source's complete coverage must stand before its raw projection may go, measured
 clocks and never from `occurred_at`. `AION_MAINTENANCE_EPISODE_EVICT_BATCH` (default `8`) bounds
 eviction attempts per invocation, one source each.
 
+`AION_RECALL_PATH_STRENGTH_SLOTS` (default `2`) bounds the disclosed path-strength lane: how many
+activation-only arrivals with no qualifying cosine and no exact match may still reach a pack, per
+pack, admitted on their own accumulated activation score rather than on any content floor. The
+floor policy itself is untouched by this knob; the lane is a separate, bounded door, marked
+`path_strength` in `admitted_by` so a reader can see which door an item came through. Set it to
+`0` to turn the lane off and get a pack byte-identical to one built before it existed.
+
 ## Reflection concurrency
 
 `AION_WORKER_COUNT` (default `1`) sets how many episodes the reflection worker claims and

@@ -291,6 +291,110 @@ describe('typed admission', () => {
   });
 });
 
+/** An activation-only arrival with no qualifying cosine and no exact match: `unmeasured_arrival`. */
+function pathOnlyArrival(id: string, activation: number): FusionCandidate {
+  return {
+    id,
+    labels: ['Episode', 'Memory'],
+    content: `content of ${id}`,
+    currency: 'current',
+    rationale: { method: 'activation', score: activation, path: `anchor -[MENTIONS]-> ${id}` },
+    relevance: 0,
+    activation,
+    evidence: [],
+  };
+}
+
+describe('the disclosed path-strength lane', () => {
+  it('leaves an unmeasured arrival refused with the lane off, same as before the lane existed', () => {
+    const result = fuse([list('graph_traversal', [pathOnlyArrival('reached', 0.4)])], {
+      ...RRF,
+      admission: CALIBRATED,
+      pathStrengthSlots: 0,
+    });
+
+    expect(result.items).toEqual([]);
+    expect(result.admission.droppedUnmeasuredArrival).toBe(1);
+    expect(result.admission.pathAdmitted).toBe(0);
+  });
+
+  it('admits the arrival on its own activation, marked path_strength with its path in the rationale', () => {
+    const result = fuse([list('graph_traversal', [pathOnlyArrival('reached', 0.4)])], {
+      ...RRF,
+      admission: CALIBRATED,
+      pathStrengthSlots: 1,
+    });
+
+    expect(ids(result.items)).toEqual(['reached']);
+    expect(result.items[0]?.rationale.method).toBe('activation');
+    expect(result.items[0]?.rationale.path).toContain('reached');
+    expect(result.items[0]?.admittedBy).toEqual({
+      rule: 'path_strength',
+      score: 0.4,
+      qualifying: ['activation 0.40'],
+    });
+    expect(result.admission.pathAdmitted).toBe(1);
+    // Real reach, not the query's own evidence: the floor-cleared flag stays false.
+    expect(result.admission.anchored).toBe(false);
+  });
+
+  it('bounds the lane to its own slot count, strongest activation first', () => {
+    const result = fuse(
+      [
+        list('graph_traversal', [
+          pathOnlyArrival('weaker', 0.3),
+          pathOnlyArrival('stronger', 0.5),
+        ]),
+      ],
+      { ...RRF, admission: CALIBRATED, pathStrengthSlots: 1 },
+    );
+
+    expect(ids(result.items)).toEqual(['stronger']);
+    expect(result.admission.pathAdmitted).toBe(1);
+    expect(result.admission.droppedUnmeasuredArrival).toBe(2);
+  });
+
+  it('never reaches for an item the floor refused on a measured cosine', () => {
+    const belowFloor = candidate('measured', {
+      method: 'activation',
+      relevance: 0,
+      activation: 0.9,
+      evidence: [{ method: 'vector', relevance: 0.4, cue: 'outbox table' }],
+    });
+    const result = fuse([list('graph_traversal', [belowFloor])], {
+      ...RRF,
+      admission: CALIBRATED,
+      pathStrengthSlots: 2,
+    });
+
+    // A high activation score does not buy a second chance for a candidate something already
+    // measured against the query and found short: the lane is disclosed reach for what no
+    // floor could ever judge, not a rescue for what one already refused.
+    expect(result.items).toEqual([]);
+    expect(result.admission.droppedBelowFloor).toBe(1);
+    expect(result.admission.pathAdmitted).toBe(0);
+  });
+
+  it('leaves the pack byte-identical to the floor-only gate when the knob is 0', () => {
+    const lists = [
+      list('vector', [candidate('kept', { relevance: 0.8 })]),
+      list('graph_traversal', [
+        candidate('kept', { relevance: 0.8 }),
+        pathOnlyArrival('reached', 0.4),
+      ]),
+    ];
+
+    const off = fuse(lists, { ...RRF, admission: CALIBRATED, pathStrengthSlots: 0 });
+    const on = fuse(lists, { ...RRF, admission: CALIBRATED, pathStrengthSlots: 2 });
+
+    expect(ids(off.items)).toEqual(['kept']);
+    expect(ids(on.items)).toEqual(['kept', 'reached']);
+    // Turning the knob off removes exactly the lane's own admission and nothing else: the
+    // floor-cleared item's own score and rule are untouched either way.
+    expect(off.items[0]).toEqual(on.items.find((item) => item.id === 'kept'));
+  });
+});
+
 describe('the admission report', () => {
   it('names the floor it used and counts what it dropped', () => {
     const result = fuse(
@@ -327,6 +431,7 @@ describe('the admission report', () => {
       droppedNearDuplicate: 0,
       anchored: true,
       typedAdmitted: 0,
+      pathAdmitted: 0,
     });
 
     // The same four candidates, said one at a time: the counters cannot name which of them the

@@ -290,6 +290,14 @@ export const KNOBS = {
     // Typed-admission kill switch and floor; admission.ts's AdmissionPolicy has the reasoning.
     typedAdmission: ['AION_RECALL_TYPED_ADMISSION', z.boolean(), true],
     typedAdmissionActivationFloor: ['AION_TYPED_ADMISSION_ACTIVATION_FLOOR', proportion, 0.14],
+    // The disclosed path-strength lane's own budget: how many activation-only arrivals with no
+    // qualifying cosine and no exact match may still reach a pack, per pack, on the strength of
+    // their own accumulated activation alone (`fusion.ts`'s `admitByPathStrength`). The floor
+    // policy above is unchanged either way; this is a separate, bounded door rather than a
+    // second floor. 2 by Ryan's word in the recalibration plan: enough to disclose a genuine
+    // graph-only find without competing for the floors' own slots. 0 turns the lane off and
+    // leaves a pack byte-identical to one built before it existed.
+    pathStrengthSlots: ['AION_RECALL_PATH_STRENGTH_SLOTS', nonNegativeInt, 2],
   },
   search: {
     methods: [

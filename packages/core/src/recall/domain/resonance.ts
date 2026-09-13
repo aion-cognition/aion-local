@@ -22,6 +22,33 @@ export type ActivationWeight = {
 };
 
 /**
+ * What `usableForCentroid` needs to judge one activated node: its id, its own structural flag,
+ * and where its activation came from.
+ */
+export type CentroidCandidate = ActivationWeight & {
+  readonly isStructural: boolean;
+  readonly cueSupported: boolean;
+};
+
+/**
+ * The activated set, minus the part of it that says nothing about the query: a node the graph's
+ * own plumbing (the Member, the global Workspace, a Session) rather than a memory, and a node no
+ * cue-seeded path ever contributed to.
+ *
+ * The second test is about the source of the activation, not the label on the node. A seed the
+ * recency leg nominated is eligible the moment a cue-found seed also reaches it, because a
+ * nomination cannot cancel support the same run went and found; a memory the spread reached only
+ * by walking out of a recency seed, however many real edges it crossed, is not, because nothing
+ * on that walk ever measured the query. The spread answers both cases in one pass and hands the
+ * answer over as `cueSupported` (`domain/activation.ts`).
+ */
+export function usableForCentroid<T extends CentroidCandidate>(
+  activated: readonly T[],
+): readonly T[] {
+  return activated.filter((node) => !node.isStructural && node.cueSupported);
+}
+
+/**
  * The activation-weighted mean of the context vectors of the activated set, and `undefined`
  * when the set cannot produce one: no activated node carries a context vector yet, every
  * activation score is zero, or the vectors disagree about their dimension.

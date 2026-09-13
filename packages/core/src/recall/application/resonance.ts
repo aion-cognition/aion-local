@@ -8,7 +8,7 @@ import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Vector } from '../../infrastructure/providers/types.js';
 import type { ActivatedNode } from '../domain/activation.js';
 import type { FusedItem } from '../domain/fusion.js';
-import { contextCentroid, resonantItem } from '../domain/resonance.js';
+import { contextCentroid, resonantItem, usableForCentroid } from '../domain/resonance.js';
 
 /**
  * Context resonance, the second pass. The first pass answers what the query asked about; this
@@ -24,27 +24,34 @@ import { contextCentroid, resonantItem } from '../domain/resonance.js';
  * the other, so the honest bar is the one the algorithm specifies, and the value it carries sits
  * above the content floor rather than under it. The bucket is a second way in, not a lower one.
  *
- * WHAT THE CENTROID IS BUILT FROM. Only the activated nodes the first pass actually admitted,
- * weighted by activation. The rest of the activated set is whatever the seed legs reached,
- * recency included, and a mean over all of it lands near the substrate's centre of mass, where
- * cosine to the busiest nodes in the graph is high by construction and says nothing.
+ * WHAT THE CENTROID IS BUILT FROM. The whole activated set, weighted by activation, minus the
+ * part of it that carries no evidence about the query: a structural node (the graph's own
+ * plumbing, traversed but never a memory) and a node no cue-seeded path ever contributed to
+ * (`usableForCentroid` in `domain/resonance.ts`). Fusion's own admission is not the filter:
+ * whether the first pass could ANSWER the query and whether the spread reached something worth
+ * averaging are different questions, and conditioning the second pass on the first's admission
+ * is exactly the cap this stage used to carry (`no_anchor` below has kept its name; what
+ * qualifies for it has not).
  *
- * Measured on the live substrate. A centroid over forty arbitrary context vectors returns
- * Postgres, Datadog, psql and a preference about squash merges at 0.95 to 0.98, and it returns
- * them for a nonsense query as readily as for a real one. The centroid of the one node a
- * nonsense query did admit returns that node's own neighborhood: the Unicode and multilingual
- * test memories around it, at 0.996 and up. Same threshold, same query, opposite answers. The
- * threshold was never the discriminator; the source of the centroid is.
+ * Measured on the live substrate, against the OLD anchored-only design this replaced. A centroid
+ * over forty arbitrary context vectors returns Postgres, Datadog, psql and a preference about
+ * squash merges at 0.95 to 0.98, and it returns them for a nonsense query as readily as for a
+ * real one: averaging the whole activated set with no exclusion is the failure the support
+ * filter exists to prevent. The centroid of the one node a nonsense query used to admit returns
+ * that node's own neighborhood: the Unicode and multilingual test memories around it, at 0.996
+ * and up. Same threshold, same query, opposite answers. The threshold was never the
+ * discriminator; the source of the centroid is, which is why the filter reads where each node's
+ * activation came from rather than fusion's verdict: the nonsense query's sole activation was a
+ * recency seed no cue ever reached, so the corrected stage excludes it and finds nothing to
+ * average either, honestly rather than by accident of what fusion happened to admit.
  *
- * WHAT IT REFUSES TO RUN ON. The centroid is only meaningful when the first pass found
- * something. If nothing cleared admission on its own evidence there is nothing to take a mean
- * of, and resonating from the rest would hand back memories related to the shape of nothing at
- * all. That is the failure the floors exist to prevent, so the stage declines the query
- * instead. For the same reason the bucket is capped at how many admitted items the spread also
- * activated: resonance elaborates an answer and may not become one, and a pack that admitted a
- * single marginal fact has no business carrying five associations behind it. A seed that fell
- * under `min_activation` is admitted without ever entering the activated set, so the cap can
- * sit under the pack's own item count.
+ * WHAT IT REFUSES TO RUN ON. The centroid is only meaningful when something in the activated
+ * set carries real evidence about the query: a seed a content or lexical strategy found, or a
+ * node the spread reached along a path that started at one. Resonance runs precisely when fusion
+ * admitted nothing but that evidence still exists — that is the case the stage exists for, since
+ * a query fusion answered directly has less need of a second way in. Only when NOTHING usable
+ * survives the exclusion does the stage decline: resonating from recency or structural plumbing
+ * alone would hand back memories related to the shape of nothing at all.
  */
 
 export type ResonanceDeps = {
@@ -62,20 +69,16 @@ export type ResonanceInput = {
    * twice under two rationales explains itself with neither.
    */
   readonly exclude: ReadonlySet<string>;
-  /**
-   * What the first pass admitted: the ids of the items in the pack. These are the centroid's
-   * whole input, and how many there are caps how many resonant hits may sit behind them.
-   */
-  readonly anchoredIds: ReadonlySet<string>;
   readonly mode: ReadMode;
 };
 
 /**
  * Why a run produced nothing, distinguished because they are different states with different
  * responses. `disabled` is a setting, `no_activation` is a spread that reached nothing,
- * `no_anchor` is a query the substrate could not answer, `no_context_vectors` is a substrate
- * whose enrichment has not caught up, and `unavailable` is an outage in a stage the caller is
- * not entitled to lose a pack over.
+ * `no_anchor` is activation with nothing usable in it (every node was structural, unreached by
+ * any cue-seeded path, or both), `no_context_vectors` is a substrate whose enrichment has not
+ * caught up, and
+ * `unavailable` is an outage in a stage the caller is not entitled to lose a pack over.
  */
 export type ResonanceSkip =
   'disabled' | 'no_activation' | 'no_anchor' | 'no_context_vectors' | 'unavailable';
@@ -104,21 +107,21 @@ function skip(skipped: ResonanceSkip, activated: number, covered = 0): Resonance
 }
 
 /**
- * The centroid over the anchored part of the activated set, or `undefined` when none of those
+ * The centroid over the usable part of the activated set, or `undefined` when none of those
  * nodes has been through reflection's last stage. `covered` counts the same restricted set, so
  * a quiet stage still reports coverage of what it actually tried to average.
  */
 async function centroidOf(
   deps: ResonanceDeps,
-  anchored: readonly ActivatedNode[],
+  usable: readonly ActivatedNode[],
   mode: ReadMode,
 ): Promise<{ centroid?: Vector; covered: number }> {
   const rows = await contextVectors(deps.driver, {
-    ids: anchored.map((node) => node.nodeId),
+    ids: usable.map((node) => node.nodeId),
     mode,
   });
   const vectors = new Map<string, Vector>(rows.map((row) => [row.id, row.vector]));
-  const centroid = contextCentroid(anchored, vectors);
+  const centroid = contextCentroid(usable, vectors);
   return { ...(centroid === undefined ? {} : { centroid }), covered: vectors.size };
 }
 
@@ -162,14 +165,17 @@ export async function resonate(
   if (activated === 0) {
     return skip('no_activation', activated);
   }
-  const anchored = input.activated.filter((node) => input.anchoredIds.has(node.nodeId));
-  if (anchored.length === 0) {
-    deps.logger.debug({ activated }, 'context resonance skipped: the first pass anchored nothing');
+  const usable = usableForCentroid(input.activated);
+  if (usable.length === 0) {
+    deps.logger.debug(
+      { activated },
+      'context resonance skipped: nothing but recency or structural plumbing activated',
+    );
     return skip('no_anchor', activated);
   }
 
   try {
-    const { centroid, covered } = await centroidOf(deps, anchored, input.mode);
+    const { centroid, covered } = await centroidOf(deps, usable, input.mode);
     if (centroid === undefined) {
       deps.logger.debug(
         { activated, covered },
@@ -181,13 +187,13 @@ export async function resonate(
     const hits = await resonantNodes(deps.driver, {
       centroid,
       threshold: deps.config.contextResonance.contextSearchThreshold,
-      limit: Math.min(deps.config.contextResonance.resonantLimit, anchored.length),
+      limit: deps.config.contextResonance.resonantLimit,
       exclude: input.exclude,
       mode: input.mode,
     });
     const items = await hydrateHits(deps, hits, input.mode);
     deps.logger.debug(
-      { activated, anchored: anchored.length, covered, hits: hits.length, items: items.length },
+      { activated, usable: usable.length, covered, hits: hits.length, items: items.length },
       'context resonance ran',
     );
     return { items, covered, activated, centroid };

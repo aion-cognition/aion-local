@@ -81,6 +81,7 @@ function activated(...ids: readonly string[]): readonly ActivatedNode[] {
     pathSummary: '(seed)',
     currency: { currency: 'current' },
     isStructural: false,
+    cueSupported: true,
   }));
 }
 

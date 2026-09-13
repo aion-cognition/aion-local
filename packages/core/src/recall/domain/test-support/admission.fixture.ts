@@ -24,5 +24,6 @@ export function admittedAll(count: number): AdmissionReport {
     droppedNearDuplicate: 0,
     anchored: count > 0,
     typedAdmitted: 0,
+    pathAdmitted: 0,
   };
 }

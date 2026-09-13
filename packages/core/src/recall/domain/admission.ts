@@ -120,6 +120,15 @@ export type AdmissionReport = {
    */
   readonly typedAdmitted: number;
   /**
+   * Admitted through the disclosed path-strength lane (`path-admission.ts`) rather than any of
+   * the floors: an activation-only arrival with no qualifying cosine and no exact match, let in on
+   * its own accumulated activation score, bounded to `pathStrengthSlots` per pack. Counted
+   * apart for the same reason `typedAdmitted` is: a thin pack can say the lane found something
+   * every floor refused, rather than folding it into `admitted` where it reads the same as
+   * every other rule.
+   */
+  readonly pathAdmitted: number;
+  /**
    * What the gate decided per candidate, in the order it decided, cut at
    * `ADMISSION_DECISION_CAP`. Absent on a report built by hand rather than by the gate.
    */
@@ -401,6 +410,7 @@ export function toAdmissionOutput(report: AdmissionReport): AdmissionReportOutpu
     dropped_duplicate_content: report.droppedDuplicateContent,
     dropped_near_duplicate: report.droppedNearDuplicate,
     typed_admitted: report.typedAdmitted,
+    path_admitted: report.pathAdmitted,
     vector_floor: report.policy.vectorFloor,
     corroboration_floor: report.policy.corroborationFloor,
     bm25_mode: report.policy.bm25Mode,
