@@ -31,6 +31,22 @@ const API_PRICES: ReadonlyMap<string, TokenPrices> = new Map([
   ['claude-haiku-4-5-20251001', HAIKU_45_PRICES],
 ]);
 
+/**
+ * The rate a model the table does not carry is bounded at: the top of the same published card,
+ * which is $10 per million input tokens and $50 per million output tokens. Cache writes and cache
+ * reads keep the card's own ratios to ordinary input, 1.25 and 0.1.
+ *
+ * It is a bound and not a price. Billing never uses it, because an unlisted model's real charge
+ * is unknown and `estimateApiCost` says so. A ceiling has to say something before the dispatch,
+ * and the most expensive published rate is the one number that cannot be under the bill.
+ */
+const UNLISTED_MODEL_PRICES: TokenPrices = {
+  input: 10,
+  output: 50,
+  cacheCreation: 12.5,
+  cacheRead: 1,
+};
+
 /** Unpriced models return undefined, never an invented zero-dollar estimate. */
 export function estimateApiCost(
   call: Pick<
@@ -51,4 +67,45 @@ export function estimateApiCost(
         call.cacheReadTokens * price.cacheRead)) /
     1_000_000
   );
+}
+
+export type ApiCostBound = {
+  readonly model: string;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly pricingTier: ApiPricingTier;
+  /**
+   * Whether the request carries a cache marker, which is the only way its input can be billed at
+   * the cache-write rate. A request without one cannot reach that class, so pricing every hold
+   * there would hold dollars no request of that shape can spend.
+   */
+  readonly cacheWrite: boolean;
+};
+
+/**
+ * The most one dispatch can cost, before its answer says what it did cost.
+ *
+ * Two things separate it from `estimateApiCost`. A model the price table does not carry is
+ * bounded at the top of the published card rather than passed through as unknown: a dollar
+ * ceiling that waves an unpriced dispatch past it is not a ceiling. And the input is priced at
+ * the class the request can actually be billed at, so a prompt that could bill as a cache write
+ * is held at the cache-write rate rather than at the cheaper ordinary one.
+ *
+ * `priced` says which of the two cards the number came from, so the day's report can name the
+ * dispatches it is bounding rather than pricing.
+ */
+export function boundApiCost(bound: ApiCostBound): {
+  readonly maxUsd: number;
+  readonly priced: boolean;
+} {
+  const price = API_PRICES.get(bound.model);
+  const card = price ?? UNLISTED_MODEL_PRICES;
+  const inputRate = bound.cacheWrite ? card.cacheCreation : card.input;
+  return {
+    maxUsd:
+      (multiplierFor(bound.pricingTier) *
+        (bound.inputTokens * inputRate + bound.outputTokens * card.output)) /
+      1_000_000,
+    priced: price !== undefined,
+  };
 }

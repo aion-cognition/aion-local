@@ -287,6 +287,38 @@ export async function findEntityMentionContexts(
 }
 
 /**
+ * Which of these mentioning episodes a reader can still see.
+ *
+ * A re-synthesis prompt is grounded in the episodes it selected, so what its answer has to be
+ * checked against is those ids. A count of whatever mentions the entity carries now is a
+ * different question: five sources can go out, one of them can be forgotten while the request is
+ * at the remote, and four will still be standing when the answer lands.
+ */
+const FIND_READABLE_MENTION_SOURCES = [
+  `MATCH (ep:Episode)-[:${ENTITY_MENTION_TYPE}]->(:${BASE_NODE_LABEL}:${ENTITY_LABEL} { id: $entityId })`,
+  `WHERE ep.id IN $episodeIds AND ep.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  'RETURN ep.id AS episode_id',
+].join('\n');
+
+export async function readableMentionSources(
+  driver: Driver,
+  entityId: string,
+  episodeIds: readonly string[],
+): Promise<string[]> {
+  if (episodeIds.length === 0) {
+    return [];
+  }
+  return runRead(
+    driver,
+    {
+      cypher: FIND_READABLE_MENTION_SOURCES,
+      parameters: { entityId, episodeIds: [...episodeIds] },
+    },
+    (row: Row) => row.episode_id as string,
+  );
+}
+
+/**
  * Rewrites the description in place. The old value moves to `prior_descriptions` rather than
  * being dropped: Neo4j properties cannot hold a list of objects, so provenance for one entry
  * (who wrote it, when) is not attached per string, and lives instead on the node as the single
@@ -297,6 +329,13 @@ export async function findEntityMentionContexts(
  * the two, long enough for a merge, an identifier decay, or `aion forget` to close the entity,
  * and this write is an in-place replacement with no bitemporal close to undo it.
  *
+ * A caller that is publishing an answer about a gloss it read earlier names that gloss and the
+ * sources the answer was grounded in, and both are tested inside this statement rather than
+ * before it. The window between any check and this write holds an embed, and a description
+ * another pass committed in that window must not be overwritten by the answer to the older
+ * question. `$expectedText` and `$sourceCount` are null for a caller writing a description it
+ * derived from the node it is looking at, which has no earlier reading to defend.
+ *
  * The append is conditional because an entity whose gloss a correction retired carries no
  * `text` at all (`subject-family.ts`), and Neo4j refuses a list holding a null. This write is
  * what re-derives such a gloss, which is why it also clears the retirement stamp: the node
@@ -305,6 +344,12 @@ export async function findEntityMentionContexts(
 const REFRESH_ENTITY_DESCRIPTION = [
   `MATCH (e:${BASE_NODE_LABEL}:${ENTITY_LABEL} { id: $id })`,
   `WHERE ${currentOnly('e')}`,
+  `  AND ($expectedText IS NULL OR coalesce(e.${MEMORY_PROPERTIES.text}, '') = $expectedText)`,
+  `OPTIONAL MATCH (ep:Episode)-[:${ENTITY_MENTION_TYPE}]->(e)`,
+  `  WHERE ep.id IN $sources AND ep.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
+  // Distinct, because one episode reaching the entity twice is one readable source.
+  'WITH e, count(DISTINCT ep) AS readable',
+  'WHERE $sourceCount IS NULL OR readable = $sourceCount',
   `SET e.${PRIOR_DESCRIPTIONS_PROPERTY} = CASE WHEN e.${MEMORY_PROPERTIES.text} IS NULL`,
   `      THEN coalesce(e.${PRIOR_DESCRIPTIONS_PROPERTY}, [])`,
   `      ELSE coalesce(e.${PRIOR_DESCRIPTIONS_PROPERTY}, []) + [e.${MEMORY_PROPERTIES.text}] END,`,
@@ -324,6 +369,10 @@ export type RefreshEntityDescriptionInput = {
   readonly contentVector: Vector;
   readonly mentionCount: number;
   readonly now: Date;
+  /** The gloss this answer revised. The write matches only while the node still says it. */
+  readonly expectedText?: string;
+  /** The mentions the answer was grounded in. The write matches only while all are readable. */
+  readonly sources?: readonly string[];
 };
 
 export async function refreshEntityDescription(
@@ -342,6 +391,10 @@ export async function refreshEntityDescription(
         mentionCount: toGraphInteger(input.mentionCount),
         now: toGraphDateTime(input.now),
         method: DESCRIPTION_REFRESH_METHOD,
+        expectedText: input.expectedText ?? null,
+        sources: input.sources === undefined ? [] : [...input.sources],
+        sourceCount:
+          input.sources === undefined ? null : toGraphInteger(new Set(input.sources).size),
       },
     },
     (row: Row) => row.id as string,

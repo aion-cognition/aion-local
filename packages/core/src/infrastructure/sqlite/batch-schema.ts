@@ -18,6 +18,12 @@
 export const BATCH_SCHEMA_STATEMENTS: readonly string[] = [
   `CREATE TABLE IF NOT EXISTS batch_work (
     work_key TEXT PRIMARY KEY,
+    -- The producer's own identity for this question, in full. The work key above is what the
+    -- remote accepts as a custom_id, which is letters, digits, underscores and hyphens inside
+    -- 64 characters, so a producer whose identity is longer or punctuated sends a digest of it
+    -- and writes the identity here. That makes the mapping back unambiguous without asking the
+    -- surface to re-derive it, and it is the work key itself where the two are the same.
+    durable_key TEXT NOT NULL,
     substrate_id TEXT NOT NULL,
     surface TEXT NOT NULL,
     -- What the request was built against, as the surface's own handler reads it back.

@@ -26,7 +26,7 @@ export type OpenSpendReservation = {
   readonly surface: string;
   readonly route: SpendRoute;
   readonly reservedUsd: number;
-  /** False where the model has no price, which is a call no dollar ceiling can bound. */
+  /** False where the hold came from the fallback card rather than the model's own price. */
   readonly priced: boolean;
 };
 
@@ -38,7 +38,15 @@ export type SpendDayTotals = {
   readonly inFlightUsd: number;
   /** Requests in flight, including any a dead process left behind. */
   readonly inFlight: number;
-  /** Dispatches against a model the price table does not carry. They bound nothing. */
+  /**
+   * Dispatches that reached the wire and never came back with a charge anyone could size: a
+   * connection lost after the remote accepted the request, a caller that walked away from an
+   * answer it had already paid for, a usage block that would not parse. They count at their
+   * bound and they are named, because a day of them reads exactly like a day of real charges.
+   */
+  readonly unresolved: number;
+  readonly unresolvedUsd: number;
+  /** Dispatches held at the fallback card, because the price table does not carry their model. */
   readonly unpriced: number;
 };
 
@@ -50,6 +58,10 @@ function totalsFor(db: SqliteHandle, day: string): SpendDayTotals {
       `SELECT COALESCE(sum(${COMMITTED}), 0) AS committedUsd,
               COALESCE(sum(CASE WHEN state = 'held' THEN ${COMMITTED} ELSE 0 END), 0) AS inFlightUsd,
               sum(CASE WHEN state = 'held' THEN 1 ELSE 0 END) AS inFlight,
+              sum(CASE WHEN state = 'settled' AND settled_usd IS NULL THEN 1 ELSE 0 END)
+                AS unresolved,
+              COALESCE(sum(CASE WHEN state = 'settled' AND settled_usd IS NULL
+                                THEN reserved_usd ELSE 0 END), 0) AS unresolvedUsd,
               sum(CASE WHEN priced = 0 THEN 1 ELSE 0 END) AS unpriced
        FROM generation_spend
        WHERE day = ? AND state <> 'released'`,
@@ -58,6 +70,8 @@ function totalsFor(db: SqliteHandle, day: string): SpendDayTotals {
     committedUsd: number;
     inFlightUsd: number;
     inFlight: number | null;
+    unresolved: number | null;
+    unresolvedUsd: number;
     unpriced: number | null;
   };
   return {
@@ -65,6 +79,8 @@ function totalsFor(db: SqliteHandle, day: string): SpendDayTotals {
     committedUsd: row.committedUsd,
     inFlightUsd: row.inFlightUsd,
     inFlight: row.inFlight ?? 0,
+    unresolved: row.unresolved ?? 0,
+    unresolvedUsd: row.unresolvedUsd,
     unpriced: row.unpriced ?? 0,
   };
 }
@@ -78,12 +94,13 @@ export type ReserveSpendInput = {
   readonly surface: string;
   readonly route: SpendRoute;
   /**
-   * The most this dispatch can cost, or undefined where the model carries no price. An
-   * unpriced dispatch is recorded and allowed: a ceiling in dollars has nothing to hold it
-   * against, and refusing every call on an unlisted model would make the price table a kill
-   * switch nobody wrote.
+   * The most this dispatch can cost. Every dispatch has one: a model the price table does not
+   * carry is bounded at the fallback card rather than let through as unknown, because headroom
+   * a ceiling cannot measure is headroom it does not have.
    */
-  readonly maxUsd: number | undefined;
+  readonly maxUsd: number;
+  /** False where that bound came from the fallback card, which the day's report names. */
+  readonly priced: boolean;
   readonly ceilingUsd: number;
   readonly now: Date;
 };
@@ -105,11 +122,10 @@ export function reserveGenerationSpend(
   input: ReserveSpendInput,
 ): ReserveSpendOutcome {
   const day = spendDay(input.now);
-  const reservedUsd = input.maxUsd ?? 0;
   return db
     .transaction((): ReserveSpendOutcome => {
       const totals = totalsFor(db, day);
-      if (input.maxUsd !== undefined && totals.committedUsd + input.maxUsd > input.ceilingUsd) {
+      if (totals.committedUsd + input.maxUsd > input.ceilingUsd) {
         return { ok: false, totals, maxUsd: input.maxUsd };
       }
       const reservationId = randomUUID();
@@ -122,8 +138,8 @@ export function reserveGenerationSpend(
         day,
         input.surface,
         input.route,
-        reservedUsd,
-        input.maxUsd === undefined ? 0 : 1,
+        input.maxUsd,
+        input.priced ? 1 : 0,
         input.now.toISOString(),
       );
       return {
@@ -133,8 +149,8 @@ export function reserveGenerationSpend(
           day,
           surface: input.surface,
           route: input.route,
-          reservedUsd,
-          priced: input.maxUsd !== undefined,
+          reservedUsd: input.maxUsd,
+          priced: input.priced,
         },
       };
     })
@@ -144,8 +160,10 @@ export function reserveGenerationSpend(
 /**
  * Reconciles a hold with what the answer actually cost.
  *
- * `usd` undefined leaves the hold at its maximum: a response whose usage block would not parse,
- * or a model the price table cannot price, is a charge of an unknown size rather than none.
+ * `usd` undefined leaves the hold at its bound and marks the dispatch unresolved: a response
+ * whose usage block would not parse, and a request that left the machine and came back with
+ * nothing, are both charges of an unknown size rather than of none. That is the one honest
+ * reading, and it is the reading a day's report has to be able to name.
  *
  * A settled row can be settled again, which is what an answer read in more than one pass needs: a
  * batch is re-read until its rows are terminal, and each pass recomputes the same total from the

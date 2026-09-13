@@ -214,20 +214,23 @@ function adapterDeps(handle: SqliteHandle, fetchImpl: typeof fetch): BatchAdapte
   };
 }
 
-function workKeys(handle: SqliteHandle): string[] {
-  return (
-    handle.prepare('SELECT work_key FROM batch_work ORDER BY work_key').all() as {
-      work_key: string;
-    }[]
-  ).map((row) => row.work_key);
+/** The mentions a prompt about this entity quotes, most recent first, as the producer selects them. */
+function sourcesFor(prefix: string): string[] {
+  return Array.from({ length: MENTION_COUNT }, (_, index) => `${prefix}-mention-${String(index)}`);
 }
 
+/**
+ * The remote id is a digest, so the entity it is about is read from the durable key the row
+ * carries rather than from the id itself.
+ */
 function keyFor(handle: SqliteHandle, entityId: string): string {
-  const key = workKeys(handle).find((candidate) => candidate.includes(entityId));
-  if (key === undefined) {
+  const row = handle
+    .prepare('SELECT work_key FROM batch_work WHERE durable_key LIKE ?')
+    .get(`%:${entityId}:%`) as { work_key: string } | undefined;
+  if (row === undefined) {
     throw new Error(`no batch work was enqueued for ${entityId}`);
   }
-  return key;
+  return row.work_key;
 }
 
 describe('description freshness on the batch lane', () => {
@@ -390,6 +393,7 @@ describe('what the publication revalidates', () => {
         baseline: 1,
         mentions: 5,
         text: POOL_DESCRIPTION,
+        sources: sourcesFor('pool'),
       }),
     ).toBe(false);
   }, 60_000);
@@ -401,23 +405,57 @@ describe('what the publication revalidates', () => {
         baseline: MENTION_COUNT,
         mentions: MENTION_COUNT,
         text: POOL_REFRESHED,
+        sources: sourcesFor('pool'),
       }),
     ).toBe(true);
   }, 60_000);
 
+  it('refuses an answer resting on a source that has gone, however many mentions remain', async () => {
+    expect(
+      await handler().isCurrent(db, {
+        entityId: poolId,
+        baseline: MENTION_COUNT,
+        mentions: MENTION_COUNT,
+        text: POOL_REFRESHED,
+        // Four of the five the prompt quoted, and one episode that never mentioned this entity.
+        sources: [...sourcesFor('pool').slice(1), 'worker-mention-0'],
+      }),
+    ).toBe(false);
+  }, 60_000);
+
   it('leaves the work owed when the guarded write matches no current entity', async () => {
     const item = {
-      workKey: 'description_freshness:gone:1:0000',
+      workKey: 'df-0000',
       revalidation: {
         entityId: 'an-entity-that-was-never-minted',
         baseline: 1,
         mentions: 5,
         text: POOL_DESCRIPTION,
+        sources: sourcesFor('pool'),
       },
     } as unknown as BatchWorkItem;
 
     await expect(
       handler().apply(item, { description: 'a rewrite with nowhere to land' }),
-    ).rejects.toThrow('no longer current');
+    ).rejects.toThrow('moved under its answer');
+  }, 60_000);
+
+  it('leaves the work owed when the gloss moved while the answer was being embedded', async () => {
+    const item = {
+      workKey: 'df-0001',
+      revalidation: {
+        entityId: poolId,
+        baseline: MENTION_COUNT,
+        mentions: MENTION_COUNT,
+        // The gloss this answer revised. The entity says POOL_REFRESHED by now.
+        text: POOL_DESCRIPTION,
+        sources: sourcesFor('pool'),
+      },
+    } as unknown as BatchWorkItem;
+
+    await expect(
+      handler().apply(item, { description: 'a rewrite of a gloss nothing carries' }),
+    ).rejects.toThrow('moved under its answer');
+    expect((await storedEntity(harness.driver, poolId))?.text).toBe(POOL_REFRESHED);
   }, 60_000);
 });

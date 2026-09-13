@@ -94,19 +94,26 @@ function renderGroups(title: string, rows: readonly ApiUsageGroup[], write: Writ
  * Today against the ceiling, which is the number that decides whether anything else runs.
  *
  * It is the reservation ledger rather than the bill above: a request in flight has committed its
- * conservative maximum and nothing has been charged for it yet, and the ceiling is consulted
- * before dispatch, so what it reads is what a caller asking to spend more would be measured on.
+ * bound and nothing has been charged for it yet, and the ceiling is consulted before dispatch, so
+ * what it reads is what a caller asking to spend more would be measured on.
+ *
+ * The unresolved line is the part of the total nobody can prove. Those requests reached the wire
+ * and never came back with a charge, so they hold their bound rather than being given back, and
+ * an operator deciding whether to raise the ceiling needs to see how much of it they are.
  */
 function renderCeiling(db: SqliteHandle, ceilingUsd: number, write: Writer): void {
   const day = readSpendDay(db, new Date());
-  const unpriced =
-    day.unpriced === 0
+  const unresolved =
+    day.unresolved === 0
       ? ''
-      : `; ${String(day.unpriced)} dispatch(es) on an unpriced model bound nothing`;
+      : `; ${String(day.unresolved)} dispatch(es) hold $${day.unresolvedUsd.toFixed(6)} ` +
+        `nothing could price`;
+  const unpriced =
+    day.unpriced === 0 ? '' : `; ${String(day.unpriced)} on a model the price table does not carry`;
   write(
     `today against the ceiling: $${day.committedUsd.toFixed(6)} of $${ceilingUsd.toFixed(2)} ` +
       `committed (${String(day.inFlight)} request(s) in flight holding ` +
-      `$${day.inFlightUsd.toFixed(6)})${unpriced}`,
+      `$${day.inFlightUsd.toFixed(6)})${unresolved}${unpriced}`,
   );
 }
 

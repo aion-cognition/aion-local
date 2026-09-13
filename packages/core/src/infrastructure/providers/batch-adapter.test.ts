@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { legalCustomId } from './anthropic-batches.js';
 import {
   consumeBatchWork,
   submitBatchWork,
@@ -46,7 +47,13 @@ function handler(): BatchWorkHandler {
   };
 }
 
-/** A fetch that answers the three batch endpoints from a script, and records what was asked. */
+/**
+ * A fetch that answers the three batch endpoints from a script, and records what was asked.
+ *
+ * It refuses a submission carrying an id outside the documented `custom_id` contract, the way the
+ * remote does. A mock that accepts any string reads a producer whose ids the API would never take
+ * as a working producer, and every case downstream of it inherits that reading.
+ */
 function batchApi(script: {
   readonly createId?: string;
   readonly createStatus?: number;
@@ -61,6 +68,14 @@ function batchApi(script: {
       body: typeof init?.body === 'string' ? (JSON.parse(init.body) as unknown) : undefined,
     });
     if (target.endsWith('/batches')) {
+      const submitted = (calls[calls.length - 1]?.body as { requests?: { custom_id: string }[] })
+        .requests;
+      const rejected = (submitted ?? []).find((request) => !legalCustomId(request.custom_id));
+      if (rejected !== undefined) {
+        return Promise.resolve(
+          new Response(`custom_id ${rejected.custom_id} is not accepted`, { status: 400 }),
+        );
+      }
       if (script.createStatus !== undefined) {
         return Promise.resolve(new Response('nope', { status: script.createStatus }));
       }
@@ -167,6 +182,41 @@ describe('submitting owed work', () => {
 
     expect(report).toEqual({ submitted: 0, batchId: undefined });
     expect(readBatchWork(db, 'pair-a')).toMatchObject({ state: 'pending', attempts: 0 });
+  });
+
+  it('sends no batch at all over a work key the remote would refuse', async () => {
+    owe('judge:7f3a:1');
+    owe('pair-b');
+    const { calls, impl } = batchApi({ createId: 'msgbatch_abc' });
+
+    const report = await submitBatchWork(deps(impl));
+
+    // The legal row still goes. The other one is terminal rather than owed again, because the
+    // next pass would build the same id from the same inputs and lose the batch a second time.
+    expect(report).toEqual({ submitted: 1, batchId: 'msgbatch_abc' });
+    expect(
+      (calls[0]?.body as { requests: { custom_id: string }[] }).requests.map((r) => r.custom_id),
+    ).toEqual(['pair-b']);
+    expect(readBatchWork(db, 'judge:7f3a:1')).toMatchObject({
+      state: 'failed',
+      lastError: 'the work key is not a legal batch custom_id',
+    });
+  });
+
+  it('records the producer identity the work key was derived from', () => {
+    enqueueBatchWork(db, {
+      workKey: 'df-0f1e2d',
+      durableKey: 'description_freshness:entity-9:1:abc',
+      substrateId: SUBSTRATE,
+      surface: 'judge',
+      revalidation: {},
+      request: {},
+      now: NOW,
+    });
+
+    // The remote id is a digest, so the row is the only place the question it names is written.
+    expect(readBatchWork(db, 'df-0f1e2d')?.durableKey).toBe('description_freshness:entity-9:1:abc');
+    expect(readBatchWork(db, 'pair-a')).toBeUndefined();
   });
 
   it('sends nothing for another substrate work', async () => {

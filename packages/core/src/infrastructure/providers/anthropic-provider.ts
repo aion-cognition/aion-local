@@ -6,7 +6,7 @@ import { readUsage } from './anthropic-usage.js';
 import { estimateApiCost } from './api-pricing.js';
 import { CircuitBreaker } from './circuit-breaker.js';
 import { abortRequested } from './deadline-signal.js';
-import { conservativeTokens, type SpendingGuard } from './spending.js';
+import { boundedTokens, type SpendingGuard } from './spending.js';
 import type {
   ApiCall,
   ChatMessage,
@@ -108,17 +108,6 @@ function joinInstructions(base: string | undefined, extra: string): string {
   return `${base}\n\n${extra}`;
 }
 
-/** Everything this request puts on the wire, which is what the input estimate is drawn from. */
-function promptChars(
-  instructions: string | undefined,
-  messages: readonly AnthropicMessage[],
-): number {
-  return messages.reduce(
-    (total, message) => total + message.content.length,
-    instructions?.length ?? 0,
-  );
-}
-
 /**
  * The Messages body a batched request carries as its `params`.
  *
@@ -212,6 +201,32 @@ async function askAnthropic(
   const maxTokens = req.maxTokens ?? options.maxTokens ?? DEFAULT_MAX_TOKENS;
   const thinking = thinkingConfig(req.think, maxTokens, options.thinkingBudgetTokens);
 
+  // Serialized once, ahead of the hold, because it is both what every attempt sends and what the
+  // input bound is measured on. The attempts differ in nothing a byte count can see.
+  const requestBody = JSON.stringify({
+    model: req.model,
+    // Sent only when the caller named one, and never beside thinking: the API accepts
+    // `temperature` at 1 alone once thinking is on, and answers "`temperature` may only be
+    // set to 1 when thinking is enabled" to anything else. A caller asking for both wants
+    // the reasoning, and the temperature it names is the repeatability it would have got
+    // from the default sampling anyway. The newer model families removed the parameter
+    // outright, which is the other reason it is sent only on request.
+    ...(req.temperature === undefined || thinking !== undefined
+      ? {}
+      : { temperature: req.temperature }),
+    max_tokens: maxTokens,
+    ...(thinking === undefined ? {} : { thinking }),
+    ...(cachedInstructions === undefined ? {} : { system: cachedInstructions }),
+    ...(viaPrompt
+      ? {}
+      : {
+          output_config: {
+            format: { type: 'json_schema', schema: closeObjectSchemas(req.schema) },
+          },
+        }),
+    messages: rest,
+  });
+
   // Before the request is sent, not after it is billed. A throttled attempt is not billed and
   // rides inside this one hold; the constrained retry `requestAnthropicJson` makes is a second
   // dispatch and takes its own, which is what makes a retry cost the day what it costs the bill.
@@ -220,21 +235,29 @@ async function askAnthropic(
     surface,
     model: req.model,
     route: 'messages',
-    ...conservativeTokens(promptChars(instructions, rest), maxTokens),
+    ...boundedTokens(Buffer.byteLength(requestBody, 'utf8'), maxTokens),
+    // A marked prefix is the one shape whose input can bill at the cache-write rate.
+    cacheWrite: Array.isArray(cachedInstructions),
     now: new Date(started),
   });
   if (held !== undefined && 'refused' in held) {
     throw held.refused;
   }
   const hold = held?.hold;
-  // Set the moment the hold is replaced by the bill. A dispatch that never reached a billed
-  // response, for any reason including the caller's own abort, gives the day its dollars back.
+  // Set the moment the hold is replaced by the bill.
   let reconciled = false;
+  // Set the moment the request can have reached the remote. Everything after that point is money
+  // the remote may already have spent, whatever this process goes on to learn about it.
+  let dispatched = false;
 
   try {
+    // Nothing has left the machine yet, so a deadline that expired while this call waited its
+    // turn is an established non-dispatch and gives the day its dollars straight back.
+    req.signal?.throwIfAborted();
     let response!: Response;
     let attempts = 1;
     for (; ; attempts += 1) {
+      dispatched = true;
       response = await fetchImpl(ANTHROPIC_API_URL, {
         method: 'POST',
         headers: {
@@ -242,29 +265,7 @@ async function askAnthropic(
           'x-api-key': options.apiKey,
           'anthropic-version': ANTHROPIC_VERSION,
         },
-        body: JSON.stringify({
-          model: req.model,
-          // Sent only when the caller named one, and never beside thinking: the API accepts
-          // `temperature` at 1 alone once thinking is on, and answers "`temperature` may only be
-          // set to 1 when thinking is enabled" to anything else. A caller asking for both wants
-          // the reasoning, and the temperature it names is the repeatability it would have got
-          // from the default sampling anyway. The newer model families removed the parameter
-          // outright, which is the other reason it is sent only on request.
-          ...(req.temperature === undefined || thinking !== undefined
-            ? {}
-            : { temperature: req.temperature }),
-          max_tokens: maxTokens,
-          ...(thinking === undefined ? {} : { thinking }),
-          ...(cachedInstructions === undefined ? {} : { system: cachedInstructions }),
-          ...(viaPrompt
-            ? {}
-            : {
-                output_config: {
-                  format: { type: 'json_schema', schema: closeObjectSchemas(req.schema) },
-                },
-              }),
-          messages: rest,
-        }),
+        body: requestBody,
         ...(req.signal === undefined ? {} : { signal: req.signal }),
       });
       if (!throttled(response.status) || attempts >= MAX_ATTEMPTS || abortRequested(req.signal)) {
@@ -321,7 +322,14 @@ async function askAnthropic(
     return parseJsonPayload(textBlock.text);
   } finally {
     if (!reconciled) {
-      hold?.release(new Date(now()));
+      if (dispatched) {
+        // The request left the machine and nothing came back that could size its charge: a
+        // connection dropped after the remote accepted it, or a caller that walked away from an
+        // answer it had already paid for. The bound stands until something establishes the bill.
+        hold?.settle(undefined, new Date(now()));
+      } else {
+        hold?.release(new Date(now()));
+      }
     }
   }
 }

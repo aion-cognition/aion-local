@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   findEntityMentionContexts,
   findStaleDescriptionEntities,
+  readableMentionSources,
   readEntityDescriptionState,
   refreshEntityDescription,
   type StaleDescriptionEntity,
@@ -75,12 +76,15 @@ const DescriptionSchema = z.object({ description: z.string() });
  * whole rather than as a count, because a correction can retire it without moving any number.
  * `mentions` is the count the refresh writes as the new baseline, so it has to be the count the
  * prompt was grounded in rather than whatever the entity has reached by the time it lands.
+ * `sources` names the episodes the prompt actually quoted, which is what the answer is about: an
+ * entity that still has mentions is not the same fact as an entity that still has these ones.
  */
 const RevalidationSchema = z.object({
   entityId: z.string().min(1),
   baseline: z.number().int().nonnegative(),
   mentions: z.number().int().nonnegative(),
   text: z.string(),
+  sources: z.array(z.string().min(1)).min(1),
 });
 
 type FreshnessRevalidation = z.infer<typeof RevalidationSchema>;
@@ -125,20 +129,48 @@ function buildMessages(
   ];
 }
 
-/** How much of the description digest the work key carries. Collision-free at this population. */
-const WORK_KEY_DIGEST_CHARS = 16;
+/** How much of the question's digest the remote id carries. Collision-free at this population. */
+const WORK_KEY_DIGEST_CHARS = 32;
 
 /**
- * The identity of one question: this entity, this gloss, this baseline.
+ * The remote id every question of this surface carries. Letters, digits and a hyphen, well inside
+ * the sixty-four characters the batch API accepts.
+ */
+const REMOTE_ID_PREFIX = 'df-';
+
+/**
+ * The identity of one question: this entity, this gloss, this baseline, and the exact mentions
+ * the prompt quotes.
  *
  * Stable, so a nomination the next pass makes again finds the row it already wrote instead of
- * paying for the same question twice. It moves the moment any of the three inputs does, so an
- * entity whose gloss a correction retired, or whose baseline another refresh advanced, is a new
- * question rather than one the terminal row blocks forever.
+ * paying for the same question twice. It moves the moment any input does, so an entity whose
+ * gloss a correction retired, whose baseline another refresh advanced, or that has been mentioned
+ * somewhere new is a new question rather than one a terminal row blocks forever. The evidence
+ * belongs in it for the answer that changes nothing: that answer leaves the gloss and the
+ * baseline where they were and settles the row, and without the mentions in the identity there
+ * would be no question left to ask once new ones arrived.
  */
-export function descriptionFreshnessWorkKey(entity: StaleDescriptionEntity): string {
-  const digest = hashContent(entity.text).slice(0, WORK_KEY_DIGEST_CHARS);
-  return `${DESCRIPTION_FRESHNESS_SURFACE}:${entity.id}:${String(entity.baseline)}:${digest}`;
+export function descriptionFreshnessDurableKey(
+  entity: StaleDescriptionEntity,
+  sources: readonly string[],
+): string {
+  return [
+    DESCRIPTION_FRESHNESS_SURFACE,
+    entity.id,
+    String(entity.baseline),
+    String(entity.mentions),
+    hashContent(entity.text),
+    hashContent(sources),
+  ].join(':');
+}
+
+/**
+ * The remote id for that question. The durable key above carries colons and runs past sixty-four
+ * characters, and the API accepts neither, so what goes on the wire is a digest of it and the
+ * work row keeps the key itself.
+ */
+export function descriptionFreshnessWorkKey(durableKey: string): string {
+  return `${REMOTE_ID_PREFIX}${hashContent(durableKey).slice(0, WORK_KEY_DIGEST_CHARS)}`;
 }
 
 /**
@@ -200,14 +232,18 @@ export function descriptionFreshnessOperation(): IntrospectionOperation {
           held += 1;
           continue;
         }
+        const sources = contexts.map((context) => context.episodeId);
         const revalidation: FreshnessRevalidation = {
           entityId: entity.id,
           baseline: entity.baseline,
           mentions: entity.mentions,
           text: entity.text,
+          sources,
         };
+        const durableKey = descriptionFreshnessDurableKey(entity, sources);
         const wrote = enqueueBatchWork(ctx.db, {
-          workKey: descriptionFreshnessWorkKey(entity),
+          workKey: descriptionFreshnessWorkKey(durableKey),
+          durableKey,
           substrateId: substrate.substrateId,
           surface: DESCRIPTION_FRESHNESS_SURFACE,
           revalidation,
@@ -245,10 +281,13 @@ export function descriptionFreshnessOperation(): IntrospectionOperation {
  *
  * Both halves take the run's own driver and provider, so the embed and the write are the ones the
  * loop would have made inline. `isCurrent` is a real reading of the substrate rather than a
- * formality: it refuses an answer about a gloss that has moved, an entity that has gone, and a
- * question whose grounding mentions are no longer readable. `apply` writes through the same
- * guarded statement the inline path used, and throws when that statement matched nothing, which
- * leaves the work owed rather than recording a refresh that did not happen.
+ * formality: it refuses an answer about a gloss that has moved, an entity that has gone, and one
+ * whose own grounding mentions are no longer readable.
+ *
+ * `apply` does not trust that reading to survive the embed it takes next. The gloss the answer
+ * revised and the sources it was grounded in go into the guarded write itself, so a description
+ * another pass committed in that window keeps the node and the older answer is owed again rather
+ * than published over it.
  */
 export function descriptionFreshnessHandler(ctx: OperationContext): BatchWorkHandler {
   return {
@@ -265,8 +304,15 @@ export function descriptionFreshnessHandler(ctx: OperationContext): BatchWorkHan
       if (state.baseline !== parsed.data.baseline || state.text !== parsed.data.text) {
         return false;
       }
-      const contexts = await findEntityMentionContexts(ctx.driver, parsed.data.entityId, 1);
-      return contexts.length > 0;
+      // The sources the prompt quoted, not a count of what the entity still has. An answer
+      // written from five episodes is about those five, and four survivors do not make it
+      // current: the sentence it produced rests on the one that went.
+      const readable = await readableMentionSources(
+        ctx.driver,
+        parsed.data.entityId,
+        parsed.data.sources,
+      );
+      return readable.length === new Set(parsed.data.sources).size;
     },
     apply: async (item: BatchWorkItem, answer: unknown): Promise<void> => {
       const revalidation = RevalidationSchema.parse(item.revalidation);
@@ -291,11 +337,16 @@ export function descriptionFreshnessHandler(ctx: OperationContext): BatchWorkHan
         contentVector,
         mentionCount: revalidation.mentions,
         now: ctx.now,
+        expectedText: revalidation.text,
+        sources: revalidation.sources,
       });
       if (!applied) {
-        // The guarded write is the last word, and it matched no current node: the entity moved
-        // between the revalidation above and this statement. The work stays owed.
-        throw new Error(`entity ${revalidation.entityId} is no longer current`);
+        // The guarded write is the last word, and it matched nothing: the entity was closed, its
+        // gloss moved under the embed above, or one of the sources this answer rests on was
+        // forgotten. The work stays owed, and the next nomination asks about what is there now.
+        throw new Error(
+          `the question about entity ${revalidation.entityId} moved under its answer`,
+        );
       }
     },
   };

@@ -150,6 +150,9 @@ reads `N+unknown`, and one where no call reported a share reads `unavailable`.
 
 Unknown models are marked `unpriced`; their charges are never counted as zero. A model with no
 price still reports its cache share, and a group that spent no input tokens reads `no-input`.
+The bill says `unpriced` because nothing can say what such a call cost. The ceiling is a
+different question, answered before the call goes out, and it bounds those dispatches at the top
+of the published card rather than waving them through.
 
 The append-only SQLite `api_calls` ledger records successful HTTP responses, including answers
 whose text fails JSON parsing and needs another paid call. Failed HTTP requests have no usage
@@ -177,13 +180,20 @@ Each group's cache share uses the same denominator.
 
 ### The daily ceiling
 
-Every dispatch holds against the day before it is sent. The hold is a conservative maximum, priced
-from the prompt going out (three characters per token, under the four the docs estimate) and the
-call's own `max_tokens`; when the answer lands, what it actually cost replaces the hold. The
-reservations are rows in `generation_spend`, so two callers in one process, two processes, and one
-process across a restart all read the same committed total, and a batch submitted before a restart
-is still money committed after it. A hold nobody comes back to keeps counting at its maximum:
-unknown is not free.
+Every dispatch holds against the day before it is sent. The hold is a maximum rather than a
+likely amount. Its input side is the request body in UTF-8 bytes, which the tokenizer cannot beat
+because every token it produces covers at least one byte; its output side is the call's own
+`max_tokens`, which the API enforces. Input is priced at the class the request can reach, so only
+a prompt carrying a cache marker is held at the cache-write rate. When the answer lands, what it
+actually cost replaces the hold.
+
+The reservations are rows in `generation_spend`, so two callers in one process, two processes, and
+one process across a restart all read the same committed total, and a batch submitted before a
+restart is still money committed after it. A request that reached the wire and never came back
+with a charge keeps its bound rather than giving it back: a lost response, an abort after the
+remote answered, and a usage block that will not parse are all charges of an unknown size, and
+`aion costs` names how many of them the day is carrying. Only a request that never left the
+machine is released.
 
 A day that cannot cover the next dispatch refuses it as generation being unavailable, the same
 type a substrate with no key answers with. Background work goes back on the queue without spending
@@ -191,9 +201,10 @@ an attempt, a batch submission is not sent and its work stays queued, and recall
 raw query text. Nothing retries against a spent ceiling, because nothing a retry does clears it: a
 new UTC day or a higher number does.
 
-`aion costs` prints the day against the ceiling, with what is still in flight beside it. A model
-the price table does not carry cannot be held against a dollar figure at all; such a call is
-dispatched and counted, and that line says how many there were rather than reading them as free.
+`aion costs` prints the day against the ceiling, with what is still in flight beside it, and names
+the part of the total nothing could price. A model the price table does not carry is bounded at
+the top of the published card, so it is held, refused when it does not fit, and counted on that
+line rather than read as free headroom.
 
 The extraction floor, `AION_REFLECTION_MIN_EXTRACTION_CHARS`, is owned by the separate
 hardening change and is not present on this branch. `AION_NARRATIVE_MIN_NEW_EPISODES` is
@@ -211,7 +222,12 @@ lives in the `batch_work` table. Four rules hold it:
 - Submission is not completion. The remote identity is written down before anything is counted
   as done, and a crash between the API accepting a batch and that write costs a duplicate batch
   rather than an answer nobody can find.
-- Results are consumed by `custom_id`, never by position. The API returns them unordered.
+- Results are consumed by `custom_id`, never by position. The API returns them unordered. That id
+  is one to sixty-four letters, digits, underscores and hyphens, and the remote refuses a whole
+  submission over one that is not. A producer whose own identity for a question is longer or
+  punctuated sends a digest of it and writes the identity to the row's `durable_key`, so the
+  mapping back is unambiguous. A row whose key the API would refuse is failed before anything is
+  sent, rather than costing everyone else in the batch their submission.
 - Every answer is revalidated against the substrate before it is applied. Hours passed, and the
   pair a judgment is about may have merged, been superseded, or been forgotten. A stale answer is
   discarded and recorded as discarded.
@@ -238,10 +254,21 @@ costs is latency on an answer already hours old, which is the reason this work w
 `description_freshness` is the producer. It nominates entity glosses that fell behind their
 mentions, builds each request with the same prompt and result schema the inline call used, and
 writes it to `batch_work`; the pump sends them and hands each answer back to the surface's own
-handler. The handler re-reads the entity, refuses an answer whose gloss or baseline moved while
-the batch was out, and applies the rest through the same guarded write, which is the last word on
-whether a description was refreshed. Foreground cues stay on Messages. A surface that moves its
-own judgment off the hot path registers its handler in `catalog.ts` beside that one.
+handler.
+
+A question's identity is the entity, the gloss, the baseline, the mention count and the episodes
+the prompt quotes. The evidence is in it deliberately: an answer that changes nothing settles the
+row while leaving the gloss and the baseline where they were, and an identity without the
+mentions would have no question left to ask once new ones arrived.
+
+The handler re-reads the entity and refuses an answer whose gloss or baseline moved while the
+batch was out, or that rests on a source the store has since forgotten. Four surviving mentions
+out of the five the prompt quoted is not the same fact as the question still standing. The gloss
+and those sources then go into the guarded write itself, so a description another pass committed
+while the answer was being embedded keeps the node and the older answer is owed again.
+
+Foreground cues stay on Messages. A surface that moves its own judgment off the hot path
+registers its handler in `catalog.ts` beside that one.
 
 ### Prompt caching
 

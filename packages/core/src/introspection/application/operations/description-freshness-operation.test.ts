@@ -5,12 +5,15 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  descriptionFreshnessDurableKey,
   descriptionFreshnessOperation,
+  descriptionFreshnessWorkKey,
   DESCRIPTION_FRESHNESS_SURFACE,
 } from './description-freshness-operation.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import type { Logger } from '../../../infrastructure/logging/logger.js';
+import { legalCustomId } from '../../../infrastructure/providers/anthropic-batches.js';
 import type { Provider } from '../../../infrastructure/providers/types.js';
 import { readBatchWork } from '../../../infrastructure/sqlite/batch-work.js';
 import { SqliteStore, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
@@ -164,25 +167,83 @@ describe('the sampling the description call asks for', () => {
 });
 
 describe('what the nomination writes down', () => {
-  it('records the entity, the gloss and the baseline the request was built against', async () => {
+  it('records the entity, the gloss, the baseline and the sources the request was built against', async () => {
     await nominate();
 
     const [key] = (
       db.prepare('SELECT work_key FROM batch_work').all() as { work_key: string }[]
     ).map((found) => found.work_key);
-    // The entity and the baseline the question was asked at are in the identity itself, with a
-    // digest of the gloss behind them: the same question asked again is the same row, and a gloss
-    // a correction retired is a different one.
-    expect(key?.startsWith(`${DESCRIPTION_FRESHNESS_SURFACE}:entity-1:1:`)).toBe(true);
     const row = readBatchWork(db, key ?? '');
     expect(row?.state).toBe('pending');
     expect(row?.surface).toBe(DESCRIPTION_FRESHNESS_SURFACE);
+    // The answer is about these five sentences from these episodes, so the record names them.
+    // A later count of whatever mentions the entity has is a different fact.
     expect(row?.revalidation).toEqual({
       entityId: 'entity-1',
       baseline: 1,
       mentions: 5,
       text: 'a Postgres connection pool (concept)',
+      sources: ['episode-1'],
     });
+    // The entity, the baseline, the mention count and digests of the gloss and the sources are
+    // the question's own identity, and the row carries it whole.
+    expect(row?.durableKey).toMatch(
+      new RegExp(`^${DESCRIPTION_FRESHNESS_SURFACE}:entity-1:1:5:[0-9a-f]{64}:[0-9a-f]{64}$`),
+    );
+  });
+
+  it('asks under an identity the batch API accepts', async () => {
+    await nominate();
+
+    const [key] = (
+      db.prepare('SELECT work_key FROM batch_work').all() as { work_key: string }[]
+    ).map((found) => found.work_key);
+    // The durable key above carries colons and runs past sixty-four characters, and the remote
+    // refuses the whole submission over either. What goes on the wire is a digest of it.
+    expect(key).toBeDefined();
+    expect(legalCustomId(key ?? '')).toBe(true);
+  });
+
+  it('asks a new question once the evidence moves, and the same one while it does not', async () => {
+    await nominate();
+    const first = (db.prepare('SELECT work_key FROM batch_work').all() as { work_key: string }[])[0]
+      ?.work_key;
+
+    // A second reading of the same entity, same gloss, same baseline, same sources.
+    expect(
+      descriptionFreshnessWorkKey(
+        descriptionFreshnessDurableKey(
+          {
+            id: 'entity-1',
+            name: 'connection pool',
+            type: 'concept',
+            text: 'a Postgres connection pool (concept)',
+            mentions: 5,
+            baseline: 1,
+          },
+          ['episode-1'],
+        ),
+      ),
+    ).toBe(first);
+
+    // Three more mentions arrive. The gloss and the baseline have not moved, and an answer that
+    // changed nothing would have settled the row above, so the evidence is what has to make this
+    // a question the substrate can still ask.
+    expect(
+      descriptionFreshnessWorkKey(
+        descriptionFreshnessDurableKey(
+          {
+            id: 'entity-1',
+            name: 'connection pool',
+            type: 'concept',
+            text: 'a Postgres connection pool (concept)',
+            mentions: 8,
+            baseline: 1,
+          },
+          ['episode-4', 'episode-3', 'episode-2', 'episode-1'],
+        ),
+      ),
+    ).not.toBe(first);
   });
 
   it('pays for the same question once however often it is nominated', async () => {

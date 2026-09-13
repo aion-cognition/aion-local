@@ -1,4 +1,4 @@
-import { estimateApiCost } from './api-pricing.js';
+import { boundApiCost } from './api-pricing.js';
 import { GenerationCeilingReachedError } from './errors.js';
 import type { ApiPricingTier } from './types.js';
 import type { SqliteHandle } from '../sqlite/database.js';
@@ -17,34 +17,31 @@ import {
  * Both routes hold against the same day's ceiling: an ordinary Messages call and a batch
  * submission compete for the same dollars, so a substrate cannot stay under the number on each
  * route and over it in total. The hold is the most the dispatch can cost; what it actually cost
- * replaces that as soon as the answer is in hand, which is what keeps a conservative estimate
- * from locking up headroom it never spent.
+ * replaces that as soon as the answer is in hand, which is what keeps a bound from locking up
+ * headroom it never spent. A model the price table does not carry is bounded at the fallback card
+ * rather than let through, so an unlisted model cannot spend a ceiling it is never measured on.
  *
  * Exhaustion is not an error condition anything retries. It is generation being unavailable, the
  * same shape as a substrate with no key, so background work queues and cues go raw.
  */
 
 /**
- * Characters per token for the input estimate. Deliberately under the four the pricing docs
- * estimate: the hold has to sit above the bill rather than under it, and the reconcile a moment
- * later is what takes the slack back.
- */
-export const CONSERVATIVE_CHARS_PER_TOKEN = 3;
-
-/**
  * The most one request can cost, in tokens, before it is sent.
  *
- * Priced as ordinary input, which is the cheapest of the three input classes. The margin covers
- * the gap: a prompt billed entirely as a cache write costs 1.25 times ordinary input, and the
- * estimate above already reads a prompt as 1.33 times the tokens it is likely to be. No shipped
- * prefix reaches the cache floor either way (`prompt-prefix-size.test.ts`).
+ * The input number is a maximum rather than a likely amount, and the request body in UTF-8 bytes
+ * is what makes it one. The tokenizer works over bytes, so every token it produces covers at
+ * least one byte of what was submitted, and the body's own JSON framing is longer than the role
+ * markers the API wraps that text in. A count of characters divided by three is neither: it is an
+ * average that a run of multi-byte text or dense punctuation passes straight through.
+ *
+ * The output number is `max_tokens`, which the API enforces rather than estimates.
  */
-export function conservativeTokens(
-  promptChars: number,
+export function boundedTokens(
+  requestBytes: number,
   maxTokens: number,
 ): { readonly inputTokens: number; readonly outputTokens: number } {
   return {
-    inputTokens: Math.ceil(Math.max(0, promptChars) / CONSERVATIVE_CHARS_PER_TOKEN),
+    inputTokens: Math.ceil(Math.max(0, requestBytes)),
     outputTokens: Math.max(0, maxTokens),
   };
 }
@@ -53,15 +50,21 @@ export type SpendHoldRequest = {
   readonly surface: string;
   readonly model: string;
   readonly route: SpendRoute;
-  /** The conservative bound for the whole dispatch: one call, or every request in one batch. */
+  /** The bound for the whole dispatch: one call, or every request in one batch. */
   readonly inputTokens: number;
   readonly outputTokens: number;
+  /**
+   * Whether the request carries a cache marker. Only a marked prefix can be billed at the
+   * cache-write rate, so only a marked request is held there. Absent reads as unmarked, which is
+   * what every request this workspace builds is (`anthropic-cache.ts`).
+   */
+  readonly cacheWrite?: boolean;
   readonly now: Date;
 };
 
 export type SpendHold = {
   readonly reservationId: string;
-  /** Dollars held. Zero where the model carries no price, which no ceiling can bound. */
+  /** Dollars held: the bound the dispatch cannot cost more than. */
   readonly reservedUsd: number;
   /** What the answer cost, replacing the hold. `undefined` keeps the hold: unknown is not free. */
   settle(usd: number | undefined, now?: Date): void;
@@ -110,18 +113,18 @@ export class GenerationSpendGuard implements SpendingGuard {
   hold(
     request: SpendHoldRequest,
   ): { hold: SpendHold } | { refused: GenerationCeilingReachedError } {
-    const maxUsd = estimateApiCost({
+    const { maxUsd, priced } = boundApiCost({
       model: request.model,
       inputTokens: request.inputTokens,
       outputTokens: request.outputTokens,
-      cacheCreationTokens: 0,
-      cacheReadTokens: 0,
       pricingTier: tierFor(request.route),
+      cacheWrite: request.cacheWrite === true,
     });
     const outcome = reserveGenerationSpend(this.#db, {
       surface: request.surface,
       route: request.route,
       maxUsd,
+      priced,
       ceilingUsd: this.#ceilingUsd,
       now: request.now,
     });

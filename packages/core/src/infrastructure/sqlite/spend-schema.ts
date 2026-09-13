@@ -7,13 +7,15 @@
  * `batch_work` does, and more sharply: a batch submitted before a restart is money committed, and
  * a book that forgot it would authorize the same dollars twice.
  *
- * `settled_usd` null on a held row is a request still in flight. Null on a row nobody ever came
- * back to is a charge nobody can size, and the day's total reads it at the maximum that was held
- * for it rather than at zero. Unknown is not free.
+ * `settled_usd` null on a held row is a request still in flight. Null on a settled row is a
+ * dispatch that reached the wire and never came back with a charge anyone could size, and the
+ * day's total reads it at the bound that was held for it rather than at zero. Unknown is not
+ * free, and `aion costs` names how much of the day those rows are.
  *
- * `priced` is zero where the model has no entry in the price table. Such a call cannot be held
- * against a dollar ceiling at all, so it is dispatched and counted, and the report says how many
- * there were rather than quietly reading them as free.
+ * `priced` is zero where the model has no entry in the price table. The bound then comes from the
+ * top of the published card instead of the model's own rate, because a ceiling an unlisted model
+ * walks past is a ceiling on the one model the table happens to carry. Such a call is held,
+ * refused when it does not fit, and counted separately in the report.
  */
 export const SPEND_SCHEMA_STATEMENTS: readonly string[] = [
   `CREATE TABLE IF NOT EXISTS generation_spend (

@@ -1,5 +1,6 @@
 import {
   createMessageBatch,
+  legalCustomId,
   readBatchResults,
   retrieveMessageBatch,
   MAX_BATCH_REQUESTS,
@@ -9,7 +10,8 @@ import {
 } from './anthropic-batches.js';
 import { parseJsonPayload } from './anthropic-json.js';
 import { readUsage } from './anthropic-usage.js';
-import { conservativeTokens, type SpendingGuard } from './spending.js';
+import { boundApiCost } from './api-pricing.js';
+import { boundedTokens, type SpendingGuard } from './spending.js';
 import type { Logger } from '../logging/logger.js';
 import { appendApiCall, chargedApiUsd } from '../sqlite/api-usage.js';
 import {
@@ -115,14 +117,14 @@ function handlerFor(deps: BatchAdapterDeps, surface: string): BatchWorkHandler |
 }
 
 /**
- * The most one submission can cost, before it is sent.
+ * The most a set of batched requests can cost.
  *
  * Every request in a batch names the substrate's one configured generation model, so the whole
- * submission prices on that model: the batch is built from one surface's own requests, and the
- * routing layer substitutes the same model into all of them. The token bound is each request's
- * own prompt and `max_tokens`, summed.
+ * set prices on that model: the batch is built from one surface's own requests, and the routing
+ * layer substitutes the same model into all of them. The token bound is each request's own
+ * serialized body and `max_tokens`, summed.
  */
-function submissionEstimate(items: readonly BatchWorkItem[]): {
+function boundOf(items: readonly BatchWorkItem[]): {
   readonly model: string;
   readonly inputTokens: number;
   readonly outputTokens: number;
@@ -131,29 +133,24 @@ function submissionEstimate(items: readonly BatchWorkItem[]): {
   let outputTokens = 0;
   let model = 'unknown';
   for (const item of items) {
-    const request = item.request as {
-      model?: unknown;
-      max_tokens?: unknown;
-      system?: unknown;
-      messages?: { content?: unknown }[];
-    };
+    const request = item.request as { model?: unknown; max_tokens?: unknown };
     const { model: named } = request;
     if (typeof named === 'string' && model === 'unknown') {
       model = named;
     }
-    const chars = (request.messages ?? []).reduce(
-      (total, message) =>
-        total + (typeof message.content === 'string' ? message.content.length : 0),
-      typeof request.system === 'string' ? request.system.length : 0,
-    );
-    const bound = conservativeTokens(
-      chars,
+    const bound = boundedTokens(
+      Buffer.byteLength(JSON.stringify(item.request), 'utf8'),
       typeof request.max_tokens === 'number' ? request.max_tokens : 0,
     );
     inputTokens += bound.inputTokens;
     outputTokens += bound.outputTokens;
   }
   return { model, inputTokens, outputTokens };
+}
+
+/** The same bound in dollars. `batchMessagesBody` marks no prefix, so none of it is a cache write. */
+function boundUsd(items: readonly BatchWorkItem[]): number {
+  return boundApiCost({ ...boundOf(items), pricingTier: 'batch', cacheWrite: false }).maxUsd;
 }
 
 /**
@@ -173,7 +170,28 @@ export async function submitBatchWork(
 ): Promise<SubmitReport> {
   // Clamped against the API's own ceiling, so a caller that passes a larger number gets a batch
   // the remote will accept rather than a rejection it has to read the docs to understand.
-  const owed = pendingBatchWork(deps.db, deps.substrateId, Math.min(limit, MAX_BATCH_REQUESTS));
+  const queued = pendingBatchWork(deps.db, deps.substrateId, Math.min(limit, MAX_BATCH_REQUESTS));
+  const owed: BatchWorkItem[] = [];
+  for (const item of queued) {
+    if (legalCustomId(item.workKey)) {
+      owed.push(item);
+      continue;
+    }
+    // The remote refuses a whole submission over one id it cannot accept, so a producer that
+    // wrote an id outside the contract loses its own row rather than everyone else's batch. It
+    // is terminal because the next pass would build the same id from the same inputs.
+    settleBatchWork(
+      deps.db,
+      item.workKey,
+      'failed',
+      'the work key is not a legal batch custom_id',
+      clock(deps),
+    );
+    deps.logger.error(
+      { workKey: item.workKey, surface: item.surface },
+      'work key is outside what the batch API accepts; the row is failed rather than sent',
+    );
+  }
   if (owed.length === 0) {
     return { submitted: 0, batchId: undefined };
   }
@@ -182,7 +200,9 @@ export async function submitBatchWork(
     surface: 'batch_submission',
     route: 'batch',
     now: clock(deps),
-    ...submissionEstimate(owed),
+    // `batchMessagesBody` attaches no cache marker, so no request here can bill as a cache write.
+    cacheWrite: false,
+    ...boundOf(owed),
   });
   if (held !== undefined && 'refused' in held) {
     deps.logger.warn(
@@ -203,10 +223,14 @@ export async function submitBatchWork(
       })),
     );
   } catch (err) {
-    // Nothing is marked: the work is still owed, and the next pass re-sends it. The hold goes
-    // back too, since nothing the remote accepted can be billed for it.
-    hold?.release(clock(deps));
-    deps.logger.warn({ err, owed: owed.length }, 'batch submission failed; work stays queued');
+    // Nothing is marked: the work is still owed, and the next pass re-sends it. The hold stays,
+    // because a submission whose answer was lost may be one the remote accepted, and a released
+    // hold would hand the same headroom to the re-send while the first batch runs.
+    hold?.settle(undefined, clock(deps));
+    deps.logger.warn(
+      { err, owed: owed.length, reservedUsd: hold?.reservedUsd },
+      'batch submission answered nothing; work stays queued and its bound stays held',
+    );
     return { submitted: 0, batchId: undefined };
   }
 
@@ -395,12 +419,20 @@ export async function consumeBatchWork(deps: BatchAdapterDeps): Promise<ConsumeR
 }
 
 /**
- * Replaces the maximum this batch's submission held with what its answers were charged.
+ * Settles this batch's hold at what its answers were charged, plus a bound on the requests it has
+ * not accounted for yet.
  *
- * The total is recomputed from the charges on the books rather than accumulated, so a batch read
- * again, in this process or a later one, settles to the same number instead of a growing one. A
- * total that cannot be priced leaves the hold where it is: the conservative maximum is the only
- * honest reading of a charge nobody can size.
+ * A results file can be partial, and a row it never mentioned is still at the remote with work to
+ * do. Settling the whole hold to the charges on the books would read those requests as free and
+ * hand their headroom to the next submission, so the unresolved rows keep a reservation of their
+ * own until an answer prices them.
+ *
+ * Both halves are recomputed rather than accumulated: the charges come from the books by request
+ * identity, and the retained part is re-derived from the rows still outstanding. A batch read
+ * again, in this process or a later one, settles to the same number instead of a growing one.
+ *
+ * A charge that cannot be priced leaves the hold untouched at its bound, which is the only honest
+ * reading of money nobody can size. Missing usage rows are the same case, not a complete bill.
  */
 function reconcileSubmission(
   deps: BatchAdapterDeps,
@@ -413,5 +445,11 @@ function reconcileSubmission(
   if (reservationId === undefined || deps.spending === undefined) {
     return;
   }
-  settleGenerationSpend(deps.db, reservationId, chargedApiUsd(deps.db, batchId), clock(deps));
+  const charged = chargedApiUsd(deps.db, batchId);
+  if (charged === undefined) {
+    return;
+  }
+  const unresolved = submittedBatchWork(deps.db, batchId);
+  const retained = unresolved.length === 0 ? 0 : boundUsd(unresolved);
+  settleGenerationSpend(deps.db, reservationId, charged + retained, clock(deps));
 }

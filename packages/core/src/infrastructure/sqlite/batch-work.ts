@@ -11,6 +11,8 @@ export type BatchWorkState = 'pending' | 'submitted' | 'applied' | 'discarded' |
 export type BatchWorkItem = {
   /** The `custom_id` the request carries, and what a result is matched back by. */
   readonly workKey: string;
+  /** The producer's own identity for the question, which the work key above is derived from. */
+  readonly durableKey: string;
   readonly substrateId: string;
   readonly surface: string;
   /** What the substrate looked like where the request was built, read back at apply time. */
@@ -29,6 +31,7 @@ export type BatchWorkItem = {
 
 type Row = {
   work_key: string;
+  durable_key: string;
   substrate_id: string;
   surface: string;
   revalidation_json: string;
@@ -46,6 +49,7 @@ type Row = {
 function toItem(row: Row): BatchWorkItem {
   return {
     workKey: row.work_key,
+    durableKey: row.durable_key,
     substrateId: row.substrate_id,
     surface: row.surface,
     revalidation: JSON.parse(row.revalidation_json) as unknown,
@@ -63,6 +67,12 @@ function toItem(row: Row): BatchWorkItem {
 
 export type EnqueueBatchWork = {
   readonly workKey: string;
+  /**
+   * The producer's own identity for this question, where the work key is a digest of it. Absent
+   * where the producer's identity is already what the remote accepts, and the two are then the
+   * same string.
+   */
+  readonly durableKey?: string;
   readonly substrateId: string;
   readonly surface: string;
   readonly revalidation: unknown;
@@ -81,12 +91,14 @@ export function enqueueBatchWork(db: SqliteHandle, work: EnqueueBatchWork): bool
   const result = db
     .prepare(
       `INSERT INTO batch_work
-         (work_key, substrate_id, surface, revalidation_json, request_json, state, enqueued_at)
-       VALUES (?, ?, ?, ?, ?, 'pending', ?)
+         (work_key, durable_key, substrate_id, surface, revalidation_json, request_json, state,
+          enqueued_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
        ON CONFLICT(work_key) DO NOTHING`,
     )
     .run(
       work.workKey,
+      work.durableKey ?? work.workKey,
       work.substrateId,
       work.surface,
       JSON.stringify(work.revalidation),

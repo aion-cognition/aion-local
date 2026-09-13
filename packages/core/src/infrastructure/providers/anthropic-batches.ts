@@ -16,6 +16,21 @@ const ANTHROPIC_VERSION = '2023-06-01';
 /** The API's own ceiling on one batch. The adapter submits well under it. */
 export const MAX_BATCH_REQUESTS = 100_000;
 
+/**
+ * What the API accepts as a `custom_id`: one to sixty-four letters, digits, underscores and
+ * hyphens. A colon, a slash or a sixty-fifth character is refused, and the refusal is of the
+ * whole submission rather than of the one request that carried it.
+ *
+ * A producer whose durable identity is none of those things writes down a digest of it and keeps
+ * the mapping in its own work row. The bound belongs here because this is where the contract is.
+ */
+const CUSTOM_ID = /^[a-zA-Z0-9_-]{1,64}$/;
+
+/** Whether the remote will accept this id. */
+export function legalCustomId(customId: string): boolean {
+  return CUSTOM_ID.test(customId);
+}
+
 export type BatchRequest = {
   /** The work key. Unique within one batch, and what the result is matched back by. */
   readonly customId: string;
@@ -111,6 +126,10 @@ export async function createMessageBatch(
   options: BatchClientOptions,
   requests: readonly BatchRequest[],
 ): Promise<BatchStatus> {
+  const rejected = requests.find((request) => !legalCustomId(request.customId));
+  if (rejected !== undefined) {
+    throw new Error(`custom_id "${rejected.customId}" is outside what the batch API accepts`);
+  }
   const fetchImpl = options.fetchImpl ?? fetch;
   const response = await fetchImpl(BATCHES_URL, {
     method: 'POST',

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AnthropicProvider } from './anthropic-provider.js';
 import { submitBatchWork, type BatchAdapterDeps } from './batch-adapter.js';
 import { isGenerationUnavailable } from './errors.js';
-import { conservativeTokens, GenerationSpendGuard } from './spending.js';
+import { boundedTokens, GenerationSpendGuard } from './spending.js';
 import { summarizeApiCalls } from '../sqlite/api-usage.js';
 import { enqueueBatchWork, readBatchWork } from '../sqlite/batch-work.js';
 import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
@@ -161,8 +161,8 @@ describe('the shared daily ceiling', () => {
     expect(readSpendDay(db, NOW).committedUsd).toBeCloseTo(0.006, 8);
   });
 
-  it('records a dispatch on an unpriced model rather than reading it as free', () => {
-    const guard = new GenerationSpendGuard({ db, ceilingUsd: 0.000001 });
+  it('holds an unpriced model at the fallback card rather than reading it as free', () => {
+    const guard = new GenerationSpendGuard({ db, ceilingUsd: 5 });
 
     const held = guard.hold({
       surface: 'cognitive',
@@ -173,10 +173,29 @@ describe('the shared daily ceiling', () => {
       now: NOW,
     });
 
-    // A dollar ceiling has nothing to hold an unpriced model against, so the call goes and the
-    // day's report says how many such calls it cannot account for.
+    // $10 and $50 per million, the top of the published card. The call goes, and the day's
+    // report says how many of its dollars are a bound rather than a price.
     expect('hold' in held).toBe(true);
+    expect(readSpendDay(db, NOW).committedUsd).toBeCloseTo(0.06, 8);
     expect(readSpendDay(db, NOW).unpriced).toBe(1);
+  });
+
+  it('refuses an unpriced model the ceiling cannot cover, the same as a priced one', () => {
+    const guard = new GenerationSpendGuard({ db, ceilingUsd: 0 });
+
+    const outcome = guard.hold({
+      surface: 'cognitive',
+      model: 'a-model-nobody-has-priced',
+      route: 'messages',
+      inputTokens: 1000,
+      outputTokens: 1000,
+      now: NOW,
+    });
+
+    // An unknown price is not spare headroom. A ceiling an unlisted model walks past is a
+    // ceiling on the one model the table happens to carry.
+    expect('refused' in outcome).toBe(true);
+    expect(readSpendDay(db, NOW).committedUsd).toBe(0);
   });
 
   it('counts settled charges and outstanding holds across a restart', () => {
@@ -274,7 +293,7 @@ describe('what the ordinary route does before it dispatches', () => {
     expect(isGenerationUnavailable(refused)).toBe(true);
   });
 
-  it('gives the day its dollars back when the request never reaches a billed response', async () => {
+  it('holds its bound when a dispatched request never comes back', async () => {
     const provider = new AnthropicProvider({
       apiKey: 'injected-test-key',
       model: MODEL,
@@ -293,6 +312,42 @@ describe('what the ordinary route does before it dispatches', () => {
       }),
     ).rejects.toThrow('the network is down');
 
+    // The request left the machine. Nothing here knows whether the remote read it, so the day
+    // keeps counting the bound: a charge nobody can size is not a charge of nothing. It is named
+    // as unresolved rather than folded into the settled charges, because the two are not the
+    // same reading and an operator raising the ceiling has to be able to tell them apart.
+    const day = readSpendDay(db, NOW);
+    expect(day.committedUsd).toBeGreaterThan(0);
+    expect(day.unresolved).toBe(1);
+    expect(day.unresolvedUsd).toBeCloseTo(day.committedUsd, 8);
+    expect(day.inFlight).toBe(0);
+  });
+
+  it('gives the day its dollars back when nothing was dispatched', async () => {
+    const fetchImpl = vi.fn();
+    const controller = new AbortController();
+    controller.abort();
+    const provider = new AnthropicProvider({
+      apiKey: 'injected-test-key',
+      model: MODEL,
+      fetchImpl,
+      spending: new GenerationSpendGuard({ db, ceilingUsd: 5 }),
+      now: () => NOW.getTime(),
+    });
+
+    await expect(
+      provider.generate({
+        surface: 'cognitive',
+        model: MODEL,
+        messages: [{ role: 'user', content: 'a record' }],
+        schema: { type: 'object' },
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow();
+
+    // A deadline that expired while the call waited its turn. Nothing reached the wire, which is
+    // the one outcome that establishes there is nothing to pay for.
+    expect(fetchImpl).not.toHaveBeenCalled();
     expect(readSpendDay(db, NOW).committedUsd).toBe(0);
   });
 });
@@ -333,11 +388,34 @@ describe('what the batch route does before it submits', () => {
   });
 });
 
-describe('the conservative token bound', () => {
-  it('reads a prompt as more tokens than it is likely to be, and max_tokens as all of them', () => {
-    // Three characters per token against the four the pricing docs estimate, so the hold sits
-    // above the bill. The reconcile a moment later is what takes the slack back.
-    expect(conservativeTokens(900, 512)).toEqual({ inputTokens: 300, outputTokens: 512 });
-    expect(conservativeTokens(0, 0)).toEqual({ inputTokens: 0, outputTokens: 0 });
+describe('the token bound', () => {
+  it('reads one byte as one token, which no tokenizer over those bytes can pass', () => {
+    // A token covers at least one byte of what was submitted, so the byte count is a ceiling
+    // rather than an average. The reconcile a moment later is what takes the slack back.
+    expect(boundedTokens(900, 512)).toEqual({ inputTokens: 900, outputTokens: 512 });
+    expect(boundedTokens(0, 0)).toEqual({ inputTokens: 0, outputTokens: 0 });
+  });
+
+  it('holds a cache-markable prompt at the cache-write rate', () => {
+    const guard = new GenerationSpendGuard({ db, ceilingUsd: 5 });
+    const request = {
+      surface: 'cognitive',
+      model: MODEL,
+      route: 'messages' as const,
+      inputTokens: 1000,
+      outputTokens: 0,
+      now: NOW,
+    };
+
+    const plain = guard.hold(request);
+    const marked = guard.hold({ ...request, cacheWrite: true });
+    if (!('hold' in plain) || !('hold' in marked)) {
+      throw new Error('the ceiling refused a hold it had room for');
+    }
+
+    // $1 per million as ordinary input, $1.25 as a cache write. A marked prefix is the only
+    // shape that can reach the more expensive class, and it is held there.
+    expect(plain.hold.reservedUsd).toBeCloseTo(0.001, 8);
+    expect(marked.hold.reservedUsd).toBeCloseTo(0.00125, 8);
   });
 });
