@@ -51,6 +51,97 @@ it('records the resolved model, caller surface, retry count, latency, and usage'
   });
 });
 
+/**
+ * The breakdown is optional on the wire in both directions: the API omits it, and it sends an
+ * explicit `null`. Either way the input and output totals beside it are the real bill, and the
+ * reasoning share is the only thing the response did not say.
+ */
+it.each([
+  ['absent', {}],
+  ['null', { output_tokens_details: null }],
+])('keeps the billed totals when the thinking breakdown is %s', async (_label, details) => {
+  const recordApiCall = vi.fn();
+  const provider = new AnthropicProvider({
+    apiKey: 'test',
+    model: 'claude-haiku-4-5',
+    recordApiCall,
+    fetchImpl: vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          content: [{ type: 'text', text: '{}' }],
+          usage: { input_tokens: 100, output_tokens: 20, ...details },
+        }),
+      ),
+    ),
+  });
+
+  await expect(provider.generate(REQUEST)).resolves.toEqual({});
+  const [call] = recordApiCall.mock.calls[0] as [Record<string, unknown>];
+  expect(call).toMatchObject({ inputTokens: 100, outputTokens: 20 });
+  expect(call.usageError).toBeUndefined();
+  // Absent, never zero: a zero here would price and read as a call that reasoned for nothing.
+  expect(call).not.toHaveProperty('thinkingTokens');
+});
+
+it('records a reported zero reasoning share as the fact it is', async () => {
+  const recordApiCall = vi.fn();
+  const provider = new AnthropicProvider({
+    apiKey: 'test',
+    model: 'claude-haiku-4-5',
+    recordApiCall,
+    fetchImpl: vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          content: [{ type: 'text', text: '{}' }],
+          usage: {
+            input_tokens: 100,
+            output_tokens: 20,
+            output_tokens_details: { thinking_tokens: 0 },
+          },
+        }),
+      ),
+    ),
+  });
+
+  await expect(provider.generate(REQUEST)).resolves.toEqual({});
+  expect(recordApiCall).toHaveBeenCalledWith(
+    expect.objectContaining({ inputTokens: 100, outputTokens: 20, thinkingTokens: 0 }),
+  );
+});
+
+it('records the share of the output bill the reasoning was', async () => {
+  const recordApiCall = vi.fn();
+  const provider = new AnthropicProvider({
+    apiKey: 'test',
+    model: 'claude-haiku-4-5',
+    recordApiCall,
+    fetchImpl: vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          content: [
+            {
+              type: 'thinking',
+              thinking: 'weighing the queue against the backlog',
+              signature: 's',
+            },
+            { type: 'text', text: '{}' },
+          ],
+          usage: {
+            input_tokens: 60,
+            output_tokens: 62,
+            output_tokens_details: { thinking_tokens: 51 },
+          },
+        }),
+      ),
+    ),
+  });
+
+  await expect(provider.generate({ ...REQUEST, think: true })).resolves.toEqual({});
+  expect(recordApiCall).toHaveBeenCalledWith(
+    expect.objectContaining({ outputTokens: 62, thinkingTokens: 51 }),
+  );
+});
+
 it('records unlabeled calls and defaults absent cache counters to zero', async () => {
   const recordApiCall = vi.fn();
   const provider = new AnthropicProvider({

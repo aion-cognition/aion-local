@@ -50,6 +50,90 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+/**
+ * Thinking is a request field on this route, not a flag it drops. Haiku 4.5 takes only the
+ * manual extended-thinking mode, so the number is the configuration, the API refuses a budget
+ * under 1,024 or at or above `max_tokens`, and it refuses any temperature but 1 beside it.
+ */
+describe('the extended thinking the provider configures', () => {
+  it('sends an explicit budget when the caller asks the model to reason', async () => {
+    const fetchImpl = vi.fn(() => Promise.resolve(textResponse('{"ok": true}')));
+
+    await provider(fetchImpl).generate({ ...REQUEST, think: true });
+
+    const body = sentBody(fetchImpl);
+    expect(body.thinking).toEqual({ type: 'enabled', budget_tokens: 2048 });
+    expect(body.think).toBeUndefined();
+  });
+
+  it('drops the caller temperature, which the API accepts only at 1 beside thinking', async () => {
+    const fetchImpl = vi.fn(() => Promise.resolve(textResponse('{"ok": true}')));
+
+    await provider(fetchImpl).generate({ ...REQUEST, think: true, temperature: 0 });
+
+    expect(sentBody(fetchImpl)).not.toHaveProperty('temperature');
+  });
+
+  it('keeps the temperature when the caller is not reasoning', async () => {
+    const fetchImpl = vi.fn(() => Promise.resolve(textResponse('{"ok": true}')));
+
+    await provider(fetchImpl).generate({ ...REQUEST, think: false, temperature: 0 });
+
+    expect(sentBody(fetchImpl).temperature).toBe(0);
+  });
+
+  it('clamps the budget under the ceiling it has to share with the answer', async () => {
+    const fetchImpl = vi.fn(() => Promise.resolve(textResponse('{"ok": true}')));
+
+    await provider(fetchImpl).generate({ ...REQUEST, think: true, maxTokens: 3000 });
+
+    expect(sentBody(fetchImpl).thinking).toEqual({ type: 'enabled', budget_tokens: 1976 });
+  });
+
+  it('sends no thinking at all where the ceiling cannot hold the API minimum', async () => {
+    const fetchImpl = vi.fn(() => Promise.resolve(textResponse('{"ok": true}')));
+
+    await provider(fetchImpl).generate({ ...REQUEST, think: true, maxTokens: 1200 });
+
+    expect(sentBody(fetchImpl)).not.toHaveProperty('thinking');
+  });
+
+  it('reads the answer out of the text block that follows the reasoning', async () => {
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            content: [
+              { type: 'thinking', thinking: 'the queue is the larger backlog', signature: 's' },
+              { type: 'text', text: '{"ok": true}' },
+            ],
+          }),
+        ),
+      ),
+    );
+
+    await expect(provider(fetchImpl).generate({ ...REQUEST, think: true })).resolves.toEqual({
+      ok: true,
+    });
+  });
+
+  it('says so when the reasoning filled the ceiling and left no answer', async () => {
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            content: [{ type: 'thinking', thinking: 'still weighing it', signature: 's' }],
+          }),
+        ),
+      ),
+    );
+
+    await expect(provider(fetchImpl).generate({ ...REQUEST, think: true })).rejects.toThrow(
+      /reasoning and no answer/,
+    );
+  });
+});
+
 describe('the request the provider sends', () => {
   it('names its own model, keeps the caller schema in the system prompt, and drops think', async () => {
     const fetchImpl = vi.fn(() => Promise.resolve(textResponse('{"ok": true}')));

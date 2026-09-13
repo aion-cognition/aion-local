@@ -6,28 +6,31 @@ import { errorMessage } from '../../infrastructure/errors.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import { deadlineFor } from '../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../infrastructure/providers/types.js';
-import {
-  ADVICE_LOCAL as ADVICE_SYSTEM_PROMPT,
-  REVIEW_LOCAL as REVIEW_SYSTEM_PROMPT,
-} from '../../prompts/tier3-advisor.js';
+import { ADVICE_LOCAL as ADVICE_SYSTEM_PROMPT } from '../../prompts/tier3-advisor.js';
 import { describeEffectiveness, type OperationCandidate } from '../domain/decide.js';
 import type { HealthSnapshot, OperationEffectiveness } from '../domain/health.js';
-import type { Tier3Advisor, Tier3Outcome, Tier3Proposal, Tier3Request } from '../domain/tier3.js';
+import type { Tier3Advisor, Tier3Outcome, Tier3Request } from '../domain/tier3.js';
 
 /**
- * The two model calls tier 3 makes: one that reads the snapshot and recommends an operation,
- * and one that argues the other side of whatever the first one named. Both are plain functions
- * carrying their own prompt and schema, so a battery measures the call the service runs rather
- * than a rebuilt copy of it.
+ * The one model call tier 3 makes: it reads the snapshot, the candidate table, what each
+ * operation has done for the substrate, and the lessons the recent runs left, then recommends
+ * an operation or none. A plain function carrying its own prompt and schema, so a battery
+ * measures the call the service runs rather than a rebuilt copy of it.
  *
- * Neither call throws. A model that times out, refuses, or answers in a shape the schema will
+ * There used to be a second call arguing against whatever the first one named. It is gone: it
+ * vetoed 20 of 23 recommendations including ones its own corpus calls correct, which is a pass
+ * that answers nothing about the recommendation it read. What weighs a recommendation now is
+ * the operation's own record, which is evidence the substrate produced rather than a second
+ * opinion from the same model on the same reading.
+ *
+ * The call never throws. A model that times out, refuses, or answers in a shape the schema will
  * not take is a cycle that recommends nothing, never a cycle that ends the loop.
  */
 
-/** How the loop treats an accepted proposal: `propose` logs it, `act` runs it after a second pass. */
+/** How the loop treats an accepted proposal: `act` runs it, `propose` logs it and runs nothing. */
 export type Tier3Mode = Config['maintenance']['tier3Mode'];
 
-/** The pinned `AION_MAINTENANCE_TIER3_MODE`, set by the battery's measurement rather than by hand. */
+/** The shipped `AION_MAINTENANCE_TIER3_MODE`. */
 export const DEFAULT_TIER3_MODE: Tier3Mode = DEFAULTS.maintenance.tier3Mode;
 
 export type Tier3CallOptions = {
@@ -41,11 +44,18 @@ export type Tier3CallOptions = {
 export const TIER3_NO_OPERATION = 'none';
 
 /**
- * Both passes name the value rather than leaving it to the route's default: the provider sends
- * the parameter only when a caller names one, and a sampled second pass turns the review into a
- * coin flip over the same evidence the first pass already read.
+ * Named rather than left to the route's default, since the provider sends the parameter only
+ * when a caller names one. The remote route drops it when reasoning is on, because the API
+ * takes only temperature 1 there; the local route keeps it, so a hybrid model reasons without
+ * also sampling its final answer.
  */
 const TIER3_TEMPERATURE = 0;
+
+/**
+ * Room for the reasoning and the answer together. Thinking is billed and counted as output, so
+ * the ceiling has to hold both; the provider clamps its budget under this number.
+ */
+const TIER3_MAX_TOKENS = 4096;
 
 const UNSTATED_CONFIDENCE = 0.5;
 
@@ -63,25 +73,11 @@ function adviceSchema(names: readonly string[]): JsonSchema {
   };
 }
 
-const REVIEW_JSON_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    reason: { type: 'string' },
-    upheld: { type: 'boolean' },
-  },
-  required: ['reason', 'upheld'],
-};
-
 /** Looser than the JSON schema on purpose: an answer missing its confidence is still usable. */
 const AdviceSchema = z.object({
   operation: z.string(),
   confidence: z.number().optional(),
   rationale: z.string().optional(),
-});
-
-const ReviewSchema = z.object({
-  upheld: z.boolean(),
-  reason: z.string().optional(),
 });
 
 function clampConfidence(value: number | undefined): number {
@@ -158,30 +154,28 @@ function describeCandidate(candidate: OperationCandidate, health: HealthSnapshot
   );
 }
 
+/** The lessons block, or nothing at all when the loop has not resolved a run yet. */
+function describeInsights(insights: readonly string[] | undefined): readonly string[] {
+  if (insights === undefined || insights.length === 0) {
+    return [];
+  }
+  return [`What recent runs taught the loop, oldest first:\n${insights.join('\n')}`];
+}
+
 function buildAdviceMessages(request: Tier3Request): ChatMessage[] {
+  const candidates = request.candidates
+    .map((candidate) => describeCandidate(candidate, request.health))
+    .join('\n');
   return [
     { role: 'system', content: ADVICE_SYSTEM_PROMPT },
     {
       role: 'user',
-      content:
-        `Health reading:\n${describeSnapshot(request.health)}\n\n` +
-        `Operations that could run this cycle:\n` +
-        `${request.candidates.map((candidate) => describeCandidate(candidate, request.health)).join('\n')}\n\n` +
+      content: [
+        `Health reading:\n${describeSnapshot(request.health)}`,
+        `Operations that could run this cycle:\n${candidates}`,
+        ...describeInsights(request.insights),
         `Why the deterministic tiers selected nothing: ${request.reason}`,
-    },
-  ];
-}
-
-function buildReviewMessages(request: Tier3Request, proposal: Tier3Proposal): ChatMessage[] {
-  return [
-    { role: 'system', content: REVIEW_SYSTEM_PROMPT },
-    {
-      role: 'user',
-      content:
-        `Health reading:\n${describeSnapshot(request.health)}\n\n` +
-        `Operations that could run this cycle:\n` +
-        `${request.candidates.map((candidate) => describeCandidate(candidate, request.health)).join('\n')}\n\n` +
-        `The recommendation under review: run ${proposal.operation}, because ${proposal.rationale}`,
+      ].join('\n\n'),
     },
   ];
 }
@@ -211,10 +205,14 @@ export async function adviseTier3(
       model: options.model,
       messages: buildAdviceMessages(request),
       schema: adviceSchema(names),
+      maxTokens: TIER3_MAX_TOKENS,
       temperature: TIER3_TEMPERATURE,
-      // The answer is a choice over a table the caller already scored. Reasoning doubles the
-      // cost of a call the loop makes on every idle tick and moves nothing.
-      think: false,
+      // The one call the strategic tier gets, so it is the one that reasons. The answer is not a
+      // lookup over a scored table: it weighs a health reading against what each operation has
+      // done before and what the recent runs taught, and picking the cheapest operation that
+      // addresses a specific number is the kind of comparison a straight-to-answer call gets
+      // wrong. It costs a bounded token budget on an idle tick and nothing on a busy one.
+      think: true,
       signal: deadline.signal,
     });
   } catch (error) {
@@ -245,63 +243,6 @@ export async function adviseTier3(
   return {
     status: 'advised',
     proposal: { operation, confidence: clampConfidence(parsed.data.confidence), rationale },
-  };
-}
-
-/**
- * `failed` and `unusable` are kept apart from `vetoed` here and counted as vetoes at the call
- * site. A review that never arrived is not a review that agreed.
- */
-export type Tier3Review =
-  | { readonly status: 'upheld' }
-  | { readonly status: 'vetoed'; readonly reason: string }
-  | { readonly status: 'failed'; readonly reason: string }
-  | { readonly status: 'unusable'; readonly reason: string };
-
-/**
- * The second pass, arguing the other side of the recommendation. It sees the same reading and
- * the same candidate table, and it is told what was recommended and why, because what it is
- * asked is whether that specific claim survives the evidence.
- */
-export async function reviewTier3Proposal(
-  provider: Pick<Provider, 'generate'>,
-  request: Tier3Request,
-  proposal: Tier3Proposal,
-  options: Tier3CallOptions,
-): Promise<Tier3Review> {
-  const deadline = deadlineFor(options.timeoutMs, options.signal);
-  if (deadline.signal.aborted) {
-    deadline.clear();
-    return { status: 'failed', reason: 'the loop stopped before the call started' };
-  }
-  let raw: unknown;
-  try {
-    raw = await provider.generate({
-      surface: 'tier3_review',
-      model: options.model,
-      messages: buildReviewMessages(request, proposal),
-      schema: REVIEW_JSON_SCHEMA,
-      temperature: TIER3_TEMPERATURE,
-      think: false,
-      signal: deadline.signal,
-    });
-  } catch (error) {
-    return { status: 'failed', reason: errorMessage(error) };
-  } finally {
-    deadline.clear();
-  }
-
-  const parsed = ReviewSchema.safeParse(raw);
-  if (!parsed.success) {
-    return { status: 'unusable', reason: 'the reviewer answered in a shape the schema refuses' };
-  }
-  if (parsed.data.upheld) {
-    return { status: 'upheld' };
-  }
-  const stated = parsed.data.reason?.trim();
-  return {
-    status: 'vetoed',
-    reason: stated === undefined || stated.length === 0 ? 'the reviewer gave no reason' : stated,
   };
 }
 

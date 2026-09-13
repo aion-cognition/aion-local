@@ -505,9 +505,27 @@ does, and one tick runs four phases: observe, decide, act, learn.
    2 scores the rest by each operation's own `relevance`, halved for an operation whose runs
    have stopped improving anything and multiplied by how many cycles it has been passed over.
    It selects the highest above `AION_MAINTENANCE_URGENCY_THRESHOLD`. Tier 3 is the
-   model-guided seam: on by default (`AION_MAINTENANCE_TIER3`), and propose-only because
-   `AION_MAINTENANCE_TIER3_MODE` ships `propose`. `AION_MAINTENANCE_TIER3=false` is the kill
-   switch; on any tick that reaches tier 3, the standing cost is one advisor call.
+   model-guided seam: on by default (`AION_MAINTENANCE_TIER3`), and acting by default because
+   `AION_MAINTENANCE_TIER3_MODE` ships `act`. `AION_MAINTENANCE_TIER3=false` is the kill
+   switch, `propose` is the kill switch inside it; on any tick that reaches tier 3, the standing
+   cost is one advisor call, which reasons under a token budget
+   (`AION_ANTHROPIC_THINKING_BUDGET_TOKENS`) before it answers.
+
+   One call and one gate. The advisor sees the reading, the candidate table, each operation's
+   record, and one line per recent resolved run saying what happened. Its confidence is
+   multiplied by that operation's own effectiveness and has to clear
+   `AION_MAINTENANCE_TIER3_ACCEPTANCE_FLOOR`, so a confident recommendation for an operation
+   whose runs have stopped moving their metric is kept as a recommendation. An operation nothing
+   has scored reads at a neutral 0.5 prior rather than at zero, since a model-chosen run is one
+   of the ways an operation earns a record. Two operations are denied outright and no others:
+   `episode_evict`, the one hard delete, and `redaction_residue_purge`, which overwrites stored
+   text in place. Everything else in the catalog is selectable, because a write the substrate can
+   reverse is a write its own record can judge.
+
+   A degraded collector does not stop the consultation. An operation whose demand came from the
+   collector that failed returns zero relevance and is refused at the gate; the rest of the
+   reading is still evidence, and refusing the whole cycle over one broken collector stopped the
+   loop noticing anything else.
 3. **Act.** At most one operation per tick. It claims a calendar-aligned time bucket in the
    ops ledger first (`intro:<name>:<bucket>:<stamp>`), so two service instances cannot run
    the same window twice, and writes the outcome back to that key when it finishes. The
@@ -519,10 +537,22 @@ does, and one tick runs four phases: observe, decide, act, learn.
    counts as better. The engine takes that reading before the run and again on a later tick,
    which is the first snapshot that can see the system settled around the change, and records
    `improved` / `unchanged` / `failed`. Those counts are the effectiveness weight step 2
-   reads. An operation with no metric in the snapshot records `unmeasured` instead: the run
-   is on its record, and its effectiveness reads as unmeasured rather than as a number, which
-   the weight and the preemption grace both leave alone. Every run's wall time is recorded
-   too, whatever it did, which makes the cheapest way to answer a reading a fact.
+   reads, and the same counts weight the strategic tier's acceptance. An operation with no
+   metric in the snapshot records `unmeasured` instead: the run is on its record, and its
+   effectiveness reads as unmeasured rather than as a number, which step 2's weight and the
+   preemption grace both leave alone. Twenty-one of the thirty-one operations declare no metric,
+   so the strategic tier weights those on the half of the record a metric is not needed to read:
+   the share of their runs that did not fail (`executionWeight`, `introspection/domain/tier3.ts`).
+   A run that threw did not do the work whatever the work was worth, and five recorded throws are
+   not a cold start. The weight cannot rise past the neutral prior on unmeasured runs, because an
+   unmeasured success is unknown rather than good, and it climbs back toward that prior as clean
+   runs accumulate, so a transient fault costs an operation cycles rather than vetoing it.
+   Every run's wall time is recorded too, whatever it did,
+   which makes the cheapest way to answer a reading a fact. Each verdict also writes one
+   sentence saying what happened, built from the run's own numbers and never from a model, and
+   the newest few of those reach the advisor's prompt. A ratio says how often an operation
+   helped; the sentence says that a run drained nine rows and the depth was the same an hour
+   later, which is the reading a recommendation can be argued against.
 
 The catalog is one ordered list (`introspection/application/catalog.ts`), which is the only
 place an operation joins maintenance. Thirty-one are registered, in eleven groups: substrate
@@ -579,11 +609,31 @@ other two the design named are covered under different names: `edge_prune` ages 
 down against staleness, and `structural_discovery` writes association edges to
 under-connected identities directly.
 
-**One narrowing inside the bridge.** The design describes an LLM proposing a set of specific
-node connections. This proposes the summary, rationale and compatibility, and anchors the
-bridge on the closest cross-community pair by content vector rather than on a model-chosen set.
-The vectors are the substrate's own statement that two nodes are about the same thing. They are
-already computed, and a person can re-derive the choice from the graph months later.
+**Who chooses the bridge.** Which two neighbourhoods to consider is structure, scored on
+coherence, size balance, overlap and isolation. What relation runs between them, and which two
+members carry it, is inference. The model is handed a profile of each community, members and
+their text included, and answers with the two endpoints, what each contributes, the summary, the
+rationale, the statements it rests on, and a compatibility score, or it declines.
+
+Its answer decides the run. A decline writes nothing. A compatibility under
+`AION_MAINTENANCE_BRIDGE_MIN_COMPATIBILITY` writes nothing. Neither falls back, because falling
+back would make the judgment a suggestion and the deterministic pair the real answer. The
+deterministic pair is what happens when no answer arrives at all: unavailable, timed out, or
+unreadable. It picks the closest cross-community pair by content vector and says so in the text,
+and the bridge records which path wrote it.
+
+The endpoints are often not the closest pair, which is the point. The cosine measures how alike
+two texts read; a cause in one neighbourhood and its consequence in the other read nothing alike
+and are the relation worth storing. Measured 2026-09-13 against claude-haiku-4-5 on two
+hand-built clusters, the model anchored an incident bridge on the pool exhaustion and the
+checkout outage (cosine 0.000) over the two near-identical release-note members the cosine rule
+picks. The cosine between whatever pair is chosen is still recorded on the node, so how far apart
+the vectors put them stays visible. The bridge's edges are weighted by the author's own reading
+instead: the model's compatibility, or the cosine on the deterministic path.
+
+Every bridge carries the premises it was inferred from, the role each endpoint plays, and a flag
+saying it is an inference. A reader that cannot tell a proposed relation from a recorded one
+cannot correct either.
 
 ## Bitemporal model
 

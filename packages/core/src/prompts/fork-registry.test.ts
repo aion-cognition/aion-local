@@ -161,12 +161,6 @@ const PROMPTS: readonly SurfacePrompt[] = [
     local: tier3Advisor.ADVICE_LOCAL,
     keyed: tier3Advisor.ADVICE_KEYED,
   },
-  {
-    surface: 'tier3-advisor',
-    prompt: 'review',
-    local: tier3Advisor.REVIEW_LOCAL,
-    keyed: tier3Advisor.REVIEW_KEYED,
-  },
 ];
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import { introspectionOperations } from './catalog.js';
-import { NARRATIVE_SEAL_OPERATION } from './operations/narrative-seal.js';
+import { EPISODE_EVICT_OPERATION } from './operations/episode-evict.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
-import { TIER3_ACTABLE_OPERATIONS } from '../domain/tier3.js';
+import { TIER3_DENIED_OPERATIONS } from '../domain/tier3.js';
 
 /** The shipped configuration, named at the call rather than reached for inside a relevance. */
 const catalog = () => introspectionOperations(DEFAULTS);
@@ -64,22 +64,22 @@ describe('introspectionOperations', () => {
     expect(withoutMeasure).toEqual(UNMEASURED_OPERATIONS);
   });
 
-  it('registers every operation tier 3 is allowed to run', () => {
-    // The allowlist holds bare strings. A rename that missed one would drop that operation out
-    // of tier 3 silently, as a permanent `downgraded` verdict nobody asked for.
+  it('registers every operation tier 3 is denied', () => {
+    // The denylist holds bare strings. A rename that missed one would silently hand a model the
+    // one write nothing puts back, which is the opposite of the mistake the old allowlist made.
     const names = new Set(catalog().map((operation) => operation.name));
-    const unregistered = TIER3_ACTABLE_OPERATIONS.filter((name) => !names.has(name));
+    const unregistered = TIER3_DENIED_OPERATIONS.filter((name) => !names.has(name));
     expect(unregistered).toEqual([]);
   });
 
   /**
-   * A model may recommend a seal run and the loop will log it, and it may not authorize one. The
-   * seal freezes a membership that never moves again and the publication it leads to writes a
-   * narrative through the guard; neither is a decision a recommendation should reach, and the
-   * ordinary tiers already select the operation on a demand reading taken from durable state.
+   * The hard-delete exception. Eviction removes a source's raw projection and no command puts
+   * the original text back, which is the property that keeps an operation off the strategic
+   * tier: a run a model chose has to be a run its own record can later judge and a person can
+   * reverse.
    */
-  it('keeps the chunk lifecycle out of what a model may run', () => {
-    expect(catalog().map((operation) => operation.name)).toContain(NARRATIVE_SEAL_OPERATION);
-    expect(TIER3_ACTABLE_OPERATIONS).not.toContain(NARRATIVE_SEAL_OPERATION);
+  it('denies the one operation whose removal nothing reverses', () => {
+    expect(catalog().map((operation) => operation.name)).toContain(EPISODE_EVICT_OPERATION);
+    expect(TIER3_DENIED_OPERATIONS).toContain(EPISODE_EVICT_OPERATION);
   });
 });

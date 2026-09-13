@@ -14,10 +14,12 @@ import type { Vector } from '../providers/types.js';
 
 /**
  * The symbiosis bridge: one node that joins two neighbourhoods nothing else connects, so
- * spreading activation has a way across. Everything here is deterministic. The similarity
- * that picks the pair is the embedding the substrate already stores, which is the sanctioned
- * machinery for "these two are about the same thing"; no model is asked for a judgment the
- * vectors already carry.
+ * spreading activation has a way across.
+ *
+ * The statements here are the storage, not the choosing. Which two nodes a bridge joins is the
+ * operation's question and a model's answer; this writes whatever pair it is handed, records
+ * the cosine between them as a measurement rather than as the reason, and keeps the premises
+ * and the inferred flag that say what kind of claim the node is.
  */
 
 /** Written on the bridge's edges, so a repair the loop made is separable from anything learned. */
@@ -29,10 +31,36 @@ export const BRIDGE_SIGNAL = 'symbiosis_bridge';
 export const BRIDGE_SOURCE_COMMUNITY_PROPERTY = 'source_community';
 export const BRIDGE_TARGET_COMMUNITY_PROPERTY = 'target_community';
 /**
- * The cosine that picked the endpoints, stored for provenance and read by no query: the same
- * number reaches recall as the strength and confidence on the bridge's two `RELATED_TO` edges.
+ * The cosine between the endpoints, stored for provenance and read by no query. It is a
+ * measurement of the pair that was written rather than the reason it was written: a model-led
+ * bridge is free to name two nodes the cosine would not have picked, and this then records how
+ * far apart the vectors put them.
  */
 export const BRIDGE_SIMILARITY_PROPERTY = 'similarity';
+
+/**
+ * What the bridge rests on, and who said so. A bridge is an inference across two
+ * neighbourhoods, so the node has to carry the statements it was inferred from and the fact
+ * that it is an inference; a reader who cannot tell a proposed relation from a recorded one
+ * cannot correct either.
+ */
+export const BRIDGE_PREMISES_PROPERTY = 'premises';
+export const BRIDGE_INFERRED_PROPERTY = 'inferred';
+/** Which path wrote it: the model's own proposal, or the deterministic floor under it. */
+export const BRIDGE_AUTHOR_PROPERTY = 'authored_by';
+/** The model's own compatibility reading, absent on a bridge no model authored. */
+export const BRIDGE_COMPATIBILITY_PROPERTY = 'compatibility';
+
+/**
+ * What each endpoint contributes to the relation, in the words of whoever proposed it. They sit
+ * on the node rather than on the edges because the node already names which endpoint is which,
+ * and the edge upsert is a shared write path that nothing else needs a role on.
+ */
+export const BRIDGE_SOURCE_ROLE_PROPERTY = 'source_role';
+export const BRIDGE_TARGET_ROLE_PROPERTY = 'target_role';
+
+/** Who authored a bridge's endpoints and text. */
+export type BridgeAuthor = 'model' | 'deterministic';
 
 /** Enough of an endpoint to name it in the bridge's own text, short enough to stay a label. */
 const ENDPOINT_LABEL_LENGTH = 120;
@@ -134,24 +162,79 @@ export async function findClosestCrossCommunityPair(
   return rows[0];
 }
 
+/**
+ * The cosine between two named nodes, or undefined where either carries no usable vector.
+ *
+ * The closest-pair search above answers "which two are nearest"; this answers "how near are
+ * these two", which is the question once something other than the cosine has chosen the pair.
+ * The number is recorded on the bridge and on its edges either way, so a model-chosen relation
+ * between two distant nodes is visible as exactly that rather than hidden.
+ */
+const SIMILARITY_BETWEEN = [
+  'MATCH (a:Memory), (b:Memory)',
+  `WHERE a.id = $leftId AND b.id = $rightId AND ${currentOnly('a')} AND ${currentOnly('b')}`,
+  `  AND a.${MEMORY_PROPERTIES.contentVector} IS NOT NULL`,
+  `  AND b.${MEMORY_PROPERTIES.contentVector} IS NOT NULL`,
+  `  AND size(a.${MEMORY_PROPERTIES.contentVector}) = $dimension`,
+  `  AND size(b.${MEMORY_PROPERTIES.contentVector}) = $dimension`,
+  `RETURN ${asCosine(
+    `vector.similarity.cosine(a.${MEMORY_PROPERTIES.contentVector}, b.${MEMORY_PROPERTIES.contentVector})`,
+  )} AS score`,
+].join('\n');
+
+export async function similarityBetween(
+  driver: Driver,
+  input: { readonly leftId: string; readonly rightId: string; readonly dimension: number },
+): Promise<number | undefined> {
+  return readFirst(
+    driver,
+    SIMILARITY_BETWEEN,
+    {
+      leftId: input.leftId,
+      rightId: input.rightId,
+      dimension: toGraphInteger(input.dimension),
+    },
+    (row) => row.score as number,
+  );
+}
+
 export type BridgeWrite = {
   readonly sourceId: string;
   readonly targetId: string;
   readonly sourceCommunity: number;
   readonly targetCommunity: number;
-  readonly similarity: number;
+  /**
+   * The cosine between the endpoints, where both carry a usable vector. Recorded and never
+   * weighted on: a model-led bridge joins the two nodes a relation runs between, and a cause
+   * and its consequence sit far apart in a space that measures how alike two texts read.
+   */
+  readonly similarity?: number;
+  /**
+   * What the bridge's two edges are worth, on 0 to 1. The author's own reading of the relation:
+   * the model's compatibility where a model proposed it, the cosine where the deterministic
+   * floor picked the pair.
+   */
+  readonly weight: number;
   readonly summary: string;
   readonly rationale: string;
+  /** What each endpoint contributes. Empty where the author named none. */
+  readonly sourceRole: string;
+  readonly targetRole: string;
+  /** The statements the relation was inferred from, one per line of evidence. */
+  readonly premises: readonly string[];
+  readonly author: BridgeAuthor;
+  /** The author's own reading of how well the two go together, when it gave one. */
+  readonly compatibility?: number;
   readonly vector: Vector;
   readonly now: Date;
 };
 
-/** A proportion out of a cosine, since an edge's strength and confidence are both on [0,1]. */
-function asProportion(similarity: number): number {
-  if (!Number.isFinite(similarity)) {
+/** An edge's strength and confidence are both on [0,1], whatever reading was handed in. */
+function asProportion(value: number): number {
+  if (!Number.isFinite(value)) {
     return 0;
   }
-  return Math.min(1, Math.max(0, similarity));
+  return Math.min(1, Math.max(0, value));
 }
 
 /**
@@ -160,7 +243,7 @@ function asProportion(similarity: number): number {
  * never observable. `count: 0` on the edges makes a repeated write a total no-op.
  */
 export async function writeBridge(driver: Driver, input: BridgeWrite): Promise<string> {
-  const weight = asProportion(input.similarity);
+  const weight = asProportion(input.weight);
   return inWriteTransaction(driver, async (tx) => {
     const node = await writeStampedNodeInTransaction(tx, {
       label: 'Bridge',
@@ -171,7 +254,20 @@ export async function writeBridge(driver: Driver, input: BridgeWrite): Promise<s
         [MEMORY_PROPERTIES.contentVectorHash]: vectorInputHash(input.summary),
         [BRIDGE_SOURCE_COMMUNITY_PROPERTY]: input.sourceCommunity,
         [BRIDGE_TARGET_COMMUNITY_PROPERTY]: input.targetCommunity,
-        [BRIDGE_SIMILARITY_PROPERTY]: input.similarity,
+        ...(input.similarity === undefined
+          ? {}
+          : { [BRIDGE_SIMILARITY_PROPERTY]: input.similarity }),
+        [BRIDGE_SOURCE_ROLE_PROPERTY]: input.sourceRole,
+        [BRIDGE_TARGET_ROLE_PROPERTY]: input.targetRole,
+        [BRIDGE_PREMISES_PROPERTY]: [...input.premises],
+        [BRIDGE_AUTHOR_PROPERTY]: input.author,
+        // Always true, and written rather than assumed. A bridge is a proposed relation and
+        // never an observed one, so a reader that finds this node beside a recorded fact can
+        // tell which of the two the substrate was told.
+        [BRIDGE_INFERRED_PROPERTY]: true,
+        ...(input.compatibility === undefined
+          ? {}
+          : { [BRIDGE_COMPATIBILITY_PROPERTY]: input.compatibility }),
       },
     });
 

@@ -37,13 +37,10 @@ const PROFILE_ROWS: Row[] = [
   { community: 2, size: 10, external_edges: 0, internal_edges: 10 },
 ];
 
-const CLOSEST_PAIR_ROW: Row = {
-  left_id: 'left-node',
-  left_label: 'the connection pool',
-  right_id: 'right-node',
-  right_label: 'the June incident',
-  score: 0.42,
-};
+const MEMBER_ROWS: Row[] = [
+  { id: 'member-a', label: 'the connection pool' },
+  { id: 'member-b', label: 'the June incident' },
+];
 
 function silentLogger(): Logger {
   const noop = (): void => {
@@ -73,8 +70,22 @@ function answer(cypher: string, parameters: Record<string, unknown>): unknown {
   if (cypher.includes('count(b) AS count')) {
     return results([{ count: 0 }]);
   }
+  if (cypher.includes('AS label')) {
+    return results(MEMBER_ROWS);
+  }
   if (cypher.includes('AS left_id')) {
-    return results([CLOSEST_PAIR_ROW]);
+    return results([
+      {
+        left_id: 'member-a',
+        left_label: 'the connection pool',
+        right_id: 'member-b',
+        right_label: 'the June incident',
+        score: 0.42,
+      },
+    ]);
+  }
+  if (cypher.includes('AS score')) {
+    return results([{ score: 0.42 }]);
   }
   if (cypher.includes('MERGE (n:Bridge { id: $id })')) {
     return results([{ id: parameters.id, labels: ['Bridge'] }], 1);
@@ -176,13 +187,13 @@ describe('symbiosisBridgeOperation under a shutdown', () => {
 
     expect(reachedTheCall).toBe(true);
     expect(elapsedMs).toBeLessThan(PROMPT_RETURN_MS);
-    // The deterministic sentence is the floor the model call falls back to, shutdown included.
-    expect(outcome.detail).toContain('deterministic bridge');
+    // A call that never arrived is the one case the deterministic floor exists for.
+    expect(outcome.detail).toContain('deterministic-authored bridge');
   });
 });
 
-describe('the sampling the bridge call asks for', () => {
-  it('asks for an unsampled answer, so one pair reads one way', async () => {
+describe('what the bridge call asks for', () => {
+  it('asks for an unsampled answer and for reasoning, so one pair reads one way', async () => {
     const { provider, started } = hangingProvider();
     const controller = new AbortController();
     const run = symbiosisBridgeOperation().run(contextFor(provider, controller.signal));
@@ -192,5 +203,6 @@ describe('the sampling the bridge call asks for', () => {
     await run;
 
     expect(request.temperature).toBe(0);
+    expect(request.think).toBe(true);
   });
 });

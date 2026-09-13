@@ -17,18 +17,23 @@ function storedApiCalls(db: SqliteHandle): (ApiCall & { readonly id: number })[]
       `SELECT id, occurred_at AS occurredAt, model, surface,
     input_tokens AS inputTokens, output_tokens AS outputTokens,
     cache_creation_tokens AS cacheCreationTokens, cache_read_tokens AS cacheReadTokens,
+    thinking_tokens AS thinkingTokens,
     duration_ms AS durationMs, attempts, usage_error AS usageError
     FROM api_calls ORDER BY id`,
     )
-    .all() as (Omit<ApiCall, 'occurredAt' | 'usageError'> & {
+    .all() as (Omit<ApiCall, 'occurredAt' | 'usageError' | 'thinkingTokens'> & {
     id: number;
     occurredAt: string;
     usageError: NonNullable<ApiCall['usageError']> | null;
+    thinkingTokens: number | null;
   })[];
-  return rows.map(({ usageError, ...row }) => ({
+  // Both nullable columns come back absent rather than null, which is how an `ApiCall` states
+  // the same two facts: no parse failure, and no reported reasoning share.
+  return rows.map(({ usageError, thinkingTokens, ...row }) => ({
     ...row,
     occurredAt: new Date(row.occurredAt),
     ...(usageError === null ? {} : { usageError }),
+    ...(thinkingTokens === null ? {} : { thinkingTokens }),
   }));
 }
 
@@ -40,6 +45,7 @@ const CALL: ApiCall = {
   outputTokens: 20,
   cacheCreationTokens: 200,
   cacheReadTokens: 700,
+  thinkingTokens: 0,
   durationMs: 125,
   attempts: 2,
 };
@@ -126,6 +132,8 @@ describe('the API call ledger', () => {
         outputTokens: 40,
         cacheCreationTokens: 400,
         cacheReadTokens: 1400,
+        thinkingTokens: 0,
+        thinkingUnknown: 0,
         durationMs: 250,
         attempts: 4,
         usageErrors: 0,
@@ -135,6 +143,30 @@ describe('the API call ledger', () => {
       ['cognitive', 1],
       ['cues', 1],
     ]);
+  });
+
+  /**
+   * A response whose usage block carried no breakdown is fully billed and partly unexplained.
+   * The row holds the totals and leaves the reasoning share out, and the aggregate says how many
+   * of its calls did that rather than folding them in at zero.
+   */
+  it('stores an unreported reasoning share as unknown rather than as none', () => {
+    const { thinkingTokens: reported, ...unreported } = CALL;
+    appendApiCall(store.db, unreported);
+    expect(storedApiCalls(store.db)).toEqual([{ id: 1, ...unreported }]);
+    expect(storedApiCalls(store.db)[0]).not.toHaveProperty('thinkingTokens');
+
+    const onlyUnknown = summarizeApiCalls(store.db, new Date(0), new Date('2100-01-01'));
+    expect(onlyUnknown.days[0]).toMatchObject({
+      outputTokens: 20,
+      thinkingTokens: null,
+      thinkingUnknown: 1,
+    });
+
+    // A reported zero is a fact and sums as one, which is the distinction the two columns keep.
+    appendApiCall(store.db, { ...unreported, thinkingTokens: reported });
+    const mixed = summarizeApiCalls(store.db, new Date(0), new Date('2100-01-01'));
+    expect(mixed.days[0]).toMatchObject({ thinkingTokens: 0, thinkingUnknown: 1 });
   });
 
   it('reports a storage failure without failing generation or paying for it again', () => {

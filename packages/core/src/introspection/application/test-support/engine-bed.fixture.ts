@@ -18,6 +18,7 @@ import {
   recordOperationResolution,
   recordOperationRun,
   recordOperationSelected,
+  type OperationResolution,
 } from '../../../infrastructure/sqlite/introspection-counters.js';
 import { getLedgerEntry } from '../../../infrastructure/sqlite/ops-ledger.js';
 import type { HealthSnapshot } from '../../domain/health.js';
@@ -89,12 +90,21 @@ export function strategicConfig(mode: 'propose' | 'act'): Config {
   };
 }
 
-/** Two resolved runs, which is what the never-seen-succeed gate reads before it accepts one. */
-export function seedTrackRecord(db: SqliteHandle, name: string, cycle = 1): void {
+/**
+ * Two resolved runs that both improved, which is the record the acceptance blend reads. A
+ * caller that wants the opposite passes `'unchanged'`: an operation whose runs move nothing
+ * scores zero effectiveness, and a confident recommendation for it blends under the floor.
+ */
+export function seedTrackRecord(
+  db: SqliteHandle,
+  name: string,
+  resolution: OperationResolution = 'improved',
+  cycle = 1,
+): void {
   recordOperationSelected(db, name, cycle);
   recordOperationRun(db, name, NOW.toISOString());
-  recordOperationResolution(db, name, 'improved');
-  recordOperationResolution(db, name, 'improved');
+  recordOperationResolution(db, name, resolution);
+  recordOperationResolution(db, name, resolution);
 }
 
 /** An advisor that always names the same operation, and counts how often it was asked. */
@@ -107,17 +117,16 @@ export function advisorFor(outcome: Tier3Outcome): Tier3Advisor & { readonly cal
   return Object.assign(advisor, { calls: () => calls });
 }
 
-/** The second pass, stubbed at the provider the loop shares with its operations. */
-export function reviewingProvider(upheld: boolean): Provider {
-  return {
-    embed: (): Promise<Vector[]> => Promise.reject(new Error('this caller must not embed')),
-    generate: (): Promise<unknown> =>
-      Promise.resolve({
-        upheld,
-        reason: upheld ? 'the backlog is real' : 'nine rows is not a backlog',
-      }),
-  };
-}
+/**
+ * A provider that refuses both calls. The consultation asks the advisor and nothing else, so a
+ * tier-3 test wires this to prove the loop reaches the model exactly once, through the seam the
+ * test controls.
+ */
+export const noSecondOpinionProvider: Provider = {
+  embed: (): Promise<Vector[]> => Promise.reject(new Error('this caller must not embed')),
+  generate: (): Promise<unknown> =>
+    Promise.reject(new Error('the consultation must not make a second model call')),
+};
 
 export function tier3Summary(db: SqliteHandle, cycle = 1): Record<string, unknown> {
   return (getLedgerEntry(db, tier3LedgerKey(cycle))?.summary ?? {}) as Record<string, unknown>;

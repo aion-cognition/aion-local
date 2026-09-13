@@ -18,20 +18,37 @@ export const MAINTENANCE_KNOBS = {
   // every candidate reads zero, and a tick on a degraded snapshot, skip the call entirely.
   // Off stops the consultation at the branch, which is what the loop did before.
   tier3: ['AION_MAINTENANCE_TIER3', z.boolean(), true],
-  // What an accepted recommendation is allowed to do. `propose` logs it and runs nothing,
-  // which makes it the kill switch inside the kill switch. `act` sends it to a second model
-  // call that argues the other side on the same reading, and runs it only when both passes
-  // agree, through the same claim, bound, and scoring path a deterministic selection takes.
-  // The default is set by measurement rather than by hand. The rule was pre-registered:
-  // two-pass selection agreement at or above 0.9 with no invalid selection over the
-  // twenty-four-case corpus ships `act`, anything less ships `propose`, and
-  // `tier3-advisor-selection.int.test.ts` asserts the shipped value still matches what it
-  // measures, in both directions.
-  // Measured 2026-08-31 against claude-haiku-4-5, 24 readings: one call agreed with the
-  // pre-committed answer on 12 of 24 and the two passes together on 12 of 24, with no
-  // invalid selection. The second pass vetoed 20 of 23 recommendations, including ones the
-  // corpus calls correct, so the advisor recommends and the loop runs nothing.
-  tier3Mode: ['AION_MAINTENANCE_TIER3_MODE', z.enum(['propose', 'act']), 'propose'],
+  // What an accepted recommendation is allowed to do. `act` runs it, through the same claim,
+  // bound, ledger row, and scoring path a deterministic selection takes; `propose` logs it and
+  // runs nothing, which makes it the kill switch inside the kill switch.
+  // `act` is the default because what guards a model-chosen run is the record it leaves. Every
+  // run is scored on the metric its operation declared, and that score weights the next
+  // recommendation for the same operation through the acceptance floor below. An operation
+  // whose model-chosen runs move nothing is downgraded by its own history within a few cycles.
+  // The measurement that used to pin this knob scored a second model call arguing against the
+  // first, and on 2026-08-31 that pass vetoed 20 of 23 recommendations including ones its own
+  // corpus calls correct. A reviewer that refuses almost everything answers nothing about the
+  // advisor, and pre-registered agreement over fixed readings is not what a live loop learns
+  // from either. `tier3-advisor-selection.int.test.ts` still measures single-call agreement and
+  // prints it; it no longer sets this value.
+  tier3Mode: ['AION_MAINTENANCE_TIER3_MODE', z.enum(['propose', 'act']), 'act'],
+  // The bar a recommendation's confidence has to clear once its operation's own record has
+  // weighted it. The blend is a product, so this reads as the share of a perfectly
+  // confident recommendation an operation's record has to be worth. 0.3 is the floor that lets
+  // a cold start through and stops a poor record: an operation nothing has scored carries the
+  // neutral 0.5 prior, so it needs a confidence of 0.6, which is what an advisor that names an
+  // operation at all reports; an operation measured at 0.3 effectiveness needs a confidence
+  // above 1 and therefore never clears it, and tier 2's starvation boost is what runs that
+  // operation instead. The twenty-one operations that declare no metric are weighted on the
+  // failures in their run record instead (`executionWeight`, introspection/domain/tier3.ts):
+  // five recorded throws put one at 0.14, which no confidence clears, and the clean runs the
+  // deterministic tiers give it afterwards pull it back toward the same 0.5 a cold start reads.
+  tier3AcceptanceFloor: ['AION_MAINTENANCE_TIER3_ACCEPTANCE_FLOOR', proportion, 0.3],
+  // Lessons from recent runs carried into the advisor's prompt, newest last. The effectiveness
+  // table beside them is a ratio per operation; these say what actually happened on a run, so a
+  // reading of "unchanged" arrives with the numbers it was unchanged between. Eight is about
+  // two hours of ticks and a few hundred tokens.
+  tier3InsightCount: ['AION_MAINTENANCE_TIER3_INSIGHT_COUNT', nonNegativeInt, 8],
   // `merge_auto`'s kill switch. On by default: the sweep is deterministic and model-free, a
   // graph-wide pass over tier-0 squash- and alias-equality groups with no proposal queue and
   // no shadow-judge review at any point. Off no-ops the sweep entirely; the groups it would
@@ -137,6 +154,17 @@ export const MAINTENANCE_KNOBS = {
   // every four members of the smaller side: below that the two are joined by a thread, and at
   // or above it activation already has a way across, so a bridge would buy nothing.
   bridgeOverlapCeiling: ['AION_MAINTENANCE_BRIDGE_OVERLAP_CEILING', proportion, 0.25],
+  // Members of each community the bridge proposal is shown, most-read first. Twelve a side is
+  // the profile a relation can be found in: enough that a cause in one cluster and its
+  // consequence in the other are both on the page, small enough that the two lists and their
+  // text stay well inside one call.
+  bridgeMemberSample: ['AION_MAINTENANCE_BRIDGE_MEMBER_SAMPLE', positiveInt, 12],
+  // The compatibility a proposed bridge has to reach before it is written. The model is asked
+  // for a reading from 0 to 1 and told to decline or score near zero when the two clusters have
+  // nothing to do with each other, so this is the line between the two halves of its own scale:
+  // below it the answer is a refusal written in numbers, and a bridge nobody believes in is an
+  // edge activation crosses for no reason.
+  bridgeMinCompatibility: ['AION_MAINTENANCE_BRIDGE_MIN_COMPATIBILITY', proportion, 0.5],
   // `proposal_hygiene`'s kill switch. On by default: the op only ever resolves a row past
   // its age horizon, and every dismissal is ledgered with the pair's identity, so a wrong
   // one is retro-judged from a real record rather than guessed at. Off leaves every

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { thinkingConfig } from './anthropic-thinking.js';
 import { CircuitBreaker } from './circuit-breaker.js';
 import { abortRequested } from './deadline-signal.js';
 import { summarizeErrorBody } from './errors.js';
@@ -221,6 +222,8 @@ export type AnthropicRequestOptions = {
   readonly maxTokens?: number;
   readonly schemaDelivery?: SchemaDelivery;
   readonly promptCache?: boolean;
+  /** Tokens a thinking call asks for. Clamped against the call's own `max_tokens` below. */
+  readonly thinkingBudgetTokens?: number;
   readonly recordApiCall?: (call: ApiCall) => void;
   readonly now?: () => number;
 };
@@ -230,6 +233,21 @@ const USAGE_SCHEMA = z.object({
   output_tokens: z.number().int().nonnegative(),
   cache_creation_input_tokens: z.number().int().nonnegative().default(0),
   cache_read_input_tokens: z.number().int().nonnegative().default(0),
+  /**
+   * The reasoning share of `output_tokens`, never an addition to it.
+   *
+   * The API sends the breakdown on a thinking answer, `null` on answers that did not think, and
+   * nothing at all on others. All three are valid usage blocks, so all three are accepted here:
+   * refusing one of them threw away the input and output totals sitting beside it and billed the
+   * call as unknown.
+   *
+   * A breakdown that is not there leaves the share unknown rather than at zero. Zero is a fact
+   * about a call that reasoned and spent nothing on it, and a row asserting that would price and
+   * read the same as one the model actually reported.
+   */
+  output_tokens_details: z
+    .object({ thinking_tokens: z.number().int().nonnegative().optional() })
+    .nullish(),
 });
 
 function throttled(status: number): boolean {
@@ -281,6 +299,9 @@ async function askAnthropic(
       ? instructions
       : [{ type: 'text', text: instructions, cache_control: { type: 'ephemeral' } }];
 
+  const maxTokens = req.maxTokens ?? options.maxTokens ?? DEFAULT_MAX_TOKENS;
+  const thinking = thinkingConfig(req.think, maxTokens, options.thinkingBudgetTokens);
+
   let response!: Response;
   let attempts = 1;
   for (; ; attempts += 1) {
@@ -293,11 +314,17 @@ async function askAnthropic(
       },
       body: JSON.stringify({
         model: req.model,
-        // Sent only when the caller named one. The newer model families removed the parameter
-        // and answer a 400 to it, the model is an operator knob, and their default sampling is
-        // already the repeatable behaviour the 0 was there to ask for.
-        ...(req.temperature === undefined ? {} : { temperature: req.temperature }),
-        max_tokens: req.maxTokens ?? options.maxTokens ?? DEFAULT_MAX_TOKENS,
+        // Sent only when the caller named one, and never beside thinking: the API accepts
+        // `temperature` at 1 alone once thinking is on, and answers "`temperature` may only be
+        // set to 1 when thinking is enabled" to anything else. A caller asking for both wants
+        // the reasoning, and the temperature it names is the repeatability it would have got
+        // from the default sampling anyway. The newer model families removed the parameter
+        // outright, which is the other reason it is sent only on request.
+        ...(req.temperature === undefined || thinking !== undefined
+          ? {}
+          : { temperature: req.temperature }),
+        max_tokens: maxTokens,
+        ...(thinking === undefined ? {} : { thinking }),
         ...(cachedInstructions === undefined ? {} : { system: cachedInstructions }),
         ...(viaPrompt
           ? {}
@@ -342,7 +369,11 @@ async function askAnthropic(
         output_tokens: 0,
         cache_creation_input_tokens: 0,
         cache_read_input_tokens: 0,
+        output_tokens_details: undefined,
       };
+  // Left off the record entirely when the response carried no breakdown. The bill is known and
+  // the split inside it is not, and those are different facts.
+  const thinkingTokens = counters.output_tokens_details?.thinking_tokens;
   options.recordApiCall?.({
     occurredAt: new Date(started),
     model: req.model,
@@ -351,13 +382,21 @@ async function askAnthropic(
     outputTokens: counters.output_tokens,
     cacheCreationTokens: counters.cache_creation_input_tokens,
     cacheReadTokens: counters.cache_read_input_tokens,
+    ...(thinkingTokens === undefined ? {} : { thinkingTokens }),
     durationMs: Math.max(0, now() - started),
     attempts,
     ...(usage.success ? {} : { usageError: 'invalid_usage' }),
   });
+  // A thinking answer leads with its reasoning blocks and puts the JSON in a text block after
+  // them, so the answer is the first text block rather than the first block. The find already
+  // walked past everything else; naming thinking here is what says the walk is deliberate.
   const textBlock = body?.content?.find((block) => block.type === 'text');
   if (textBlock?.text === undefined) {
-    throw new AnthropicResponseError('missing text content');
+    throw new AnthropicResponseError(
+      body?.content?.some((block) => block.type === 'thinking') === true
+        ? 'carried reasoning and no answer, which is a budget that filled max_tokens'
+        : 'missing text content',
+    );
   }
   return parseJsonPayload(textBlock.text);
 }
@@ -374,9 +413,10 @@ async function askAnthropic(
  * that request unchanged returns the same text, so the retry switches to the mode the API
  * constrains, which is the one thing that changes the shape of the answer.
  *
- * `req.think` has no counterpart here: it switches a local hybrid model's reasoning block
- * off, and this route has no such block to switch. It is dropped rather than rejected, so a
- * caller written for the local route needs no branch of its own.
+ * `req.think` reaches the wire here as Haiku 4.5's extended-thinking configuration, which is a
+ * token budget and not a flag. The response then carries reasoning blocks ahead of the answer
+ * and bills them inside its output count, so both the parse and the usage record read that
+ * shape rather than assuming one text block and one price.
  */
 export async function requestAnthropicJson(
   options: AnthropicRequestOptions,
@@ -401,6 +441,7 @@ export type AnthropicProviderOptions = {
   readonly maxTokens?: number;
   readonly schemaDelivery?: SchemaDelivery;
   readonly promptCache?: boolean;
+  readonly thinkingBudgetTokens?: number;
   readonly recordApiCall?: (call: ApiCall) => void;
   readonly breakerFailureThreshold?: number;
   readonly breakerCooldownMs?: number;
@@ -430,6 +471,9 @@ export class AnthropicProvider implements GenerationBackend {
       ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
       ...(options.schemaDelivery === undefined ? {} : { schemaDelivery: options.schemaDelivery }),
       ...(options.promptCache === undefined ? {} : { promptCache: options.promptCache }),
+      ...(options.thinkingBudgetTokens === undefined
+        ? {}
+        : { thinkingBudgetTokens: options.thinkingBudgetTokens }),
       ...(options.recordApiCall === undefined ? {} : { recordApiCall: options.recordApiCall }),
       ...(options.now === undefined ? {} : { now: options.now }),
     };

@@ -31,6 +31,7 @@ it('renders each UTC day and surface with all token classes priced once', async 
     outputTokens: 200,
     cacheCreationTokens: 2000,
     cacheReadTokens: 7000,
+    thinkingTokens: 0,
     durationMs: 50,
     attempts: 1,
   });
@@ -52,6 +53,7 @@ it('does not price an unknown model as free or as Haiku', async () => {
     outputTokens: 20,
     cacheCreationTokens: 0,
     cacheReadTokens: 0,
+    thinkingTokens: 0,
     durationMs: 50,
     attempts: 1,
   });
@@ -85,6 +87,7 @@ it('reports cache share for a complete group beside one whose usage failed to pa
     outputTokens: 200,
     cacheCreationTokens: 2000,
     cacheReadTokens: 7000,
+    thinkingTokens: 0,
     durationMs: 50,
     attempts: 1,
   });
@@ -96,6 +99,7 @@ it('reports cache share for a complete group beside one whose usage failed to pa
     outputTokens: 0,
     cacheCreationTokens: 0,
     cacheReadTokens: 0,
+    thinkingTokens: 0,
     durationMs: 1,
     attempts: 1,
     usageError: 'invalid_usage',
@@ -108,6 +112,35 @@ it('reports cache share for a complete group beside one whose usage failed to pa
   expect(lines).toContain('cache effectiveness unavailable: usage parse failures');
 });
 
+/**
+ * The reasoning column reports what it can add and says what is missing. Zero would read as a
+ * group that reasoned for nothing, which is the one thing a response with no breakdown did not
+ * say about itself.
+ */
+it('says the reasoning share is unknown rather than printing it as none', async () => {
+  const call = {
+    occurredAt: new Date('2026-09-06T10:00:00Z'),
+    model: 'claude-haiku-4-5',
+    surface: 'cues',
+    inputTokens: 1000,
+    outputTokens: 200,
+    cacheCreationTokens: 0,
+    cacheReadTokens: 0,
+    durationMs: 50,
+    attempts: 1,
+  };
+  appendApiCall(store.db, call);
+  const unknownOnly: string[] = [];
+  await runCosts([], (line) => unknownOnly.push(line));
+  expect(lineStartingWith(unknownOnly, 'cues')).toContain('unavailable');
+
+  appendApiCall(store.db, { ...call, surface: 'cognitive', thinkingTokens: 51 });
+  const mixed: string[] = [];
+  await runCosts([], (line) => mixed.push(line));
+  expect(lineStartingWith(mixed, 'cognitive')).toContain('51');
+  expect(lineStartingWith(mixed, '2026-09-06')).toContain('51+unknown');
+});
+
 it('marks a group unavailable when only some of its calls have unusable usage', async () => {
   appendApiCall(store.db, {
     occurredAt: new Date('2026-09-06T10:00:00Z'),
@@ -117,6 +150,7 @@ it('marks a group unavailable when only some of its calls have unusable usage', 
     outputTokens: 200,
     cacheCreationTokens: 2000,
     cacheReadTokens: 7000,
+    thinkingTokens: 0,
     durationMs: 50,
     attempts: 1,
   });
@@ -128,6 +162,7 @@ it('marks a group unavailable when only some of its calls have unusable usage', 
     outputTokens: 0,
     cacheCreationTokens: 0,
     cacheReadTokens: 0,
+    thinkingTokens: 0,
     durationMs: 1,
     attempts: 1,
     usageError: 'invalid_usage',
@@ -147,6 +182,7 @@ it('reports no share for a complete group that spent no input tokens', async () 
     outputTokens: 200,
     cacheCreationTokens: 0,
     cacheReadTokens: 0,
+    thinkingTokens: 0,
     durationMs: 50,
     attempts: 1,
   });
@@ -166,6 +202,7 @@ it('reports cache share for a complete group whose model has no price', async ()
     outputTokens: 200,
     cacheCreationTokens: 0,
     cacheReadTokens: 1000,
+    thinkingTokens: 0,
     durationMs: 50,
     attempts: 1,
   });
@@ -184,6 +221,7 @@ it('marks unknown charges instead of presenting invalid usage as zero spend', as
     outputTokens: 0,
     cacheCreationTokens: 0,
     cacheReadTokens: 0,
+    thinkingTokens: 0,
     durationMs: 1,
     attempts: 1,
     usageError: 'invalid_usage',

@@ -1,6 +1,14 @@
 import type { Driver } from 'neo4j-driver';
 
 import { BITEMPORAL_PROPERTIES, CLOSURE_PROVENANCE_PROPERTY } from '../bitemporal.js';
+import {
+  BRIDGE_AUTHOR_PROPERTY,
+  BRIDGE_COMPATIBILITY_PROPERTY,
+  BRIDGE_INFERRED_PROPERTY,
+  BRIDGE_PREMISES_PROPERTY,
+  BRIDGE_SOURCE_ROLE_PROPERTY,
+  BRIDGE_TARGET_ROLE_PROPERTY,
+} from '../bridge-queries.js';
 import { readFirst, runRead } from '../connection.js';
 import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from '../episodes.js';
 import { BASE_NODE_LABEL, ENTITY_LABEL } from '../labels.js';
@@ -52,18 +60,45 @@ export async function narrativeGrounding(driver: Driver, id: string): Promise<st
   return typeof value === 'string' ? value : undefined;
 }
 
-/** Standing bridges, newest first, with the sentence each one carries. */
-export async function standingBridges(driver: Driver): Promise<{ id: string; text: string }[]> {
+/** What a standing bridge records about how it came to exist. */
+export type StandingBridge = {
+  id: string;
+  text: string;
+  author: string;
+  inferred: boolean;
+  premises: string[];
+  sourceRole: string;
+  targetRole: string;
+  compatibility: number | undefined;
+};
+
+/** Standing bridges, newest first, with the sentence and the provenance each one carries. */
+export async function standingBridges(driver: Driver): Promise<StandingBridge[]> {
   return runRead(
     driver,
     [
       'MATCH (b:Bridge)',
       `WHERE b.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
-      `RETURN b.id AS id, coalesce(b.${MEMORY_PROPERTIES.text}, '') AS text`,
+      `RETURN b.id AS id, coalesce(b.${MEMORY_PROPERTIES.text}, '') AS text,`,
+      `       coalesce(b.${BRIDGE_AUTHOR_PROPERTY}, '') AS author,`,
+      `       coalesce(b.${BRIDGE_INFERRED_PROPERTY}, false) AS inferred,`,
+      `       coalesce(b.${BRIDGE_PREMISES_PROPERTY}, []) AS premises,`,
+      `       coalesce(b.${BRIDGE_SOURCE_ROLE_PROPERTY}, '') AS source_role,`,
+      `       coalesce(b.${BRIDGE_TARGET_ROLE_PROPERTY}, '') AS target_role,`,
+      `       b.${BRIDGE_COMPATIBILITY_PROPERTY} AS compatibility`,
       `ORDER BY b.${BITEMPORAL_PROPERTIES.txFrom} DESC, b.id`,
     ].join('\n'),
     {},
-    (row) => ({ id: row.id as string, text: row.text as string }),
+    (row) => ({
+      id: row.id as string,
+      text: row.text as string,
+      author: row.author as string,
+      inferred: row.inferred === true,
+      premises: (row.premises as string[] | null) ?? [],
+      sourceRole: row.source_role as string,
+      targetRole: row.target_role as string,
+      compatibility: (row.compatibility as number | null) ?? undefined,
+    }),
   );
 }
 

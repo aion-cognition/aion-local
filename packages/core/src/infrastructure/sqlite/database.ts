@@ -39,6 +39,9 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     output_tokens INTEGER NOT NULL CHECK (output_tokens >= 0),
     cache_creation_tokens INTEGER NOT NULL CHECK (cache_creation_tokens >= 0),
     cache_read_tokens INTEGER NOT NULL CHECK (cache_read_tokens >= 0),
+    -- Nullable, and null is the reading for a response whose usage block carried no breakdown:
+    -- the reasoning share of that output count is unknown, which is not the same as nothing.
+    thinking_tokens INTEGER CHECK (thinking_tokens >= 0),
     duration_ms REAL NOT NULL CHECK (duration_ms >= 0),
     attempts INTEGER NOT NULL CHECK (attempts > 0),
     usage_error TEXT
@@ -47,6 +50,14 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     key TEXT PRIMARY KEY,
     applied_at TEXT NOT NULL,
     summary_json TEXT
+  )`,
+  // One line per resolved maintenance run, written from the run's own numbers. The advisor's
+  // prompt reads the newest few; nothing else reads them, and the table is trimmed to a window.
+  `CREATE TABLE IF NOT EXISTS introspection_insights (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    operation TEXT NOT NULL,
+    lesson TEXT NOT NULL,
+    recorded_at TEXT NOT NULL
   )`,
   /**
    * `lane`, `session_id` and `lane_seq` are what claiming orders by: interactive before bulk,

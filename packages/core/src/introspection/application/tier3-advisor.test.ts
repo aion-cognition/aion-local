@@ -4,7 +4,6 @@ import {
   adviseTier3,
   DEFAULT_TIER3_MODE,
   modelAdvisor,
-  reviewTier3Proposal,
   TIER3_NO_OPERATION,
 } from './tier3-advisor.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
@@ -13,7 +12,7 @@ import type { Provider, StructuredRequest } from '../../infrastructure/providers
 import type { OperationCandidate } from '../domain/decide.js';
 import { NEUTRAL_QUEUE_HEALTH } from '../domain/health.js';
 import { healthFixture } from '../domain/test-support/health.fixture.js';
-import type { Tier3Proposal, Tier3Request } from '../domain/tier3.js';
+import type { Tier3Request } from '../domain/tier3.js';
 
 const CANDIDATES: readonly OperationCandidate[] = [
   { name: 'dead_letter', relevance: 0.18 },
@@ -24,12 +23,6 @@ const REQUEST: Tier3Request = {
   health: healthFixture({ queue: { ...NEUTRAL_QUEUE_HEALTH, exhausted: 9 } }),
   candidates: CANDIDATES,
   reason: 'no operation cleared the urgency threshold',
-};
-
-const PROPOSAL: Tier3Proposal = {
-  operation: 'dead_letter',
-  confidence: 0.7,
-  rationale: 'nine exhausted rows are waiting on their one retry',
 };
 
 const OPTIONS = { model: 'qwen3:8b', timeoutMs: 1_000 };
@@ -153,44 +146,41 @@ describe('adviseTier3', () => {
     expect(outcome.status).toBe('declined');
     expect(seen).toContain('dead_letter: relevance 0.180, routine, untried');
   });
-});
 
-describe('reviewTier3Proposal', () => {
-  it('upholds a recommendation the second pass agrees with', async () => {
-    const review = await reviewTier3Proposal(
-      answering({ upheld: true, reason: 'the exhausted rows are real' }),
-      REQUEST,
-      PROPOSAL,
+  it('carries the lessons recent runs left into the prompt', async () => {
+    let seen = '';
+    await adviseTier3(
+      {
+        generate: (request: StructuredRequest): Promise<unknown> => {
+          seen = request.messages.map((message) => message.content).join('\n');
+          return Promise.resolve({ operation: TIER3_NO_OPERATION, rationale: 'nothing' });
+        },
+      },
+      {
+        ...REQUEST,
+        insights: ['dead_letter ran with its metric at 9 and did not move it: it was still 9'],
+      },
       OPTIONS,
     );
 
-    expect(review).toEqual({ status: 'upheld' });
+    expect(seen).toContain('What recent runs taught the loop');
+    expect(seen).toContain('did not move it: it was still 9');
   });
 
-  it('carries the reason a veto gives', async () => {
-    const review = await reviewTier3Proposal(
-      answering({ upheld: false, reason: 'nine rows is not a backlog' }),
+  it('leaves the lessons block out entirely when nothing has resolved yet', async () => {
+    let seen = '';
+    await adviseTier3(
+      {
+        generate: (request: StructuredRequest): Promise<unknown> => {
+          seen = request.messages.map((message) => message.content).join('\n');
+          return Promise.resolve({ operation: TIER3_NO_OPERATION, rationale: 'nothing' });
+        },
+      },
       REQUEST,
-      PROPOSAL,
       OPTIONS,
     );
 
-    expect(review).toEqual({ status: 'vetoed', reason: 'nine rows is not a backlog' });
-  });
-
-  it('refuses an answer the schema cannot read', async () => {
-    const review = await reviewTier3Proposal(answering({ ok: 'sure' }), REQUEST, PROPOSAL, OPTIONS);
-
-    expect(review.status).toBe('unusable');
-  });
-
-  it('answers failed when the call runs past its own timeout', async () => {
-    const review = await reviewTier3Proposal(hanging(), REQUEST, PROPOSAL, {
-      ...OPTIONS,
-      timeoutMs: 5,
-    });
-
-    expect(review.status).toBe('failed');
+    expect(seen).not.toContain('What recent runs taught the loop');
   });
 });
 
@@ -210,20 +200,21 @@ describe('modelAdvisor', () => {
   });
 });
 
-describe('the sampling both tier 3 calls ask for', () => {
-  it('asks for an unsampled answer on the recommendation and on the review of it', async () => {
+describe('what the tier 3 call asks for', () => {
+  it('asks the model to reason, with room for the reasoning and the answer together', async () => {
     const requests: StructuredRequest[] = [];
     const recording: Pick<Provider, 'generate'> = {
       generate: (request: StructuredRequest): Promise<unknown> => {
         requests.push(request);
-        return Promise.resolve({ operation: TIER3_NO_OPERATION, upheld: true, reason: 'agreed' });
+        return Promise.resolve({ operation: TIER3_NO_OPERATION, rationale: 'nothing' });
       },
     };
 
     await adviseTier3(recording, REQUEST, OPTIONS);
-    await reviewTier3Proposal(recording, REQUEST, PROPOSAL, OPTIONS);
 
-    expect(requests).toHaveLength(2);
-    expect(requests.map((request) => request.temperature)).toEqual([0, 0]);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ think: true, temperature: 0 });
+    // Thinking is billed and counted as output, so the ceiling has to hold both.
+    expect(requests[0]?.maxTokens).toBeGreaterThan(2048);
   });
 });

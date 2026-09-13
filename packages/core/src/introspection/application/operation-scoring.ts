@@ -8,6 +8,7 @@ import {
   setPendingMeasure,
   type OperationResolution,
 } from '../../infrastructure/sqlite/introspection-counters.js';
+import { appendIntrospectionInsight } from '../../infrastructure/sqlite/introspection-insights.js';
 import type { HealthSnapshot } from '../domain/health.js';
 import {
   measureImproved,
@@ -24,6 +25,10 @@ import {
  * is recorded as having run and nothing more, because the only verdict available without a
  * metric is the operation's own report of what it did, and a loop that weights operations on
  * that is measuring willingness rather than effect.
+ *
+ * Each verdict also writes one sentence saying what happened, which is what the strategic tier
+ * reads back. The counters answer how often; the sentence answers what, and the two together
+ * are what a recommendation can be argued against.
  */
 
 export type ScoringDeps = {
@@ -89,9 +94,28 @@ export function resolvePendingMeasures(
       : 'unchanged';
     recordOperationResolution(deps.db, operation.name, resolution);
     clearPendingMeasure(deps.db, operation.name);
+    recordInsight(deps, operation.name, measuredLesson(resolution, stats.pendingMeasure, after));
     resolved.push({ name: operation.name, resolution });
   }
   return resolved;
+}
+
+/** The sentence a scored run leaves behind: the verdict with the two numbers behind it. */
+function measuredLesson(resolution: OperationResolution, before: number, after: number): string {
+  const verb = resolution === 'improved' ? 'moved' : 'did not move';
+  return `ran with its metric at ${String(before)} and ${verb} it: the next reading was ${String(after)}`;
+}
+
+/**
+ * A lesson that cannot be written is not worth a failed tick. The row is what the advisor reads
+ * next cycle, and losing one costs the prompt a line rather than the loop a run.
+ */
+function recordInsight(deps: ScoringDeps, operation: string, lesson: string): void {
+  try {
+    appendIntrospectionInsight(deps.db, { operation, lesson });
+  } catch (err) {
+    deps.logger.warn({ err, operation }, 'introspection insight write failed');
+  }
 }
 
 /**
@@ -144,6 +168,7 @@ export function recordRunOutcome(
   if (outcome.status === 'failed') {
     clearPendingMeasure(deps.db, operation.name);
     recordOperationResolution(deps.db, operation.name, 'failed');
+    recordInsight(deps, operation.name, `failed: ${outcome.detail ?? 'no reason recorded'}`);
     return;
   }
   if (before !== undefined) {
@@ -151,4 +176,14 @@ export function recordRunOutcome(
     return;
   }
   recordOperationResolution(deps.db, operation.name, 'unmeasured');
+  // The honest lesson for an operation with no metric: what it reported doing, marked as its own
+  // account rather than as a verdict, since nothing in the snapshot can contradict it.
+  recordInsight(
+    deps,
+    operation.name,
+    `reported ${outcome.status}, ${String(outcome.itemsAffected)} of ` +
+      `${String(outcome.itemsProcessed)} items` +
+      `${outcome.detail === undefined ? '' : ` (${outcome.detail})`}; ` +
+      'it declares no metric, so nothing scored it',
+  );
 }

@@ -1,9 +1,11 @@
 import type { Driver } from 'neo4j-driver';
 
+import { ACCESS_COUNT_PROPERTY } from './access-tracking.js';
 import { currentOnly } from './bitemporal.js';
 import { readFirst, runRead, runWrite, writeFirst } from './connection.js';
+import { MEMORY_PROPERTIES } from './episodes.js';
 import { BACKBONE_TYPES } from './labels.js';
-import { STRUCTURAL_PROPERTY } from './seed-queries.js';
+import { ENTITY_NAME_PROPERTY, STRUCTURAL_PROPERTY } from './seed-queries.js';
 import { toGraphInteger } from './values.js';
 
 /**
@@ -203,6 +205,46 @@ export async function readCommunityProfiles(
     externalEdges: row.external_edges as number,
     internalEdges: row.internal_edges as number,
   }));
+}
+
+export type CommunityMember = {
+  readonly id: string;
+  /** Enough of the node to recognise what it is about, clipped by the query. */
+  readonly label: string;
+};
+
+/** Long enough to say what a memory is about, short enough that a profile stays readable. */
+const MEMBER_LABEL_LENGTH = 240;
+
+/**
+ * The members of one community, most-read first, with enough text to tell them apart.
+ *
+ * This is what a community profile is made of when a reader has to choose between its members:
+ * the pair scores say which two neighbourhoods to join, and nothing in them says which two
+ * memories carry the relation. Most-read first for the same reason the closest-pair search uses
+ * that order: a shortcut is worth building through the nodes recall keeps returning.
+ */
+const READ_COMMUNITY_MEMBERS = [
+  'MATCH (n:Memory)',
+  `WHERE ${currentOnly('n')} AND n.${COMMUNITY_PROPERTY} = $community`,
+  `  AND coalesce(n.${STRUCTURAL_PROPERTY}, false) = false`,
+  `WITH n ORDER BY coalesce(n.${ACCESS_COUNT_PROPERTY}, 0) DESC, n.id`,
+  'LIMIT $limit',
+  `RETURN n.id AS id, left(coalesce(n.${ENTITY_NAME_PROPERTY}, n.${MEMORY_PROPERTIES.summary},`,
+  `  n.${MEMORY_PROPERTIES.text}, n.id), ${String(MEMBER_LABEL_LENGTH)}) AS label`,
+].join('\n');
+
+export async function readCommunityMembers(
+  driver: Driver,
+  community: number,
+  limit: number,
+): Promise<CommunityMember[]> {
+  return runRead(
+    driver,
+    READ_COMMUNITY_MEMBERS,
+    { community: toGraphInteger(community), limit: toGraphInteger(limit) },
+    (row) => ({ id: row.id as string, label: (row.label as string | null) ?? '' }),
+  );
 }
 
 export type CommunityPairEdges = {

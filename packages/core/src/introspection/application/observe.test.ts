@@ -60,7 +60,9 @@ describe('readOperationEffectiveness', () => {
     recordOperationResolution(store.db, 'claim_dedup', 'failed');
 
     const [record] = read('claim_dedup', false);
-    // The failure is on the record; what it is not is a verdict on work nothing scored.
+    // The failure is on the record; what it is not is a verdict on work nothing scored. Both
+    // numbers are reported, because the execution weight in `domain/tier3.ts` divides them.
+    expect(record?.runs).toBe(2);
     expect(record?.failed).toBe(1);
     expect(record?.effectiveness).toBeUndefined();
   });

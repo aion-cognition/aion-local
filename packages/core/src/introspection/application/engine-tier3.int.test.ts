@@ -1,10 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { operationStats } from '../../infrastructure/sqlite/introspection-counters.js';
-import { getLedgerEntry } from '../../infrastructure/sqlite/ops-ledger.js';
-import { operationBucketKey } from '../domain/buckets.js';
-import { healthFixture } from '../domain/test-support/health.fixture.js';
-import type { Tier3Advisor, Tier3Outcome } from '../domain/tier3.js';
 import {
   advisorFor,
   clearIntrospectionState,
@@ -12,8 +7,8 @@ import {
   fakeOperation,
   NEXT_BUCKET,
   NEXT_QUARTER,
+  noSecondOpinionProvider,
   NOW,
-  reviewingProvider,
   seedTrackRecord,
   startEngineBed,
   stopEngineBed,
@@ -22,6 +17,12 @@ import {
   type EngineBed,
   type FakeOperation,
 } from './test-support/engine-bed.fixture.js';
+import { operationStats } from '../../infrastructure/sqlite/introspection-counters.js';
+import { appendIntrospectionInsight } from '../../infrastructure/sqlite/introspection-insights.js';
+import { getLedgerEntry } from '../../infrastructure/sqlite/ops-ledger.js';
+import { operationBucketKey } from '../domain/buckets.js';
+import { healthFixture } from '../domain/test-support/health.fixture.js';
+import type { Tier3Advisor, Tier3Outcome, Tier3Request } from '../domain/tier3.js';
 
 let bed: EngineBed;
 
@@ -35,17 +36,18 @@ afterAll(async () => {
 
 beforeEach(() => {
   clearIntrospectionState(bed.db);
+  bed.db.exec('DELETE FROM introspection_insights');
 });
 
 /**
  * The strategic tier end to end. `dead_letter` is the operation under test throughout because
- * it is on the act allowlist and its relevance is a real backlog reading rather than a standing
- * cadence; a stand-in keeps the run itself cheap.
+ * its relevance is a real backlog reading rather than a standing cadence; a stand-in keeps the
+ * run itself cheap.
  */
 describe('Introspector tier 3', () => {
   const PROPOSAL = {
     operation: 'dead_letter',
-    confidence: 0.7,
+    confidence: 0.8,
     rationale: 'nine exhausted rows are waiting on their one retry',
   } as const;
 
@@ -119,12 +121,16 @@ describe('Introspector tier 3', () => {
       mode: 'propose',
       outcome: 'advised',
       operation: 'dead_letter',
-      confidence: 0.7,
+      confidence: 0.8,
       gate: 'accepted',
     });
   });
 
-  it('runs an upheld recommendation through the same claim and scoring path as any selection', async () => {
+  /**
+   * The restored authority, and the proof that nothing argues against the recommendation first:
+   * the shared provider throws on any call, and the run still lands.
+   */
+  it('runs an accepted recommendation with no second opinion asked', async () => {
     const advisor = advisorFor(ADVISED);
     const operation = subject();
     seedTrackRecord(bed.db, 'dead_letter');
@@ -132,7 +138,7 @@ describe('Introspector tier 3', () => {
     const report = await engineFor(bed, [operation], [healthFixture()], NOW, {
       config: strategicConfig('act'),
       tier3Advisor: advisor,
-      provider: reviewingProvider(true),
+      provider: noSecondOpinionProvider,
     }).tickOnce();
 
     expect(report.decision).toMatchObject({ kind: 'selected', name: 'dead_letter', tier: 3 });
@@ -143,57 +149,76 @@ describe('Introspector tier 3', () => {
     expect(bucket?.summary).toMatchObject({ operation: 'dead_letter', tier: 3, status: 'applied' });
     // The run parked its pre-run reading like any other, so the next cycle scores it.
     expect(operationStats(bed.db, 'dead_letter').pendingMeasure).toBe(0);
-    expect(tier3Summary(bed.db)).toMatchObject({ mode: 'act', review: 'upheld', ran: 'applied' });
+    expect(tier3Summary(bed.db)).toMatchObject({ mode: 'act', gate: 'accepted', ran: 'applied' });
   });
 
-  it('keeps a vetoed recommendation as a recommendation', async () => {
+  it('runs an operation with no record at all, on the neutral cold-start prior', async () => {
     const advisor = advisorFor(ADVISED);
     const operation = subject();
-    seedTrackRecord(bed.db, 'dead_letter');
 
     const report = await engineFor(bed, [operation], [healthFixture()], NOW, {
       config: strategicConfig('act'),
       tier3Advisor: advisor,
-      provider: reviewingProvider(false),
+      provider: noSecondOpinionProvider,
     }).tickOnce();
 
-    expect(report.decision.kind).toBe('tier3');
-    expect(operation.calls()).toBe(0);
-    expect(tier3Summary(bed.db).review).toContain('vetoed');
+    expect(report.decision).toMatchObject({ kind: 'selected', tier: 3 });
+    expect(operation.calls()).toBe(1);
+    expect(tier3Summary(bed.db)).toMatchObject({ gate: 'accepted', blended: 0.4 });
   });
 
-  it('runs nothing in act mode when the recommendation names an operation outside the allowlist', async () => {
+  it('can select the bridge, which the deterministic tier could already schedule', async () => {
     const advisor = advisorFor({
       status: 'advised',
       proposal: { ...PROPOSAL, operation: 'symbiosis_bridge' },
     });
     const operation = fakeOperation('symbiosis_bridge', { relevance: () => 0.1 });
-    seedTrackRecord(bed.db, 'symbiosis_bridge');
 
     const report = await engineFor(bed, [operation], [healthFixture()], NOW, {
       config: strategicConfig('act'),
       tier3Advisor: advisor,
-      provider: reviewingProvider(true),
+      provider: noSecondOpinionProvider,
     }).tickOnce();
 
-    expect(report.decision.kind).toBe('tier3');
-    expect(operation.calls()).toBe(0);
-    expect(tier3Summary(bed.db).gate).toContain('downgraded');
+    expect(report.decision).toMatchObject({ kind: 'selected', name: 'symbiosis_bridge', tier: 3 });
+    expect(operation.calls()).toBe(1);
   });
 
-  it('runs nothing in act mode until the operation has resolved a run of its own', async () => {
+  /** The blend is what downgrades a confident recommendation with a poor record. */
+  it('keeps a recommendation for an operation whose runs stopped helping as a recommendation', async () => {
     const advisor = advisorFor(ADVISED);
     const operation = subject();
+    seedTrackRecord(bed.db, 'dead_letter', 'unchanged');
 
     const report = await engineFor(bed, [operation], [healthFixture()], NOW, {
       config: strategicConfig('act'),
       tier3Advisor: advisor,
-      provider: reviewingProvider(true),
+      provider: noSecondOpinionProvider,
     }).tickOnce();
 
     expect(report.decision.kind).toBe('tier3');
     expect(operation.calls()).toBe(0);
-    expect(tier3Summary(bed.db).gate).toContain('no run record yet');
+    expect(String(tier3Summary(bed.db).gate)).toContain('downgraded');
+    expect(tier3Summary(bed.db).blended).toBe(0);
+  });
+
+  it('runs nothing in act mode when the recommendation names what cannot be taken back', async () => {
+    const advisor = advisorFor({
+      status: 'advised',
+      proposal: { ...PROPOSAL, operation: 'episode_evict' },
+    });
+    const operation = fakeOperation('episode_evict', { relevance: () => 0.1 });
+    seedTrackRecord(bed.db, 'episode_evict');
+
+    const report = await engineFor(bed, [operation], [healthFixture()], NOW, {
+      config: strategicConfig('act'),
+      tier3Advisor: advisor,
+      provider: noSecondOpinionProvider,
+    }).tickOnce();
+
+    expect(report.decision.kind).toBe('tier3');
+    expect(operation.calls()).toBe(0);
+    expect(String(tier3Summary(bed.db).gate)).toContain('cannot be taken back');
   });
 
   it('ends the cycle skipped when the accepted operation lost its bucket, without a second attempt', async () => {
@@ -213,7 +238,7 @@ describe('Introspector tier 3', () => {
     const report = await engineFor(bed, [second], [healthFixture()], NOW, {
       config: strategicConfig('act'),
       tier3Advisor: advisor,
-      provider: reviewingProvider(true),
+      provider: noSecondOpinionProvider,
     }).tickOnce();
 
     expect(report.skipped).toBe(true);
@@ -237,15 +262,24 @@ describe('Introspector tier 3', () => {
     expect(operation.calls()).toBe(0);
     expect(tier3Summary(bed.db)).toMatchObject({ outcome: 'failed' });
 
-    // The next cycle still runs: a failed consultation costs its own tick and nothing else.
-    const next = await engineFor(bed, [subject()], [healthFixture()], NEXT_BUCKET, {
+    // The next cycle still consults and still acts: a failed consultation costs its own tick
+    // and nothing else.
+    const nextOperation = subject();
+    const next = await engineFor(bed, [nextOperation], [healthFixture()], NEXT_BUCKET, {
       config: strategicConfig('act'),
       tier3Advisor: advisorFor(ADVISED),
+      provider: noSecondOpinionProvider,
     }).tickOnce();
-    expect(next.decision.kind).toBe('tier3');
+    expect(next.decision).toMatchObject({ kind: 'selected', tier: 3 });
+    expect(nextOperation.calls()).toBe(1);
   });
 
-  it('never reaches the model on a degraded snapshot', async () => {
+  /**
+   * The scoped refusal. A collector that failed is a reason not to act on the fields it feeds,
+   * and the operations that read it report no work of their own. It is not a reason to stop the
+   * loop thinking about the rest of the substrate.
+   */
+  it('still reaches the model on a degraded snapshot and acts on what the reading still covers', async () => {
     const advisor = advisorFor(ADVISED);
     const operation = subject();
     seedTrackRecord(bed.db, 'dead_letter');
@@ -253,19 +287,82 @@ describe('Introspector tier 3', () => {
     const report = await engineFor(
       bed,
       [operation],
-      [healthFixture({ degraded: ['queue'] })],
+      [healthFixture({ degraded: ['graph'] })],
       NOW,
       {
         config: strategicConfig('act'),
         tier3Advisor: advisor,
-        provider: reviewingProvider(true),
+        provider: noSecondOpinionProvider,
       },
     ).tickOnce();
 
+    expect(advisor.calls()).toBe(1);
+    expect(report.decision).toMatchObject({ kind: 'selected', tier: 3 });
+    expect(operation.calls()).toBe(1);
+  });
+
+  it('refuses the operation whose own evidence was the collector that failed', async () => {
+    const advisor = advisorFor({
+      status: 'advised',
+      proposal: { ...PROPOSAL, operation: 'graph_reader' },
+    });
+    // What an operation that reads the failed collector returns for its own demand.
+    const operation = fakeOperation('graph_reader', {
+      relevance: (health) => (health.degraded.includes('graph') ? 0 : 1),
+    });
+    const other = fakeOperation('dead_letter', { relevance: () => 0.1 });
+
+    const report = await engineFor(
+      bed,
+      [operation, other],
+      [healthFixture({ degraded: ['graph'] })],
+      NOW,
+      {
+        config: strategicConfig('act'),
+        tier3Advisor: advisor,
+        provider: noSecondOpinionProvider,
+      },
+    ).tickOnce();
+
+    expect(advisor.calls()).toBe(1);
     expect(report.decision.kind).toBe('tier3');
-    expect(advisor.calls()).toBe(0);
     expect(operation.calls()).toBe(0);
-    expect(tier3Summary(bed.db)).toMatchObject({ outcome: 'skipped' });
-    expect(String(tier3Summary(bed.db).detail)).toContain('degraded');
+    expect(String(tier3Summary(bed.db).gate)).toContain('reports no work to do');
+  });
+
+  /** The loop's own history reaches the prompt, not only the table of ratios. */
+  it('hands the advisor the lessons its recent runs left', async () => {
+    const seen: Tier3Request[] = [];
+    const advisor: Tier3Advisor = (request) => {
+      seen.push(request);
+      return Promise.resolve({ status: 'declined', rationale: 'nothing needs doing' });
+    };
+    appendIntrospectionInsight(bed.db, {
+      operation: 'dead_letter',
+      lesson: 'ran with its metric at 9 and did not move it: the next reading was 9',
+    });
+
+    await engineFor(bed, [subject()], [healthFixture()], NOW, {
+      config: strategicConfig('act'),
+      tier3Advisor: advisor,
+    }).tickOnce();
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.insights?.join('\n')).toContain('did not move it');
+  });
+
+  it('writes a lesson from each run it scores, so the next consultation reads one', async () => {
+    const operation = fakeOperation('dead_letter', { relevance: () => 1 });
+
+    // One tick runs it and parks the pre-run reading; the next tick resolves that reading.
+    await engineFor(bed, [operation], [healthFixture()], NOW).tickOnce();
+    await engineFor(bed, [operation], [healthFixture()], NEXT_BUCKET).tickOnce();
+
+    const lessons = bed.db
+      .prepare('SELECT operation, lesson FROM introspection_insights ORDER BY id')
+      .all() as { operation: string; lesson: string }[];
+    expect(lessons).toHaveLength(1);
+    expect(lessons[0]?.operation).toBe('dead_letter');
+    expect(lessons[0]?.lesson).toContain('its metric at');
   });
 });

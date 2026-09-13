@@ -241,8 +241,8 @@ describe('renderStatus', () => {
     expect(text).toContain('proposal_resolution MODE: acting');
     expect(text).toContain('proposal_hygiene    MODE: acting');
     expect(text).toContain('claim_dedup         MODE: acting');
-    // tier3Mode ships `propose`: the advisor runs, but an accepted recommendation runs nothing.
-    expect(text).toContain('tier3               MODE: off');
+    // tier3Mode ships `act`: an accepted recommendation runs through the ordinary act path.
+    expect(text).toContain('tier3               MODE: acting');
   });
 
   it('reads off, not the mode name, for supersession under propose', () => {

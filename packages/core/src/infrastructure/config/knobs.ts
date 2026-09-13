@@ -128,6 +128,13 @@ export const KNOBS = {
     /** The model every remote-routed generation names, whatever model the caller asked for. */
     model: ['AION_ANTHROPIC_MODEL', text, DEFAULT_ANTHROPIC_MODEL],
     promptCache: ['AION_ANTHROPIC_PROMPT_CACHE', z.boolean(), true],
+    // Tokens a remote call that asked to reason may spend reasoning. Haiku 4.5 takes only the
+    // manual extended-thinking mode, so this is a number rather than an effort word, and the
+    // API's own floor is 1024. Two thousand is a ceiling and not a bill: the budget is a target
+    // the model stops under, and a trivial probe measured 51 thinking tokens against a 1024
+    // budget on 2026-09-13. The provider clamps it under the call's own max_tokens, since
+    // thinking is billed and counted as output.
+    thinkingBudgetTokens: ['AION_ANTHROPIC_THINKING_BUDGET_TOKENS', positiveInt, 2048],
   },
   /**
    * Per-role provider pins. `auto` follows the key: set, and every generation role goes to

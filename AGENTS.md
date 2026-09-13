@@ -53,7 +53,7 @@ packages/core/src/
   infrastructure/logging/               pino wrapper
   infrastructure/providers/             Ollama client, circuit breaker, provisioning
   infrastructure/sqlite/                reflection queue, experience archive, usage-event log,
-                                        last-pack cache, ops ledger, locks
+                                        last-pack cache, ops ledger, introspection insights, locks
   recall/domain/                        pure: activation, fusion (RRF/MMR), pack assembly
   recall/application/                   cue extraction, seed strategies, the recall pipeline
   plasticity/                           reinforcement folding and the decay curve, plus the
@@ -325,11 +325,16 @@ failure there means the judge moved, and the fix is to change the default rather
 assertion. It also prints a separate RETRO line scoring the two-pass judge against proposals
 a person already ruled on. That is a hindsight figure, never mixed into the first.
 
-`gate/tier3-advisor-selection.int.test.ts` is the same shape for
-`AION_MAINTENANCE_TIER3_MODE`. It reads 24 health snapshots the deterministic tiers all leave
-idle, and scores the advisor alone and the advisor with its review against the answer each case
-was built with. It asserts the shipped default against a bar written before the numbers:
-agreement at or above 0.9 with no invalid selection ships `act`, anything less ships `propose`.
+`gate/tier3-advisor-selection.int.test.ts` no longer works that way, and the difference is
+deliberate. It reads the same 24 health snapshots the deterministic tiers leave idle and scores
+the advisor against the answer each case was built with, but it prints that agreement rather
+than gating on it, and `AION_MAINTENANCE_TIER3_MODE` ships `act` as a pinned default the file
+asserts. What replaced the bar is the loop's own record: every model-chosen run is scored on the
+metric its operation declared, and that score multiplies the next recommendation's confidence at
+the acceptance gate. Two bars stay, and they are about the advisor being usable rather than being
+right: it answers every case, and it never names an operation the reading says has no work. The
+second model call this file used to score is deleted; it vetoed 20 of 23 recommendations
+including ones the corpus calls correct.
 
 `gate/entity-cascade-precision.int.test.ts` is the same shape for `AION_ENTITY_MERGE_MODE`. It
 runs the 24-pair cascade battery pinned to `unanimous`. It asserts the shipped default against

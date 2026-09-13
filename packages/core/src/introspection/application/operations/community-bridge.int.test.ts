@@ -39,9 +39,11 @@ import { healthFixture } from '../../domain/test-support/health.fixture.js';
  * outside. That is the shape the design describes, and it is what label propagation has to
  * find before a bridge can be built between the two halves.
  *
- * Vectors are hand-built rather than embedded. One node on each side is aimed at the other
- * side, so which cross pair is closest is a fixed number rather than a model's opinion, and
- * the pair the operation picks is checked against it.
+ * Vectors are hand-built rather than embedded, so which cross pair is closest is a fixed number
+ * rather than a model's opinion. One node on each side leans toward the other side's axis and
+ * is therefore the pair a cosine rule picks. The model is given both community profiles and
+ * picks a different pair, which is the case this file exists for: the relation worth storing is
+ * a cause in one cluster and its consequence in the other, and those two read nothing alike.
  */
 
 const EMBED_DIMENSION = 8;
@@ -53,6 +55,10 @@ const RIGHT_IDS = ['right-1', 'right-2', 'right-3', 'right-4', 'right-5'];
 /** The pair the vectors make closest: everything else across the divide is orthogonal. */
 const NEAREST_LEFT = 'left-5';
 const NEAREST_RIGHT = 'right-5';
+
+/** The pair the model names instead. Orthogonal vectors, and the relation the substrate wants. */
+const CHOSEN_LEFT = 'left-1';
+const CHOSEN_RIGHT = 'right-2';
 
 /** Two hops is enough to cross one bridge and no more, which is the whole assertion. */
 const BUDGET: ActivationBudget = {
@@ -74,8 +80,8 @@ let dataDir: string;
 /**
  * The floor is lowered because a ten-node substrate is deliberately small: the shipped default
  * refuses to describe a graph this size, and the point here is the algorithm, not the floor.
- * The dimension follows the hand-built vectors, since the pair search only considers members
- * whose stored vector is the width the configured model produces.
+ * The dimension follows the hand-built vectors, since the fallback's pair search only considers
+ * members whose stored vector is the width the configured model produces.
  */
 const config: Config = {
   ...DEFAULTS,
@@ -86,21 +92,57 @@ const config: Config = {
 /** A deterministic stand-in for the local embedder: the bridge's own vector is not the subject. */
 const embed = async (texts: readonly string[]): Promise<Vector[]> => texts.map(() => unitVector(2));
 
-const PROPOSED_SUMMARY = 'Both clusters describe the same ingest path, one side batching it.';
-const PROPOSED_RATIONALE = 'The two memories name the same pipeline from either end.';
+const PROPOSED_SUMMARY = 'The pool exhaustion and the checkout outage are one incident.';
+const PROPOSED_RATIONALE = 'One cluster holds the cause and the other holds what users saw.';
+const PROPOSED_PREMISES = ['body of left-1', 'body of right-2'];
 
-/** A model that answers, so the run takes the proposal path the design puts first. */
-const answeringProvider: Provider = {
+/** A model that finds the relation and names the two members it runs between. */
+const proposingProvider: Provider = {
   embed,
-  generate: async (): Promise<unknown> =>
+  generate: (): Promise<unknown> =>
     Promise.resolve({
+      decision: 'bridge',
+      sourceId: CHOSEN_LEFT,
+      targetId: CHOSEN_RIGHT,
+      sourceRole: 'the cause',
+      targetRole: 'the symptom',
       summary: PROPOSED_SUMMARY,
       rationale: PROPOSED_RATIONALE,
-      compatibility: 0.72,
+      premises: PROPOSED_PREMISES,
+      compatibility: 0.82,
     }),
 };
 
-/** A model that is not there, which is the case the deterministic sentence exists for. */
+/** A model that reads both profiles and says there is nothing worth storing. */
+const decliningProvider: Provider = {
+  embed,
+  generate: (): Promise<unknown> =>
+    Promise.resolve({
+      decision: 'decline',
+      summary: 'These two clusters share nothing.',
+      rationale: 'One is a database incident and the other is a garden.',
+      compatibility: 0,
+    }),
+};
+
+/** A model that proposes a bridge and scores it as one nobody should believe. */
+const incompatibleProvider: Provider = {
+  embed,
+  generate: (): Promise<unknown> =>
+    Promise.resolve({
+      decision: 'bridge',
+      sourceId: CHOSEN_LEFT,
+      targetId: CHOSEN_RIGHT,
+      sourceRole: 'a memory',
+      targetRole: 'another memory',
+      summary: 'Both of these are memories.',
+      rationale: 'They have nothing else in common.',
+      premises: [],
+      compatibility: 0.05,
+    }),
+};
+
+/** A model that is not there, which is the case the deterministic floor exists for. */
 const failingProvider: Provider = {
   embed,
   generate: (): Promise<unknown> => Promise.reject(new Error('ollama unreachable')),
@@ -120,7 +162,7 @@ function tiltedVector(axis: number, other: number, tilt: number): number[] {
   return vector;
 }
 
-function context(provider: Provider = answeringProvider): OperationContext {
+function context(provider: Provider = proposingProvider): OperationContext {
   return {
     driver: harness.driver,
     db,
@@ -186,12 +228,8 @@ async function bridgeIds(): Promise<string[]> {
   return (await standingBridges(harness.driver)).map((bridge) => bridge.id);
 }
 
-async function bridgeSummary(): Promise<string | undefined> {
-  return (await standingBridges(harness.driver))[0]?.text;
-}
-
 /**
- * Fixture surgery, so the last case starts from an unbridged pair rather than a second
+ * Fixture surgery, so a later case starts from an unbridged pair rather than a second
  * harness. Forgotten rather than deleted: `countBridgesBetween` reads current bridges only,
  * which is the same mechanism the rest of the substrate uses to take something out of scope.
  */
@@ -221,12 +259,12 @@ afterAll(async () => {
 describe('community refresh and the symbiosis bridge', () => {
   it('has no bridge to cross before either operation runs', async () => {
     const run = await spreadActivation(adjacency, {
-      seeds: [{ nodeId: NEAREST_LEFT }],
+      seeds: [{ nodeId: CHOSEN_LEFT }],
       budget: BUDGET,
     });
 
     const reached = new Set(run.activated.map((node) => node.nodeId));
-    expect(reached.has(NEAREST_LEFT)).toBe(true);
+    expect(reached.has(CHOSEN_LEFT)).toBe(true);
     expect(RIGHT_IDS.some((id) => reached.has(id))).toBe(false);
   });
 
@@ -251,22 +289,37 @@ describe('community refresh and the symbiosis bridge', () => {
     expect(left[0]).not.toBe(right[0]);
   });
 
-  it('bridges the closest cross-community pair and writes the sentence the model proposed', async () => {
+  /**
+   * The case the design is for. The cosine rule would anchor on `left-5`/`right-5`, the two
+   * members whose vectors lean toward each other. The model reads both profiles and names a
+   * different pair, and the bridge is written where it said.
+   */
+  it('bridges the pair the model chose, not the pair the vectors made closest', async () => {
     const outcome = await symbiosisBridgeOperation().run(context());
 
     expect(outcome.status).toBe('applied');
     expect(outcome.itemsAffected).toBe(1);
-    expect(outcome.detail).toContain('model-proposed');
+    expect(outcome.detail).toContain('model-authored');
 
-    const bridges = await bridgeIds();
-    expect(bridges).toHaveLength(1);
-    expect(await bridgeSummary()).toBe(PROPOSED_SUMMARY);
+    const endpoints = (await bridgeEndpoints(harness.driver)).map((endpoint) => endpoint.id).sort();
+    expect(endpoints).toEqual([CHOSEN_LEFT, CHOSEN_RIGHT].sort());
+    expect(endpoints).not.toContain(NEAREST_LEFT);
+    expect(endpoints).not.toContain(NEAREST_RIGHT);
+  });
 
-    const endpoints = await bridgeEndpoints(harness.driver);
-    expect(endpoints.map((endpoint) => endpoint.id).sort()).toEqual(
-      [NEAREST_LEFT, NEAREST_RIGHT].sort(),
-    );
-    for (const endpoint of endpoints) {
+  it('writes what the bridge rests on and that it is an inference', async () => {
+    const [bridge] = await standingBridges(harness.driver);
+
+    expect(bridge).toMatchObject({
+      text: PROPOSED_SUMMARY,
+      author: 'model',
+      inferred: true,
+      sourceRole: 'the cause',
+      targetRole: 'the symptom',
+      compatibility: 0.82,
+    });
+    expect(bridge?.premises).toEqual(PROPOSED_PREMISES);
+    for (const endpoint of await bridgeEndpoints(harness.driver)) {
       expect(endpoint.provenance).toContain('introspection');
       expect(endpoint.rationale).toBe(PROPOSED_RATIONALE);
     }
@@ -274,11 +327,11 @@ describe('community refresh and the symbiosis bridge', () => {
 
   it('carries activation across the bridge into the other community', async () => {
     const run = await spreadActivation(adjacency, {
-      seeds: [{ nodeId: NEAREST_LEFT }],
+      seeds: [{ nodeId: CHOSEN_LEFT }],
       budget: BUDGET,
     });
 
-    const arrival = run.activated.find((node) => node.nodeId === NEAREST_RIGHT);
+    const arrival = run.activated.find((node) => node.nodeId === CHOSEN_RIGHT);
     expect(arrival).toBeDefined();
     expect(arrival?.hops).toBe(2);
   });
@@ -290,26 +343,44 @@ describe('community refresh and the symbiosis bridge', () => {
     expect(await bridgeIds()).toHaveLength(1);
   });
 
-  /**
-   * The floor under the design, not the design. A bridge is an enhancement, so a model that is
-   * down costs the sentence and not the run, and what lands says what it is: a pair chosen by
-   * the graph's own shape and anchored by the vectors, described in the terms both are stated
-   * in.
-   */
-  it('writes a deterministic bridge when the model is unavailable', async () => {
+  /** A decline is the run's result. Nothing is written and nothing falls back. */
+  it('writes nothing when the model declines', async () => {
     await forgetBridges();
 
+    const outcome = await symbiosisBridgeOperation().run(context(decliningProvider));
+
+    expect(outcome.status).toBe('noop');
+    expect(outcome.detail).toContain('declined');
+    expect(await bridgeIds()).toEqual([]);
+  });
+
+  it('writes nothing when the model scores the relation under the floor', async () => {
+    const outcome = await symbiosisBridgeOperation().run(context(incompatibleProvider));
+
+    expect(outcome.status).toBe('noop');
+    expect(outcome.detail).toContain('compatibility');
+    expect(await bridgeIds()).toEqual([]);
+  });
+
+  /**
+   * The floor under the design, not the design. A bridge is an enhancement, so a model that is
+   * down costs the relation and not the run, and what lands says which path wrote it: a pair
+   * chosen by the graph's own shape and anchored by the vectors.
+   */
+  it('writes a deterministic bridge when the model is unavailable', async () => {
     const outcome = await symbiosisBridgeOperation().run(context(failingProvider));
 
     expect(outcome.status).toBe('applied');
-    expect(outcome.detail).toContain('deterministic');
-    expect(await bridgeSummary()).toContain('Bridge between two memory clusters');
+    expect(outcome.detail).toContain('deterministic-authored');
 
-    const endpoints = await bridgeEndpoints(harness.driver);
-    expect(endpoints.map((endpoint) => endpoint.id).sort()).toEqual(
-      [NEAREST_LEFT, NEAREST_RIGHT].sort(),
-    );
-    for (const endpoint of endpoints) {
+    const [bridge] = await standingBridges(harness.driver);
+    expect(bridge?.text).toContain('Bridge between two memory clusters');
+    expect(bridge?.author).toBe('deterministic');
+    expect(bridge?.compatibility).toBeUndefined();
+
+    const endpoints = (await bridgeEndpoints(harness.driver)).map((endpoint) => endpoint.id).sort();
+    expect(endpoints).toEqual([NEAREST_LEFT, NEAREST_RIGHT].sort());
+    for (const endpoint of await bridgeEndpoints(harness.driver)) {
       expect(endpoint.rationale).toContain('closest pair by content vector');
       // The pair score is in the rationale, so why these two clusters is re-derivable later.
       expect(endpoint.rationale).toContain('coherence');

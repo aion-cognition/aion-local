@@ -1,15 +1,17 @@
-import type { OperationCandidate } from './decide.js';
-import type { HealthSnapshot } from './health.js';
+import { describeEffectiveness, type OperationCandidate } from './decide.js';
+import type { HealthSnapshot, OperationEffectiveness } from './health.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 
 /**
  * The strategic tier: what the model may be asked, what it may answer, and the deterministic
  * rules that decide whether an answer is allowed to run.
  *
- * The constraint the whole tier is built on: a proposal is a recommendation, never an
- * execution. Whatever the model returns still passes the same bucket claim, the same protected
- * relationship set, and the same bounded scope every deterministic operation passes, and an
- * operation with no run record at all is downgraded rather than accepted.
+ * The constraint the whole tier is built on: a model-chosen run is an ordinary run. Whatever the
+ * model names still passes the same bucket claim, the same protected relationship set, the same
+ * bounded scope, and the same scoring every deterministic selection passes. What guards it is
+ * the record those runs leave, not a second opinion asked before the first one is allowed to
+ * count: a recommendation for an operation whose runs have stopped helping, or stopped
+ * finishing, is weighted down by its own history.
  */
 
 export type Tier3Request = {
@@ -17,6 +19,12 @@ export type Tier3Request = {
   readonly candidates: readonly OperationCandidate[];
   /** Why the deterministic tiers selected nothing, which is the only reason tier 3 is consulted. */
   readonly reason: string;
+  /**
+   * What the loop learned from its recent runs, one line each, oldest first. The effectiveness
+   * table says how often an operation helped; these say what happened, which is the difference
+   * between a ratio and a reason.
+   */
+  readonly insights?: readonly string[];
   /**
    * The loop's abort, carried on the request because the advisor is built once at wiring time
    * and the signal belongs to the engine. A consultation stops with the service rather than
@@ -46,87 +54,183 @@ export type Tier3Outcome =
 export type Tier3Advisor = (request: Tier3Request) => Promise<Tier3Outcome>;
 
 /**
- * What an accepted proposal is allowed to RUN. It is an allowlist, so an operation outside it
- * stays a recommendation the loop logs, and a new operation joins the catalog without gaining a
- * model-chosen run until someone adds it here.
+ * What a model-chosen run may never be, stated as the short list of things that cannot be taken
+ * back. Everything else in the catalog is selectable, because a write the substrate can reverse
+ * is a write its own record can judge, and the judging is what teaches the loop anything.
  *
- * Two classes are kept out on purpose. A tier-1 responder (`vector_backfill`, `orphan_cleanup`,
- * `backbone_repair`) is fired by the condition it declares, and tier 3 second-guessing a
- * critical responder is never the right call. An operation whose write a model must not
- * authorize is out for that reason: `redaction_residue_purge` rewrites stored text and a wrong
- * redaction destroys content, `symbiosis_bridge` writes model-authored edges, and `merge_auto`
- * has its own arming lane and kill switch that a second way to arm it would defeat.
+ * A model-authored graph write is not irreversible. `symbiosis_bridge` writes one, and the
+ * bridge is a stamped node with two edges that `aion forget` takes out of scope like any other;
+ * excluding it also meant the deterministic tier could schedule an operation the strategic tier
+ * could not name, which is an inversion rather than a safeguard. `merge_auto` was excluded for
+ * an arming lane it no longer needs: a switched-off operation is filtered out of the candidate
+ * set before the model sees it, so there is no second way to arm anything, and `aion unmerge`
+ * reverses a merge one at a time. The tier-1 responders were excluded for second-guessing an
+ * emergency, but tier 3 is consulted only on cycles where no critical condition holds, so there
+ * is no emergency to second-guess.
  *
- * Everything else is out because nothing has argued it in. The list is the deliberate half.
+ * Each entry below names what it destroys.
  */
-export const TIER3_ACTABLE_OPERATIONS: readonly string[] = [
-  'dead_letter',
-  'reinforcement_flush',
-  'memory_decay',
-  'community_refresh',
-  'narrative_cleanup',
-  'reconcile_reenqueue',
-  'narrative_regrounding',
-  'description_freshness',
-  'retro_judgment_sweep',
+export const TIER3_DENIED_OPERATIONS: readonly string[] = [
+  // The one hard delete in the system. Eviction removes a source's raw projection outright, and
+  // no command puts the original text back once its coverage has replaced it.
+  'episode_evict',
+  // Rewrites stored node text in place rather than superseding it, so a wrong redaction
+  // overwrites the content it was scrubbing and the original is gone.
+  'redaction_residue_purge',
 ];
+
+/**
+ * What the record of an operation nothing has scored is worth. Neutral rather than zero: zero
+ * would multiply every untried operation's confidence to nothing, and since a model-chosen run
+ * is one of the ways an operation earns a record at all, that is a bar it could never clear.
+ * A cold start is an absence of evidence, and this is the number that says so.
+ */
+export const NEUTRAL_EFFECTIVENESS_PRIOR = 0.5;
+
+/**
+ * The head start the execution weight's denominator carries, in runs. It is what stops one bad
+ * tick from reading as a verdict: at two, a measureless operation's first failure costs it a
+ * third of the neutral prior, and its fifth leaves it at 0.14. One would halve the weight on a
+ * single failure, which is more than a fifteen-minute tick that threw once is worth.
+ */
+export const EXECUTION_PRIOR_RUNS = 2;
+
+/**
+ * What an operation with no declared metric has earned, read off the resolutions its own runs
+ * already wrote.
+ *
+ * Effectiveness is undefined for twenty-one of the catalog's thirty-one operations, because
+ * nothing in the snapshot can say whether a `community_refresh` helped. That is a reason not to
+ * credit its successes. It was being read as a reason to ignore its failures too, which left an
+ * operation with five recorded throws blending at exactly its cold-start number.
+ *
+ * A failure is the one thing a measureless run can still be judged on: a run that threw did not
+ * do the work, whatever the work was worth. So the weight is the share of recorded runs that did
+ * not fail, scaled by the neutral prior and never above it. A clean unmeasured run cannot raise
+ * the weight, because an unmeasured success is unknown rather than good, and only a declared
+ * metric carries an operation past neutral. No runs at all reads 0.5, which is what a cold start
+ * read before this existed.
+ *
+ * It is a ratio over the whole record rather than a strike count so that recovery stays
+ * reachable. Five failures put an operation at 0.14 and the floor refuses it; the deterministic
+ * tiers still schedule it, and every clean run afterwards pulls the weight back toward neutral.
+ * A transient fault costs the operation cycles rather than vetoing it for the life of the
+ * substrate.
+ */
+export function executionWeight(runs: number, failed: number): number {
+  const clean = Math.max(0, runs - failed);
+  return (
+    (NEUTRAL_EFFECTIVENESS_PRIOR * (clean + EXECUTION_PRIOR_RUNS)) / (runs + EXECUTION_PRIOR_RUNS)
+  );
+}
+
+/**
+ * The weight the blend multiplies confidence by, and the one place the two kinds of record meet.
+ * A declared metric answers for itself, so its reading passes through untouched; an operation
+ * with runs and no metric falls to the execution weight above; an operation with no row at all
+ * gets the cold-start prior.
+ */
+export function proposalWeight(stats: OperationEffectiveness | undefined): number {
+  if (stats === undefined) {
+    return NEUTRAL_EFFECTIVENESS_PRIOR;
+  }
+  if (stats.effectiveness !== undefined) {
+    return stats.effectiveness;
+  }
+  return executionWeight(stats.runs, stats.failed);
+}
+
+/** What the weight was read off, so a downgrade names its evidence and not only its number. */
+function describeWeight(stats: OperationEffectiveness | undefined): string {
+  if (stats === undefined) {
+    return 'no record';
+  }
+  if (stats.effectiveness !== undefined) {
+    return `effectiveness ${describeEffectiveness(stats.effectiveness)}`;
+  }
+  return `${String(stats.failed)} failures in ${String(stats.runs)} unscored runs`;
+}
+
+/**
+ * The advisor's confidence, weighted by what the operation has actually done for the substrate.
+ *
+ * Confidence alone is not a discriminator: a single judge's confidence measures flat across
+ * affirmative answers everywhere else in this system. The weight alone is not one either, since
+ * most of the catalog has no scored metric and its weight can never clear neutral. The product
+ * is: a confident recommendation for an operation whose runs have stopped improving anything, or
+ * have stopped finishing, lands under the floor, and the same recommendation for one with a good
+ * record clears it.
+ */
+export function blendedConfidence(confidence: number, weight: number | undefined): number {
+  return confidence * (weight ?? NEUTRAL_EFFECTIVENESS_PRIOR);
+}
 
 /**
  * `rejected` is a proposal the loop will not act on and would not have acted on in any mode.
  * `downgraded` is one the loop keeps as a recommendation: the reasoning may be sound, but the
- * operation is outside what tier 3 may run, or it has no track record to run on.
+ * operation cannot be taken back, or its own record does not carry the confidence.
  */
 export type Tier3Acceptance =
   /** Carries the candidate the gate already looked up, so no caller repeats the search. */
-  | { readonly verdict: 'accepted'; readonly candidate: OperationCandidate }
-  | { readonly verdict: 'downgraded'; readonly reason: string }
+  | {
+      readonly verdict: 'accepted';
+      readonly candidate: OperationCandidate;
+      readonly blended: number;
+      /** The other half of the blend, so the ledger row re-derives the score from what it read. */
+      readonly weight: number;
+    }
+  | {
+      readonly verdict: 'downgraded';
+      readonly reason: string;
+      readonly blended?: number;
+      readonly weight?: number;
+    }
   | { readonly verdict: 'rejected'; readonly reason: string };
 
 /**
  * The deterministic gates every proposal passes before anything runs, in order.
  *
- * There is no confidence gate. A single judge's confidence measured flat across every
- * affirmative answer elsewhere in this system, which makes a threshold over it a pass-through
- * or a wall and never a discriminator; the second pass is what carries that weight here, and
- * confidence is recorded rather than acted on.
+ * A degraded snapshot is not one of them. Missing evidence blocks the actions that need that
+ * evidence and nothing else: an operation whose reading came from a collector that failed
+ * reports zero relevance for exactly that reason, and the relevance gate below is where that
+ * lands. Refusing the whole consultation instead meant one broken collector stopped the loop
+ * from thinking about the parts of the substrate it could still see.
  */
 export function acceptTier3Proposal(
   proposal: Tier3Proposal,
   candidates: readonly OperationCandidate[],
   health: HealthSnapshot,
+  acceptanceFloor: number,
 ): Tier3Acceptance {
-  // Acting on a substrate the loop cannot see is the one forbidden thing, and the consultation
-  // already refuses before the model call. This is the second reading of the same rule.
-  if (health.degraded.length > 0) {
-    return {
-      verdict: 'rejected',
-      reason: `the snapshot is degraded: ${health.degraded.join(', ')}`,
-    };
-  }
-
   const candidate = candidates.find((entry) => entry.name === proposal.operation);
   if (candidate === undefined) {
     return { verdict: 'rejected', reason: 'the operation is not a candidate on this cycle' };
   }
+  // Also where a degraded collector lands: an operation that cannot read its own demand reports
+  // no work rather than a number taken from a fallback.
   if (candidate.relevance <= 0) {
     return { verdict: 'rejected', reason: 'the operation reports no work to do' };
   }
 
-  if (!TIER3_ACTABLE_OPERATIONS.includes(proposal.operation)) {
-    return { verdict: 'downgraded', reason: 'the operation is outside the act allowlist' };
+  if (TIER3_DENIED_OPERATIONS.includes(proposal.operation)) {
+    return { verdict: 'downgraded', reason: 'the operation cannot be taken back' };
   }
 
-  // Never the first-run path. The tier-2 starvation boost is linear and uncapped off cycles
-  // waited, so every operation with relevance above zero earns its first run there eventually;
-  // this rule delays a model-chosen run until the record exists, it cannot strand one. The gate
-  // is the record, not the verdict: `runs` counts failures too, and an operation whose runs all
-  // failed is weighted down by tier 2 rather than blocked here.
   const stats = health.effectiveness.find((entry) => entry.name === proposal.operation);
-  if (stats === undefined || stats.runs === 0) {
-    return { verdict: 'downgraded', reason: 'the operation has no run record yet' };
+  const weight = proposalWeight(stats);
+  const blended = blendedConfidence(proposal.confidence, weight);
+  if (blended < acceptanceFloor) {
+    return {
+      verdict: 'downgraded',
+      reason:
+        `confidence ${proposal.confidence.toFixed(2)} against ${describeWeight(stats)} ` +
+        `blends to ${blended.toFixed(2)}, under ${acceptanceFloor.toFixed(2)}`,
+      blended,
+      weight,
+    };
   }
 
-  return { verdict: 'accepted', candidate };
+  return { verdict: 'accepted', candidate, blended, weight };
 }
 
 /**

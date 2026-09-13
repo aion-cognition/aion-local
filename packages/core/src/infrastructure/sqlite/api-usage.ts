@@ -7,8 +7,8 @@ export function appendApiCall(db: SqliteHandle, call: ApiCall): void {
   db.prepare(
     `INSERT INTO api_calls (
     occurred_at, model, surface, input_tokens, output_tokens, cache_creation_tokens,
-    cache_read_tokens, duration_ms, attempts, usage_error
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    cache_read_tokens, thinking_tokens, duration_ms, attempts, usage_error
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     call.occurredAt.toISOString(),
     call.model,
@@ -17,6 +17,7 @@ export function appendApiCall(db: SqliteHandle, call: ApiCall): void {
     call.outputTokens,
     call.cacheCreationTokens,
     call.cacheReadTokens,
+    call.thinkingTokens ?? null,
     call.durationMs,
     call.attempts,
     call.usageError ?? null,
@@ -59,6 +60,13 @@ export type ApiUsageGroup = {
   readonly outputTokens: number;
   readonly cacheCreationTokens: number;
   readonly cacheReadTokens: number;
+  /**
+   * Part of `outputTokens`, never an addition to it: a total that sums both double-counts. Null
+   * where no call in the group reported a breakdown, since summing nothing is not zero.
+   */
+  readonly thinkingTokens: number | null;
+  /** Calls in the group whose reasoning share was never reported, so the sum above is partial. */
+  readonly thinkingUnknown: number;
   readonly durationMs: number;
   readonly attempts: number;
   readonly usageErrors: number;
@@ -81,6 +89,8 @@ function groupedUsage(
       `SELECT ${key} AS key, model, count(*) AS calls,
     sum(input_tokens) AS inputTokens, sum(output_tokens) AS outputTokens,
     sum(cache_creation_tokens) AS cacheCreationTokens, sum(cache_read_tokens) AS cacheReadTokens,
+    sum(thinking_tokens) AS thinkingTokens,
+    sum(CASE WHEN thinking_tokens IS NULL THEN 1 ELSE 0 END) AS thinkingUnknown,
     sum(duration_ms) AS durationMs, sum(attempts) AS attempts,
     sum(CASE WHEN usage_error IS NOT NULL THEN 1 ELSE 0 END) AS usageErrors
     FROM api_calls WHERE occurred_at >= ? AND occurred_at < ?

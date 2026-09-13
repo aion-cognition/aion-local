@@ -125,6 +125,7 @@ export class ProviderRouter {
           apiKey: config.anthropic.apiKey.trim(),
           model: config.anthropic.model,
           promptCache: config.anthropic.promptCache,
+          thinkingBudgetTokens: config.anthropic.thinkingBudgetTokens,
           now: this.#now,
           ...(options.recordApiCall === undefined ? {} : { recordApiCall: options.recordApiCall }),
           ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),

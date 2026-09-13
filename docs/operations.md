@@ -122,8 +122,20 @@ mismatched pair is a failure, because the plugin is compiled against the kernel 
 
 Run `aion costs [--days N]` to group billed API responses by UTC day and calling surface.
 The default window includes today and the preceding six days. Each row reports the model,
-call count, input and output tokens, cache-write and cache-read tokens, the cache-read share of that
-group's input tokens, usage-error count, and estimated dollars.
+call count, input and output tokens, thinking tokens, cache-write and cache-read tokens, the
+cache-read share of that group's input tokens, usage-error count, and estimated dollars.
+
+The thinking column is a share of the output column, not an addition to it. The API bills
+reasoning as output, so a total that sums the two counts it twice. It says how much of the output
+bill was the model reasoning before it answered, which is the number that moves when
+`AION_ANTHROPIC_THINKING_BUDGET_TOKENS` changes. Only surfaces that ask to reason spend it:
+today that is `tier3_advisor` and `symbiosis_bridge`. Measured 2026-09-13 against Haiku 4.5, one
+tier-3 advisor call read 774 input tokens and wrote 916 output, 794 of which were reasoning.
+Not every response reports the breakdown. Where one carried no reasoning share, the row stores
+the input and output totals it did report and leaves that share out, because zero is what a call
+that reasoned for nothing spent and the response did not say that. A group holding such a call
+reads `N+unknown`, and one where no call reported a share reads `unavailable`.
+
 Unknown models are marked `unpriced`; their charges are never counted as zero. A model with no
 price still reports its cache share, and a group that spent no input tokens reads `no-input`.
 
@@ -399,6 +411,33 @@ ticks (`merge_auto`, `entity_dedup`, `supersession`, `keyed_close`, `proposal_re
 `proposal_hygiene`, `claim_dedup`, `tier3`), each read as `acting` or `off` from its own live
 knobs. Two states only, so the line answers "would this touch anything right now" without a
 third reading to interpret.
+
+### The strategic tier
+
+```
+AION_MAINTENANCE_TIER3=true                    # the kill switch: off skips the consultation
+AION_MAINTENANCE_TIER3_MODE=act                # act runs the recommendation; propose only logs it
+AION_MAINTENANCE_TIER3_ACCEPTANCE_FLOOR=0.3    # what confidence x effectiveness has to clear
+AION_MAINTENANCE_TIER3_INSIGHT_COUNT=8         # lessons from recent runs carried into the prompt
+```
+
+A cycle the deterministic tiers leave idle asks the model for one operation. `act` runs what it
+names through the same bucket claim, batch bound, ledger row and scoring path a deterministic
+selection takes, so a model-chosen run is an ordinary run and `aion stats` scores it like one.
+
+What keeps that safe is the scoring rather than a second opinion. Confidence is multiplied by the
+operation's own effectiveness before anything runs, so a recommendation for an operation whose
+runs have stopped moving their metric is downgraded within a few cycles. An operation nothing has
+scored reads at a neutral 0.5 prior, which is what lets a fresh substrate act at all. Two
+operations are denied whatever the reading says: `episode_evict` and `redaction_residue_purge`,
+the two writes no command puts back.
+
+Every consultation writes one ledger row under `tier3:<cycle>`, carrying what was asked, what was
+named, the raw and blended confidence, the gate's verdict, and what ran. Read them with
+`aion logs` or straight out of `ops_ledger` when a recommendation looks wrong.
+
+Turn the mode to `propose` to watch it without letting it act. The advisor still runs and still
+costs its call; nothing it names is executed.
 
 ## Replaying the archive
 

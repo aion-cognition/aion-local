@@ -18,12 +18,10 @@ export type { HealthSnapshot, OperationEffectiveness } from './domain/health.js'
 
 export type { Tier3Proposal, Tier3Request } from './domain/tier3.js';
 
-export {
-  adviseTier3,
-  DEFAULT_TIER3_MODE,
-  modelAdvisor,
-  reviewTier3Proposal,
-} from './application/tier3-advisor.js';
+/** The acceptance gate, exported so a battery scores the gate the service runs rather than a copy. */
+export { acceptTier3Proposal } from './domain/tier3.js';
+
+export { adviseTier3, DEFAULT_TIER3_MODE, modelAdvisor } from './application/tier3-advisor.js';
 
 export { Introspector } from './application/engine.js';
 

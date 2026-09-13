@@ -36,11 +36,19 @@ export type StructuredRequest = {
   numCtx?: number;
   signal?: AbortSignal;
   /**
-   * Hybrid reasoning models (the qwen3 family) emit a reasoning block ahead of the
-   * structured answer unless it is switched off, and that block dominates the call:
-   * measured on host Ollama, `qwen3:1.7b` runs 527-937ms warm with reasoning off against
-   * a 1.9-11.3s spread with it on, plus calls that never return at all. Extraction tasks
-   * set this false; a caller that wants the model to reason leaves it unset.
+   * Whether the model reasons before it answers. Both routes honour it, by different
+   * mechanisms.
+   *
+   * Local: hybrid reasoning models (the qwen3 family) emit a reasoning block ahead of the
+   * structured answer unless it is switched off, and that block dominates the call: measured on
+   * host Ollama, `qwen3:1.7b` runs 527-937ms warm with reasoning off against a 1.9-11.3s spread
+   * with it on, plus calls that never return at all.
+   *
+   * Remote: `true` turns on Haiku 4.5's extended thinking with an explicit token budget. That
+   * model takes no adaptive mode, so the budget is a request field rather than an effort word.
+   * Anything but `true` sends no thinking configuration, which is the model's own default of off.
+   *
+   * Extraction tasks set this false; a caller that wants the model to reason sets it true.
    */
   think?: boolean;
 };
@@ -54,6 +62,15 @@ export type ApiCall = {
   readonly outputTokens: number;
   readonly cacheCreationTokens: number;
   readonly cacheReadTokens: number;
+  /**
+   * The share of `outputTokens` the model spent reasoning. Inside the output count rather than
+   * beside it, so a total must never add the two: the API bills thinking as output, and this
+   * says how much of that bill the reasoning was.
+   *
+   * Absent where the response carried no breakdown, which is the honest reading: the totals
+   * beside it are still known, and only the split inside the output count is missing.
+   */
+  readonly thinkingTokens?: number;
   readonly durationMs: number;
   readonly attempts: number;
   /** Token counters are placeholders when the billed response has no valid usage block. */

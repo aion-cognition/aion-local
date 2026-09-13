@@ -116,6 +116,7 @@ it('does not label an API row count as measured cost', async () => {
       outputTokens: 5,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
+      thinkingTokens: 0,
       attempts: 1,
       durationMs: 1,
     });

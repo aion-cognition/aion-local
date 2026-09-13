@@ -313,6 +313,11 @@ function readPlasticity(db: SqliteHandle): PlasticityHealth {
  * which is a verdict its own run decides, and a loop that weights operations on that is
  * measuring the operation's willingness rather than its effect.
  *
+ * `runs` and `failed` carry the other half of the record and are reported whatever the metric
+ * says, because a run that threw is negative evidence about an operation no measure could have
+ * scored. `executionWeight` in `domain/tier3.ts` is what reads them; an undefined effectiveness
+ * is an absent verdict on the graph, not an absent record of the operation.
+ *
  * `runs` still counts every resolution, unmeasured ones included, so waiting time and the
  * has-it-ever-run gates read the same number they always did.
  */
