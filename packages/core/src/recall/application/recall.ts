@@ -181,9 +181,9 @@ export async function handleRecall(
 
   const embedded = await timed(() => embedCues(deps, cues.value.cues));
 
-  // Both origin-aware steps read one setting and one exemption: a time-traveled read is asking
-  // what the substrate held, so it neither discounts nor subtracts the asker's own record.
-  const ownFilter = deps.config.recall.ownSessionFilter && !isTimeTravel(mode);
+  // Both origin-aware steps read one setting and two exemptions: a time-traveled read is asking
+  // what the substrate held, and a reset is a caller saying it no longer holds what it captured.
+  const ownFilter = deps.config.recall.ownSessionFilter && !isTimeTravel(mode) && !resetDelivery;
 
   // The bound the pre-limit ordering trusts a stored ownership summary up to, read before
   // nomination runs. It takes no guard, recovers no receipt and waits for nothing: an absent or

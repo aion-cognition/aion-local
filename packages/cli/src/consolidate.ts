@@ -34,6 +34,9 @@ const SPEC: ArgSpec<'status' | 'run' | 'abandon'> = {
 export function parseConsolidateFlags(argv: readonly string[]) {
   const normalized = argv[0] === undefined || argv[0].startsWith('-') ? ['status', ...argv] : argv;
   const args = parseArgs(SPEC, normalized);
+  // Any id is accepted, and a second one is not a second run of the same job: a new cohort freezes
+  // at the CURRENT intake watermark, so every capture accepted since the first freeze is walked as
+  // if it were historical. docs/operations.md says what that costs an operator.
   const cohortId = args.values.get('--cohort');
   if (cohortId === undefined || cohortId.trim() === '') {
     throw new CliUsageError('consolidate requires --cohort <id>');

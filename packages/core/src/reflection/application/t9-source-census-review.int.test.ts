@@ -2,6 +2,7 @@ import { expect, it } from 'vitest';
 
 import { incomingStatementScopes, memberScopesCounted } from './chunk-evidence.js';
 import { acceptCorrection, acceptSource, store } from './test-support/t10b-review.fixture.js';
+import { OWNERSHIP_SCOPES } from '../../evidence/domain/ownership.js';
 import { durableRoleScope } from '../../evidence/domain/scopes.js';
 import { readScopeVersion } from '../../infrastructure/sqlite/evidence-scope.js';
 
@@ -34,12 +35,23 @@ it('counts a fresh source incoming-statement populations at the acceptance that 
   );
 });
 
-it('counts those two populations and nothing else it did not enumerate', async () => {
+it('counts those populations and nothing else it did not enumerate', async () => {
   const source = await acceptSource('census-reach', 'an acceptance with no statements', false);
 
-  // Every other scope on the source stays ABSENT rather than counted-empty: this acceptance
-  // enumerated the populations nothing could have written to yet, not the ones a later pass owns.
-  expect(scopeRows(source)).toEqual({ [CORRECTION]: 'established', [CONFIRMATION]: 'established' });
+  // Two questions about the same minted id: what could have been STATED about it as a source, and
+  // what could have been RECORDED about it as a node. Every other scope stays ABSENT rather than
+  // counted-empty, because this acceptance enumerated only the populations nothing could have
+  // written to yet, not the ones a later pass owns.
+  expect(scopeRows(source)).toEqual({
+    [CORRECTION]: 'established',
+    [CONFIRMATION]: 'established',
+    ...Object.fromEntries(
+      OWNERSHIP_SCOPES.map(({ role, direction }) => [
+        durableRoleScope(role, direction),
+        'established',
+      ]),
+    ),
+  });
 });
 
 it('keeps the count covering the population when a statement arrives, and moves the token', async () => {

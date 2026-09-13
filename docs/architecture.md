@@ -258,7 +258,8 @@ intention pass, assembly, and the three subtractions below it carry no timing.
    index), `entity_resolution` (exact and fuzzy name match against `Entity` nodes), and
    `recency` (a `tx_from`-ordered fallback for a substrate with no access history yet, which
    also orders a memory only the asking session produced behind every other source, before its
-   own `LIMIT`; a historical read and `AION_RECALL_OWN_SESSION_FILTER=false` both exempt it).
+   own `LIMIT`; a historical read, a call that resets delivery suppression and
+   `AION_RECALL_OWN_SESSION_FILTER=false` all exempt it).
    Candidates merge by node id; a node found
    by more than one strategy keeps every strategy that found it. A rejected query costs its
    own leg and nothing else, but the rejections are counted: when every query issued was
@@ -375,7 +376,26 @@ intention pass, assembly, and the three subtractions below it carry no timing.
     nobody could read. Origin decides before dedup, and what it withholds leaves no served row,
     since the session never read those items. That is why the fingerprint cannot repair this on
     its own. Ranking is untouched here too, a time-traveled read is exempt, and
-    `AION_RECALL_OWN_SESSION_FILTER=false` restores every item a session produced.
+    `AION_RECALL_OWN_SESSION_FILTER=false` restores every item a session produced. A compaction
+    re-prime is the second exemption, and it is the premise being withdrawn rather than a setting:
+    the same `reset_delivery_suppression` that makes recall forget what it served makes it stop
+    calling that session's captures its own, for the one call that sends it. A conversation whose
+    transcript was summarized is not holding those turns any more, so there is no echo to spare it.
+
+    That batched read is the branch the pipeline takes on its own. A covered entry point hands
+    the resolver a checked context instead, and the resolver answers from the durable records:
+    the incidence rows that carry a node, and the source record behind the id it holds itself.
+    That answer stays `unknown` until all three ownership scopes on the node carry a census, and
+    `unknown` serves. The acceptance counts those three for every episode and turn id it mints, so
+    a raw capture is withheld from the session that wrote it on either branch. A claim, an insight
+    or an entity is not. Nothing on the fresh path records extraction, mention or participation
+    incidence, so their session set comes back empty, their verdict stays `unknown`, and the
+    covered read serves them to the session that produced them. The count runs forward only: a
+    capture the records held before this landed carries no census of its own, answers `unknown`,
+    and goes on being served back to the session that wrote it, while a migrated endpoint carries
+    its cohort seal's census and already answered the new way. Each item also carries a second
+    coverage gap that no census closes: nothing anywhere counts `graph.node_state`, so every item
+    reports `interpretation_text / unverified_scope` whatever its ownership says.
 
 11. **Near-duplicate fold.** The third subtraction, decided inside pack assembly itself rather
     than against a served-items record, and the only place two different node ids are ever read as

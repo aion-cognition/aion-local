@@ -75,9 +75,11 @@ function newSinceCapture(
  * An item some other session also produced is a shared memory rather than an echo, and an entity
  * is shared by construction as soon as a second session mentions it.
  *
- * An empty ownership map is the whole exemption: a time-traveled read, a disabled knob and a
- * failed lookup all arrive here with no verdict to match against, so none of them can suppress
- * anything.
+ * An empty ownership map is the whole exemption: a time-traveled read, a disabled knob, a call
+ * that staged a delivery reset and a failed lookup all arrive here with no verdict to match
+ * against, so none of them can suppress anything. The reset is the premise above being withdrawn
+ * by the only party that can see it go: a compacted conversation no longer holds the turns it
+ * captured, so there is no echo left to spare it.
  */
 export function suppressedOwnSession(input: OwnSessionInput): ReadonlySet<string> {
   const suppressed = new Set<string>();

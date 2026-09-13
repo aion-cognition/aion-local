@@ -34,11 +34,12 @@ export const RecallInputSchema = z.strictObject({
   as_of: IsoTimestampSchema.optional(),
   knew_at: IsoTimestampSchema.optional(),
   /**
-   * Forgets what this session was already served, before this call is answered. A compaction
-   * summarizes the caller's own transcript, and nothing here can tell which of it survived, so
-   * a caller marking a new epoch here is what lets recall stop withholding text on the chance
-   * the caller no longer holds it. Receipt of a re-served item is never proof it landed back in
-   * context, only the conservative answer to not knowing.
+   * Forgets what this session was already served, before this call is answered, and stops reading
+   * what it captured as its own for the same call. A compaction summarizes the caller's own
+   * transcript, and nothing here can tell which of it survived, so a caller marking a new epoch
+   * here is what lets recall stop withholding text on the chance the caller no longer holds it.
+   * Receipt of a re-served item is never proof it landed back in context, only the conservative
+   * answer to not knowing.
    */
   reset_delivery_suppression: z.boolean().optional(),
 });

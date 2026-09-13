@@ -418,6 +418,13 @@ run interrupted anywhere resumes from durable state.
 its recorded proof still says verified. Both restart a job the ordinary run would leave alone;
 neither moves an assignment or the first saved capture order, which are immutable once frozen.
 
+One cohort id per substrate. A new id freezes its membership at the CURRENT intake watermark, so a
+second one sweeps in every source accepted since the first freeze, walks those captures as if they
+were historical, and seals all seven support scopes over turns whose only classified edge is their
+own ordering. Those turns stop reading as unknown and start maturing toward orphan suppression.
+Resume the cohort you have (`consolidate status --cohort <id>` names it) and freeze a second one
+only where a substrate has never been consolidated.
+
 `abandon` is the only exit from a `capture_member_bound` block. That block means the cohort's
 capture exceeds a bound fixed at freeze time, and `--refresh` cannot raise it: abandoning releases
 the reservation so a smaller cohort can be frozen in its place. `status` prints the exact command

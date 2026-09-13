@@ -2,7 +2,7 @@ import type { ReflectionOrigin, ReflectionProvenance } from '@aion/protocol';
 import { randomUUID } from 'node:crypto';
 
 import { ReflectionNotStoredError } from './errors.js';
-import type { IntakePayload } from './intake-publication.js';
+import type { IntakePayload } from './intake-codec.js';
 import type { LaneDecision } from './lanes.js';
 import type { PublicationOutcome } from '../../infrastructure/publication/types.js';
 import { INDEX_POLICY_VERSION } from '../../infrastructure/sqlite/source-search-schema.js';

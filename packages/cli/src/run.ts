@@ -32,7 +32,7 @@ type Command = {
 
 const commands: Record<string, Command> = {
   consolidate: {
-    summary: 'resume or inspect a fixed narrative migration: status | run',
+    summary: 'resume or inspect the one narrative migration cohort: status | run',
     run: (argv) => runConsolidate(argv),
   },
   costs: {

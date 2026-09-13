@@ -1,13 +1,17 @@
 import { randomUUID } from 'node:crypto';
-import { z } from 'zod';
 
 import {
+  acknowledgeMintedNodeCensus,
   acknowledgeSourceCensus,
+  discardMintedNodeCensus,
   discardSourceCensus,
+  mintedNodeCensusScopes,
+  prepareMintedNodeCensus,
   prepareSourceCensus,
   sourceCensusScopes,
 } from './accepted-source-census.js';
 import { projectEpisodeInTransaction } from './experience-store.js';
+import { Data, Payload, Result, type IntakeData, type IntakePayload } from './intake-codec.js';
 import { enqueueSourceWork } from './intake-queue.js';
 import {
   type ReferenceAcceptance,
@@ -68,70 +72,6 @@ export const INTAKE_EFFECTS = {
   references: 'reference_batch',
   links: 'evidence_link_versions',
 } as const;
-
-const Readiness = z.strictObject({
-  policyRevision: z.number().int().nonnegative(),
-  stageNames: z.array(z.string().min(1)),
-});
-
-const Payload = z.strictObject({
-  identity: z.string().min(1),
-  sessionId: z.string().min(1),
-  /** The redacted content as the archive holds it. A string so the codec stays strict. */
-  payloadJson: z.string().min(1),
-  referencesJson: z.string().nullable(),
-  lane: z.string().nullable(),
-  originJson: z.string().nullable(),
-  pipelineVersion: z.string().min(1),
-  occurredAt: z.string().min(1),
-  indexPolicy: z.string().min(1),
-  readiness: Readiness.nullable(),
-});
-
-const ReferenceTarget = z.strictObject({
-  id: z.string().min(1),
-  kind: z.enum(['corrects', 'derived_from', 'confirms']),
-  targetClass: z.enum(['source', 'part', 'retained_node', 'unresolved']),
-  confirmation: z
-    .strictObject({
-      by: z.string().min(1),
-      evidence: z.string().min(1),
-      occurredAt: z.string().min(1),
-      statedOccurredAt: z.string().min(1).optional(),
-    })
-    .optional(),
-});
-
-const Data = Payload.extend({
-  decision: z.enum(['new', 'reuse', 'pinned']),
-  /**
-   * When this substrate accepted the push, fixed while the guard was held. World time comes off
-   * the experience; every acceptance and readiness clock comes from here, so a backdated
-   * conversation cannot date its own archive row, ingest position or reference receipt.
-   */
-  acceptedAt: z.string().min(1),
-  /** The statements this push carried, classified under the guard. Empty when it carried none. */
-  referenceTargets: z.array(ReferenceTarget),
-  /** Why a pinned decision refuses, so the intent says which rule stopped it. */
-  pinnedReason: z.enum(['occurrence_ambiguous', 'occurrence_state_uncertain']).nullable(),
-  sourceId: z.string(),
-  turnIds: z.array(z.string().min(1)),
-  contentHash: z.string().min(1),
-  identityHash: z.string().min(1),
-  /** Which occurrences the guarded read saw, so the check can tell that the answer moved. */
-  candidateDigest: z.string().min(1),
-  residency: z.enum(['resident', 'retiring', 'evicted', 'absent']),
-  pinnedCandidates: z.array(z.string().min(1)),
-});
-
-const Result = z.strictObject({
-  sourceId: z.string(),
-  created: z.boolean(),
-  turnIds: z.array(z.string().min(1)),
-});
-
-export type IntakePayload = z.infer<typeof Payload>;
-type IntakeData = z.infer<typeof Data>;
 
 function content(data: IntakePayload): ReflectionContent {
   return JSON.parse(data.payloadJson) as ReflectionContent;
@@ -347,7 +287,12 @@ export const intakePublication = new PublicationOperation({
       scopes: [
         { kind: 'source', id: data.identityHash, scope: 'sqlite:source_occurrence' },
         // The counters this acknowledgment publishes, where it mints the identity.
-        ...(data.decision === 'new' ? sourceCensusScopes(data.sourceId) : []),
+        ...(data.decision === 'new'
+          ? [
+              ...sourceCensusScopes(data.sourceId),
+              ...mintedNodeCensusScopes(data.sourceId, data.turnIds),
+            ]
+          : []),
       ],
       effects: acceptanceEffects(data),
     };
@@ -438,8 +383,16 @@ export const intakePublication = new PublicationOperation({
         data.turnIds,
       );
       // Beside the records that mint the identity: the empty incoming population is a fact about
-      // this id having just been chosen.
+      // this id having just been chosen. The node side of every id this write chose is the same
+      // fact, so it is parked here too.
       prepareSourceCensus(context.db, data.sourceId, context.operationId, data.acceptedAt);
+      prepareMintedNodeCensus(
+        context.db,
+        data.sourceId,
+        data.turnIds,
+        context.operationId,
+        data.acceptedAt,
+      );
       return undefined;
     }
     // A reused occurrence rebuilds nothing and reindexes nothing, but the statements this push
@@ -480,6 +433,13 @@ export const intakePublication = new PublicationOperation({
     });
     enqueueSourceWork(context.db, data, context.operationId);
     acknowledgeSourceCensus(context.db, data.sourceId, context.operationId, context.knownFrom);
+    acknowledgeMintedNodeCensus(
+      context.db,
+      data.sourceId,
+      data.turnIds,
+      context.operationId,
+      context.knownFrom,
+    );
     return undefined;
   },
   discardSqlite(context, data, reason) {
@@ -493,6 +453,13 @@ export const intakePublication = new PublicationOperation({
     });
     discardReferenceAcceptance(context.db, referenceAcceptanceOf(data, context.operationId));
     discardSourceCensus(context.db, data.sourceId, context.operationId, data.acceptedAt);
+    discardMintedNodeCensus(
+      context.db,
+      data.sourceId,
+      data.turnIds,
+      context.operationId,
+      data.acceptedAt,
+    );
     return undefined;
   },
 });

@@ -29,7 +29,16 @@ export type OwnershipSummary = {
   readonly sessions: readonly string[];
   /** A contribution the records cannot attribute to a session. Never rendered as own or as other. */
   readonly unknownAttribution: boolean;
-  /** Whether the scopes the attribution was read from have a census behind them. */
+  /**
+   * Whether the three ownership scopes on this node carry a census.
+   *
+   * For a node the incidence rows attribute, those are the scopes the attribution was read from.
+   * They are not for an id that carries its own identity, meaning an episode, or a turn through
+   * its part mapping. There the session comes off the source record, which has no census of its
+   * own, so the flag says only that the counters a reader consults are counted. Either way a
+   * missing mapping or an ineligible source leaves the session set empty, which answers unknown
+   * and serves.
+   */
   readonly censusEstablished: boolean;
 };
 
