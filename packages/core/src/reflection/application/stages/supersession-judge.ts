@@ -3,8 +3,7 @@ import { z } from 'zod';
 import { admitRenderedInput, JUDGE_OUTPUT_RESERVE } from '../../../evidence/domain/budget.js';
 import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../../infrastructure/providers/types.js';
-import { promptMode } from '../../../prompts/index.js';
-import { KEYED as JUDGE_KEYED, LOCAL as JUDGE_LOCAL } from '../../../prompts/supersession-judge.js';
+import { JUDGE_PROMPT } from '../../../prompts/supersession-judge.js';
 
 /**
  * The first pass over one pair of statements: the prompt, the schema its answer has to satisfy,
@@ -27,8 +26,7 @@ const JUDGE_TEMPERATURE = 0;
 /** What a pass says when its own submitted messages do not fit the route allowance. */
 export const OVER_ALLOWANCE = 'the submitted input exceeds this route allowance';
 
-export const LIVE_SUPERSESSION_ROUTE_RESERVE =
-  Math.max(JUDGE_KEYED.length, JUDGE_LOCAL.length) + JUDGE_OUTPUT_RESERVE;
+export const LIVE_SUPERSESSION_ROUTE_RESERVE = JUDGE_PROMPT.length + JUDGE_OUTPUT_RESERVE;
 
 const JUDGMENT_JSON_SCHEMA: JsonSchema = {
   type: 'object',
@@ -130,7 +128,7 @@ export async function judgeContradiction(
   pair: ContradictionPair,
   options: JudgeContradictionOptions,
 ): Promise<JudgeOutcome> {
-  const systemPrompt = promptMode(provider) === 'keyed' ? JUDGE_KEYED : JUDGE_LOCAL;
+  const systemPrompt = JUDGE_PROMPT;
   const messages = buildMessages(
     pair.priorLabel,
     pair.currentLabel,

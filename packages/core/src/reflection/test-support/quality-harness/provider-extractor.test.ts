@@ -6,14 +6,8 @@ import {
   type ProviderGenerateDeps,
 } from './provider-extractor.js';
 import type { Provider, StructuredRequest } from '../../../infrastructure/providers/types.js';
-import {
-  KEYED as COGNITIVE_KEYED,
-  LOCAL as COGNITIVE_LOCAL,
-} from '../../../prompts/cognitive-extraction.js';
-import {
-  KEYED as ENTITY_KEYED,
-  LOCAL as ENTITY_LOCAL,
-} from '../../../prompts/entity-extraction.js';
+import { EXTRACTION_PROMPT as COGNITIVE_PROMPT } from '../../../prompts/cognitive-extraction.js';
+import { EXTRACTION_PROMPT as ENTITY_PROMPT } from '../../../prompts/entity-extraction.js';
 
 const TEXT = 'user: the queue moved to SQLite\nassistant: noted';
 
@@ -67,47 +61,30 @@ describe('the sampling the harness extractors ask for', () => {
 });
 
 /**
- * The harness has no prompt text of its own. Each route sends the constant that route ships, so a
- * forked surface is measured as two variants and a shared one is measured once, twice over.
+ * The harness has no prompt text of its own: each extractor sends the one constant its surface
+ * ships, whatever route the caller states. It used to send one of two, which is what the
+ * route argument below is left over from.
  */
-describe('the system prompt each harness route sends', () => {
-  it('sends the local entity prompt on the Ollama route', async () => {
-    const { deps, requests } = recording({ entities: [] }, { provider: 'anthropic' });
+describe('the system prompt the harness sends', () => {
+  it('sends the entity prompt, whatever route the caller states', async () => {
+    const routed = recording({ entities: [] }, { provider: 'anthropic' });
+    const unrouted = recording({ entities: [] });
 
-    await extractEntitiesViaProvider(deps, TEXT);
+    await extractEntitiesViaProvider(routed.deps, TEXT);
+    await extractEntitiesViaProvider(unrouted.deps, TEXT);
 
-    expect(systemPrompt(requests)).toBe(ENTITY_LOCAL);
+    expect(systemPrompt(routed.requests)).toBe(ENTITY_PROMPT);
+    expect(systemPrompt(unrouted.requests)).toBe(ENTITY_PROMPT);
   });
 
-  it('sends the keyed entity prompt on the Anthropic route', async () => {
-    const { deps, requests } = recording({ entities: [] }, { provider: 'anthropic' });
+  it('sends the cognitive prompt, whatever route the caller states', async () => {
+    const routed = recording({ nodes: [] }, { provider: 'anthropic' });
+    const unrouted = recording({ nodes: [] });
 
-    await extractEntitiesViaProvider(deps, TEXT);
+    await extractCognitiveViaProvider(routed.deps, TEXT);
+    await extractCognitiveViaProvider(unrouted.deps, TEXT);
 
-    expect(systemPrompt(requests)).toBe(ENTITY_KEYED);
-  });
-
-  it('sends the local cognitive prompt on the Ollama route', async () => {
-    const { deps, requests } = recording({ nodes: [] }, { provider: 'anthropic' });
-
-    await extractCognitiveViaProvider(deps, TEXT);
-
-    expect(systemPrompt(requests)).toBe(COGNITIVE_LOCAL);
-  });
-
-  it('sends the keyed cognitive prompt on the Anthropic route', async () => {
-    const { deps, requests } = recording({ nodes: [] }, { provider: 'anthropic' });
-
-    await extractCognitiveViaProvider(deps, TEXT);
-
-    expect(systemPrompt(requests)).toBe(COGNITIVE_KEYED);
-  });
-
-  it('reads the local text when the caller states no route', async () => {
-    const { deps, requests } = recording({ nodes: [] });
-
-    await extractCognitiveViaProvider(deps, TEXT);
-
-    expect(systemPrompt(requests)).toBe(COGNITIVE_LOCAL);
+    expect(systemPrompt(routed.requests)).toBe(COGNITIVE_PROMPT);
+    expect(systemPrompt(unrouted.requests)).toBe(COGNITIVE_PROMPT);
   });
 });

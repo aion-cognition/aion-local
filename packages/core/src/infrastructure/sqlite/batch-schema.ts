@@ -29,6 +29,11 @@ export const BATCH_SCHEMA_STATEMENTS: readonly string[] = [
     -- What the request was built against, as the surface's own handler reads it back.
     revalidation_json TEXT NOT NULL,
     request_json TEXT NOT NULL,
+    -- The shared frame version the request above was assembled under. The request is replayed
+    -- verbatim, so the frame travels with it; this is what lets a reader say which frame an
+    -- outstanding answer was written against without parsing the request back out. Null on a row
+    -- enqueued before the frame existed.
+    frame_version TEXT,
     -- pending: owed, not submitted. submitted: the remote holds it. applied/discarded/failed
     -- are terminal, and each says which of them happened and why.
     state TEXT NOT NULL CHECK (state IN ('pending', 'submitted', 'applied', 'discarded', 'failed')),

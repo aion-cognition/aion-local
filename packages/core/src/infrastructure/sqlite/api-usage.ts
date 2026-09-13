@@ -16,9 +16,10 @@ export function appendApiCall(db: SqliteHandle, call: ApiCall): boolean {
     .prepare(
       `INSERT INTO api_calls (
     occurred_at, model, surface, input_tokens, output_tokens, cache_creation_tokens,
+    cache_creation_5m_tokens, cache_creation_1h_tokens,
     cache_read_tokens, thinking_tokens, duration_ms, attempts, usage_error, request_id,
     pricing_tier
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(request_id) DO NOTHING`,
     )
     .run(
@@ -28,6 +29,11 @@ export function appendApiCall(db: SqliteHandle, call: ApiCall): boolean {
       call.inputTokens,
       call.outputTokens,
       call.cacheCreationTokens,
+      // Stored apart from the aggregate, because the two write classes are priced apart. A row
+      // that dropped them prices an hour-long write at the five-minute rate the moment the
+      // in-memory call is gone, which is every reading `aion costs` and batch settlement make.
+      call.cacheCreation5mTokens ?? null,
+      call.cacheCreation1hTokens ?? null,
       call.cacheReadTokens,
       call.thinkingTokens ?? null,
       call.durationMs,
@@ -76,6 +82,14 @@ export type ApiUsageGroup = {
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly cacheCreationTokens: number;
+  /**
+   * The five-minute and hour-long shares of `cacheCreationTokens`, inside that total rather than
+   * beside it. Absent where no call in the group reported a breakdown, which prices the whole
+   * aggregate at the five-minute rate; where some did and some did not, the part neither share
+   * covers is the unreported remainder and prices the same way.
+   */
+  readonly cacheCreation5mTokens?: number;
+  readonly cacheCreation1hTokens?: number;
   readonly cacheReadTokens: number;
   /**
    * Part of `outputTokens`, never an addition to it: a total that sums both double-counts. Null
@@ -101,11 +115,14 @@ function groupedUsage(
   until: Date,
 ): ApiUsageGroup[] {
   const key = dimension === 'day' ? 'substr(occurred_at, 1, 10)' : 'surface';
-  return db
+  const rows = db
     .prepare(
       `SELECT ${key} AS key, model, pricing_tier AS pricingTier, count(*) AS calls,
     sum(input_tokens) AS inputTokens, sum(output_tokens) AS outputTokens,
-    sum(cache_creation_tokens) AS cacheCreationTokens, sum(cache_read_tokens) AS cacheReadTokens,
+    sum(cache_creation_tokens) AS cacheCreationTokens,
+    sum(cache_creation_5m_tokens) AS cacheCreation5mTokens,
+    sum(cache_creation_1h_tokens) AS cacheCreation1hTokens,
+    sum(cache_read_tokens) AS cacheReadTokens,
     sum(thinking_tokens) AS thinkingTokens,
     sum(CASE WHEN thinking_tokens IS NULL THEN 1 ELSE 0 END) AS thinkingUnknown,
     sum(duration_ms) AS durationMs, sum(attempts) AS attempts,
@@ -113,7 +130,21 @@ function groupedUsage(
     FROM api_calls WHERE occurred_at >= ? AND occurred_at < ?
     GROUP BY ${key}, model, pricing_tier ORDER BY key, model, pricing_tier`,
     )
-    .all(since.toISOString(), until.toISOString()) as ApiUsageGroup[];
+    .all(since.toISOString(), until.toISOString()) as (Omit<
+    ApiUsageGroup,
+    'cacheCreation5mTokens' | 'cacheCreation1hTokens'
+  > & {
+    cacheCreation5mTokens: number | null;
+    cacheCreation1hTokens: number | null;
+  })[];
+  // `sum` over rows that all reported nothing answers null, and that null is the fact: this
+  // group's writes carry no reported split. Kept off the row rather than carried as a zero, which
+  // would price an unreported hour-long write at the five-minute rate.
+  return rows.map(({ cacheCreation5mTokens, cacheCreation1hTokens, ...row }) => ({
+    ...row,
+    ...(cacheCreation5mTokens === null ? {} : { cacheCreation5mTokens }),
+    ...(cacheCreation1hTokens === null ? {} : { cacheCreation1hTokens }),
+  }));
 }
 
 /**
@@ -125,6 +156,30 @@ export function summarizeApiCalls(db: SqliteHandle, since: Date, until: Date): A
     days: groupedUsage(db, 'day', since, until),
     surfaces: groupedUsage(db, 'surface', since, until),
   }))();
+}
+
+/**
+ * Which of these remote request identities carry no charge on the books.
+ *
+ * A usage write can fail on its own: the response arrived, the answer was used, and the row that
+ * prices it did not land. Summing the rows that did land cannot see that, so the identities the
+ * caller knows were answered are checked against the books by name. An identity already on the
+ * books is accounted for however it got there, which is what makes a re-read of an ended batch
+ * complete rather than a duplicate.
+ */
+export function unaccountedApiRequests(
+  db: SqliteHandle,
+  requestIds: readonly string[],
+): readonly string[] {
+  if (requestIds.length === 0) {
+    return [];
+  }
+  const placeholders = requestIds.map(() => '?').join(', ');
+  const rows = db
+    .prepare(`SELECT request_id FROM api_calls WHERE request_id IN (${placeholders})`)
+    .all(...requestIds) as { request_id: string }[];
+  const recorded = new Set(rows.map((row) => row.request_id));
+  return requestIds.filter((requestId) => !recorded.has(requestId));
 }
 
 /**
@@ -143,7 +198,10 @@ export function chargedApiUsd(db: SqliteHandle, batchId: string): number | undef
     .prepare(
       `SELECT model, pricing_tier AS pricingTier,
     sum(input_tokens) AS inputTokens, sum(output_tokens) AS outputTokens,
-    sum(cache_creation_tokens) AS cacheCreationTokens, sum(cache_read_tokens) AS cacheReadTokens,
+    sum(cache_creation_tokens) AS cacheCreationTokens,
+    sum(cache_creation_5m_tokens) AS cacheCreation5mTokens,
+    sum(cache_creation_1h_tokens) AS cacheCreation1hTokens,
+    sum(cache_read_tokens) AS cacheReadTokens,
     sum(CASE WHEN usage_error IS NOT NULL THEN 1 ELSE 0 END) AS usageErrors
     FROM api_calls WHERE request_id LIKE ? ESCAPE '\\'
     GROUP BY model, pricing_tier`,
@@ -151,10 +209,23 @@ export function chargedApiUsd(db: SqliteHandle, batchId: string): number | undef
     .all(`${batchId.replace(/[\\%_]/g, '\\$&')}:%`) as (Pick<
     ApiCall,
     'model' | 'inputTokens' | 'outputTokens' | 'cacheCreationTokens' | 'cacheReadTokens'
-  > & { pricingTier: ApiPricingTier; usageErrors: number })[];
+  > & {
+    pricingTier: ApiPricingTier;
+    cacheCreation5mTokens: number | null;
+    cacheCreation1hTokens: number | null;
+    usageErrors: number;
+  })[];
   let total = 0;
   for (const row of rows) {
-    const cost = row.usageErrors > 0 ? undefined : estimateApiCost(row);
+    // The split travels into the estimate for the reason it is stored at all: settling a batch
+    // that wrote for the hour at the five-minute rate reports the lane cheaper than the bill.
+    const { cacheCreation5mTokens, cacheCreation1hTokens, ...totals } = row;
+    const priced = {
+      ...totals,
+      ...(cacheCreation5mTokens === null ? {} : { cacheCreation5mTokens }),
+      ...(cacheCreation1hTokens === null ? {} : { cacheCreation1hTokens }),
+    };
+    const cost = row.usageErrors > 0 ? undefined : estimateApiCost(priced);
     if (cost === undefined) {
       return undefined;
     }

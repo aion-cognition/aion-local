@@ -11,5 +11,4 @@ const QUESTION = [
   'Ask about what the episodes leave open; never assume a fact none of them state.',
 ].join(' ');
 
-export const LOCAL = QUESTION;
-export const KEYED = QUESTION;
+export const QUESTION_PROMPT = QUESTION;

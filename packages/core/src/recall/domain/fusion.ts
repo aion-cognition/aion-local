@@ -68,6 +68,10 @@ export type FusionCandidate = {
    * never targets, which `mentionSalience` reads the same as a one-off sighting.
    */
   readonly mentionCount?: number;
+  /** The condition a contextual preference holds under; absent on every other node type. */
+  readonly context?: string;
+  /** Set where the substrate also holds a competing reading of the same memories. */
+  readonly contested?: true;
   /** Why the item surfaced, as the pack reports it. Its score is the method's own. */
   readonly rationale: Rationale;
   /** The node's own stated reason (a Decision's `rationale` property), distinct from `rationale` above. */

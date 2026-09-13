@@ -62,7 +62,9 @@ export {
   reflectionStages,
   reinforcementOptions,
   semanticRelationshipOptions,
+  preferenceOptions,
   supersessionOptions,
+  synthesisOptions,
   workerOptions,
 } from './application/pipeline.js';
 
@@ -94,6 +96,13 @@ export type { ContradictionJudgment } from './application/stages/supersession.js
 
 export { reviewContradiction } from './application/stages/supersession-review.js';
 export type { ReviewVerdict, VetoCheck } from './application/stages/supersession-review.js';
+
+export { ReflectiveSynthesisStage, SYNTHESIS_STAGE_NAME } from './application/stages/synthesis.js';
+
+export {
+  PreferenceInferenceStage,
+  PREFERENCE_STAGE_NAME,
+} from './application/stages/preferences.js';
 
 export { ContextVectorStage } from './application/stages/context-vectors.js';
 

@@ -58,8 +58,9 @@ packages/core/src/
                                         introspection insights, locks
   recall/domain/                        pure: activation, fusion (RRF/MMR), pack assembly
   recall/application/                   cue extraction, seed strategies, the recall pipeline
-  plasticity/                           reinforcement folding and the decay curve, plus the
-                                        two bounded operations that apply them
+  plasticity/                           reinforcement folding and the decay curve, the two bounded
+                                        operations that apply them, and the drain's one owner and
+                                        its own cadence (drain.ts)
   introspection/domain/                 pure: health snapshot, the tiered decision, the
                                         operation contract, time-bucketed keys
   introspection/application/            the tick loop, the catalog, one file per operation
@@ -69,10 +70,11 @@ packages/core/src/
   reflection/application/stages/        the pipeline, in the order pipeline.ts's
                                         reflectionStages() registers them
   session/                              identity-to-session-id resolution
-  prompts/                              every generation system prompt, one file per surface,
-                                        exported as LOCAL and KEYED, forks named in
-                                        fork-registry.test.ts; prompt-prefix-size.test.ts
-                                        measures them against the cache floor
+  prompts/                              every generation system prompt, one file per surface, one
+                                        exported constant per prompt; frame.ts is the shared why
+                                        the request builder puts ahead of all of them;
+                                        prompt-surfaces.test.ts sweeps the directory and
+                                        prompt-prefix-size.test.ts measures against the cache floor
 packages/mcp/src/                       MCP server: tool definitions, HTTP transport
 packages/cli/src/                       aion command: init, status, doctor, stats, last, why,
                                         timeline, search, source-search, source, forget,
@@ -135,9 +137,9 @@ every command). Use it to exercise the actual binary, not as a test runner.
   `packages/` for an assignment to an identifier ending in `SYSTEM_PROMPT`, and fails on one
   found outside `prompts/`. It skips two files, itself and `packages/mcp/src/descriptions.ts`,
   which is what an agent reads when it picks a tool rather than text a model generates against.
-  A test in the same file pins the list at those two. `fork-registry.test.ts` beside it names
-  the surfaces whose two routes read different text, and proves every other surface exports one
-  constant under both names, so a keyed prompt cannot drift from its local twin unnamed.
+  A test in the same file pins the list at those two. `prompt-surfaces.test.ts` beside it sweeps
+  the directory for a prompt exported under a route-specific name, which is what a fork looked
+  like from outside the file before the local generation route was removed.
 - `packages/core/src/infrastructure/config/config-surface.test.ts`: compares the live config
   surface against the committed `config-surface.json`, knob by knob. It covers the default
   tree, every env var with its path and kind, and the verdict the loader and the schema return

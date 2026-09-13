@@ -22,7 +22,7 @@ import {
 import { isIntentionNodeLabel } from '../../../infrastructure/graph/intention-queries.js';
 import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Vector } from '../../../infrastructure/providers/types.js';
-import { LOCAL as SYSTEM_PROMPT } from '../../../prompts/cognitive-extraction.js';
+import { EXTRACTION_PROMPT as SYSTEM_PROMPT } from '../../../prompts/cognitive-extraction.js';
 import { generationSkipReason } from '../../domain/capture-class.js';
 import { TEMPORAL_CLASSES } from '../../domain/claim-key.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';

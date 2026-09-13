@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { coOccurringPairs, coOccursLedgerKey } from './associations.js';
+import { coOccurrenceBirthStrength, coOccurringPairs, coOccursLedgerKey } from './associations.js';
 
 describe('coOccurringPairs', () => {
   it('pairs every distinct entity with every other exactly once', () => {
@@ -50,3 +50,41 @@ describe('coOccursLedgerKey', () => {
     expect(keys.size).toBe(1);
   });
 });
+
+describe('coOccurrenceBirthStrength', () => {
+  const FLOOR = 0.1;
+
+  it('gives a two-entity episode its only pair the whole of one observation', () => {
+    expect(coOccurrenceBirthStrength(coOccurringPairs(['a', 'b']).length, FLOOR)).toBe(1);
+  });
+
+  it('scales with the pairs the episode minted, not with the entities it named', () => {
+    const three = coOccurrenceBirthStrength(coOccurringPairs(['a', 'b', 'c']).length, FLOOR);
+    const four = coOccurrenceBirthStrength(coOccurringPairs(['a', 'b', 'c', 'd']).length, FLOOR);
+
+    expect(three).toBeCloseTo(1 / 3, 10);
+    expect(four).toBeCloseTo(1 / 6, 10);
+  });
+
+  it('plateaus at the floor rather than writing an edge recall cannot walk', () => {
+    const dense = coOccurrenceBirthStrength(coOccurringPairs(namesOf(30)).length, FLOOR);
+
+    expect(dense).toBe(FLOOR);
+  });
+
+  it('reaches the plateau at five entities, which is where 1/pairs falls under the floor', () => {
+    expect(coOccurrenceBirthStrength(coOccurringPairs(namesOf(4)).length, FLOOR)).toBeCloseTo(
+      1 / 6,
+      10,
+    );
+    expect(coOccurrenceBirthStrength(coOccurringPairs(namesOf(5)).length, FLOOR)).toBe(FLOOR);
+  });
+
+  it('treats an episode that minted no pair as a whole observation, never a division by zero', () => {
+    expect(coOccurrenceBirthStrength(0, FLOOR)).toBe(1);
+  });
+});
+
+function namesOf(count: number): readonly string[] {
+  return Array.from({ length: count }, (_, index) => `e${String(index)}`);
+}

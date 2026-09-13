@@ -11,8 +11,8 @@ import { linkEntityMentions } from '../../../infrastructure/graph/entity-queries
 import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage } from '../../../infrastructure/providers/types.js';
 import {
-  LOCAL as SYSTEM_PROMPT,
-  REFINEMENT_LOCAL as REFINEMENT_PROMPT,
+  EXTRACTION_PROMPT as SYSTEM_PROMPT,
+  REFINEMENT_PROMPT,
 } from '../../../prompts/entity-extraction.js';
 import { generationSkipReason } from '../../domain/capture-class.js';
 import {

@@ -40,6 +40,13 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     input_tokens INTEGER NOT NULL CHECK (input_tokens >= 0),
     output_tokens INTEGER NOT NULL CHECK (output_tokens >= 0),
     cache_creation_tokens INTEGER NOT NULL CHECK (cache_creation_tokens >= 0),
+    -- The write total above, split by how long each entry lives. The API bills the two apart
+    -- (1.25x ordinary input for five minutes, 2x for an hour), so the aggregate alone cannot
+    -- price a request that wrote for the hour. Nullable, and null is the reading for a response
+    -- whose usage block carried no breakdown: the total is known and the split inside it is not,
+    -- which is a different fact from a write of nothing in the other class.
+    cache_creation_5m_tokens INTEGER CHECK (cache_creation_5m_tokens >= 0),
+    cache_creation_1h_tokens INTEGER CHECK (cache_creation_1h_tokens >= 0),
     cache_read_tokens INTEGER NOT NULL CHECK (cache_read_tokens >= 0),
     -- Nullable, and null is the reading for a response whose usage block carried no breakdown:
     -- the reasoning share of that output count is unknown, which is not the same as nothing.

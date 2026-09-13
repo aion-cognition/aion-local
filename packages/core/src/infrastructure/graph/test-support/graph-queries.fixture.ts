@@ -7,7 +7,7 @@ import {
 import type { Vector } from '../../providers/types.js';
 import { ACCESS_COUNT_PROPERTY } from '../access-tracking.js';
 import { CO_OCCURS_TYPE, SIMILAR_TYPE } from '../association-queries.js';
-import { BITEMPORAL_PROPERTIES, closeRelationshipFragment } from '../bitemporal.js';
+import { BITEMPORAL_PROPERTIES, closeRelationshipFragment, currentOnly } from '../bitemporal.js';
 import { readFirst, runRead, runWrite } from '../connection.js';
 import { CONTEXT_VECTOR_PROPERTY } from '../context-vector-queries.js';
 import { CONTEXT_VECTOR_SYNCED_AT_PROPERTY } from '../context-vector-sync.js';
@@ -22,6 +22,7 @@ import {
 } from '../entity-queries.js';
 import { MEMORY_PROPERTIES } from '../episodes.js';
 import { BASE_NODE_LABEL, ENTITY_LABEL, EXTRACTION_TYPE } from '../labels.js';
+import { DERIVES_FROM_TYPE } from '../narrative-queries.js';
 import { SUPERSEDES_TYPE } from '../relationships.js';
 import { LAST_ACCESSED_PROPERTY } from '../seed-queries.js';
 import {
@@ -880,5 +881,31 @@ export async function closesByMethod(driver: Driver, method: string): Promise<Cl
       newEpisodeId: row.new_episode_id as string,
       oldEpisodeId: row.old_episode_id as string,
     }),
+  );
+}
+
+/**
+ * The open conclusion drawn over exactly these premises, by its own `DERIVES_FROM` edges.
+ *
+ * A synthesis has no key of its own a test can look it up by: its id is folded from the premise
+ * set and the conclusion's own wording, and the wording is what the case is about. Asking the
+ * edges instead lets a case name the memories it seeded and get back whatever was drawn over
+ * them.
+ */
+export async function synthesisDrawnOver(
+  driver: Driver,
+  premiseIds: readonly string[],
+): Promise<string | undefined> {
+  return readFirst(
+    driver,
+    [
+      `MATCH (n:Synthesis)-[:${DERIVES_FROM_TYPE}]->(m)`,
+      `WHERE m.id IN $premiseIds AND ${currentOnly('n')}`,
+      'WITH n, count(DISTINCT m) AS hits',
+      'WHERE hits = size($premiseIds)',
+      'RETURN n.id AS id',
+    ].join('\n'),
+    { premiseIds: [...premiseIds] },
+    (row) => row.id as string,
   );
 }

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { errorMessage } from '../../infrastructure/errors.js';
 import { deadlineFor } from '../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../infrastructure/providers/types.js';
-import { LOCAL as SYSTEM_PROMPT } from '../../prompts/proposal-hygiene-judge.js';
+import { HYGIENE_PROMPT as SYSTEM_PROMPT } from '../../prompts/proposal-hygiene-judge.js';
 
 /**
  * The one model call `proposal_hygiene` makes: a fuzzy entity-merge pair nobody resolved

@@ -12,18 +12,14 @@ import {
 } from './description-freshness-operation.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
+import { mentionSourceDigest } from '../../../infrastructure/graph/entity-description-queries.js';
 import type { Logger } from '../../../infrastructure/logging/logger.js';
 import { legalCustomId } from '../../../infrastructure/providers/anthropic-batches.js';
 import type { Provider } from '../../../infrastructure/providers/types.js';
 import { readBatchWork } from '../../../infrastructure/sqlite/batch-work.js';
 import { SqliteStore, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { beginSubstratePairing } from '../../../infrastructure/sqlite/publication-control.js';
-import {
-  KEYED as FRESHNESS_KEYED,
-  KEYED_MAX_TOKENS,
-  LOCAL as FRESHNESS_LOCAL,
-  LOCAL_MAX_TOKENS,
-} from '../../../prompts/description-freshness.js';
+import { FRESHNESS_PROMPT, MAX_TOKENS } from '../../../prompts/description-freshness.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
 
@@ -41,6 +37,18 @@ import { healthFixture } from '../../domain/test-support/health.fixture.js';
  */
 
 const CONFIG: Config = { ...DEFAULTS };
+
+/** The one mention the fake driver answers the context read with, and what the prompt quotes. */
+const MENTION = { episodeId: 'episode-1', text: 'the pool was resized after the June incident' };
+
+const STALE_ENTITY = {
+  id: 'entity-1',
+  name: 'connection pool',
+  type: 'concept',
+  text: 'a Postgres connection pool (concept)',
+  mentions: 5,
+  baseline: 1,
+};
 
 let dir: string;
 let store: SqliteStore;
@@ -62,8 +70,8 @@ function fakeDriver(): Driver {
         records: [
           {
             toObject: () => ({
-              episode_id: 'episode-1',
-              text: 'the pool was resized after the June incident',
+              episode_id: MENTION.episodeId,
+              text: MENTION.text,
               occurred_at: undefined,
             }),
           },
@@ -71,20 +79,7 @@ function fakeDriver(): Driver {
       });
     }
     if (cypher.startsWith('MATCH (e:Entity)')) {
-      return Promise.resolve({
-        records: [
-          {
-            toObject: () => ({
-              id: 'entity-1',
-              name: 'connection pool',
-              type: 'concept',
-              text: 'a Postgres connection pool (concept)',
-              mentions: 5,
-              baseline: 1,
-            }),
-          },
-        ],
-      });
+      return Promise.resolve({ records: [{ toObject: () => ({ ...STALE_ENTITY }) }] });
     }
     throw new Error(`the fake driver has no model for this statement:\n${cypher}`);
   };
@@ -117,9 +112,14 @@ type EnqueuedRequest = {
   readonly model: string;
   readonly max_tokens: number;
   readonly temperature?: number;
-  readonly system: string;
+  readonly system: readonly { readonly type: string; readonly text: string }[];
   readonly messages: { readonly role: string; readonly content: string }[];
 };
+
+/** The surface's own block: the second one, after the shared frame the builder puts first. */
+function taskText(request: EnqueuedRequest | undefined): string {
+  return request?.system[1]?.text ?? '';
+}
 
 async function nominate(route?: Provider['route']): Promise<EnqueuedRequest | undefined> {
   const outcome = await descriptionFreshnessOperation().run(
@@ -142,19 +142,19 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-describe('the text and the budget the route asks under', () => {
-  it('asks the keyed route for the longer gloss and gives it the room to write one', async () => {
+describe('the text and the budget the surface asks under', () => {
+  it('asks for the gloss with its connections and gives it the room to write one', async () => {
     const request = await nominate({ provider: 'anthropic' });
 
-    expect(request?.system.startsWith(FRESHNESS_KEYED)).toBe(true);
-    expect(request?.max_tokens).toBe(KEYED_MAX_TOKENS);
+    expect(taskText(request).startsWith(FRESHNESS_PROMPT)).toBe(true);
+    expect(request?.max_tokens).toBe(MAX_TOKENS);
   });
 
-  it('reads a provider that states no route as the local one', async () => {
+  it('asks the same thing of a provider that states no route', async () => {
     const request = await nominate();
 
-    expect(request?.system.startsWith(FRESHNESS_LOCAL)).toBe(true);
-    expect(request?.max_tokens).toBe(LOCAL_MAX_TOKENS);
+    expect(taskText(request).startsWith(FRESHNESS_PROMPT)).toBe(true);
+    expect(request?.max_tokens).toBe(MAX_TOKENS);
   });
 });
 
@@ -176,14 +176,16 @@ describe('what the nomination writes down', () => {
     const row = readBatchWork(db, key ?? '');
     expect(row?.state).toBe('pending');
     expect(row?.surface).toBe(DESCRIPTION_FRESHNESS_SURFACE);
-    // The answer is about these five sentences from these episodes, so the record names them.
-    // A later count of whatever mentions the entity has is a different fact.
+    // The answer is about these sentences from these episodes, so the record names them and
+    // carries what they said. A later count of whatever mentions the entity has is a different
+    // fact, and so is an episode that still answers under the same id with different text.
     expect(row?.revalidation).toEqual({
       entityId: 'entity-1',
       baseline: 1,
       mentions: 5,
       text: 'a Postgres connection pool (concept)',
-      sources: ['episode-1'],
+      sources: [MENTION.episodeId],
+      sourceDigest: mentionSourceDigest([MENTION]),
     });
     // The entity, the baseline, the mention count and digests of the gloss and the sources are
     // the question's own identity, and the row carries it whole.
@@ -209,20 +211,11 @@ describe('what the nomination writes down', () => {
     const first = (db.prepare('SELECT work_key FROM batch_work').all() as { work_key: string }[])[0]
       ?.work_key;
 
-    // A second reading of the same entity, same gloss, same baseline, same sources.
+    // A second reading of the same entity, same gloss, same baseline, same sources saying the
+    // same thing.
     expect(
       descriptionFreshnessWorkKey(
-        descriptionFreshnessDurableKey(
-          {
-            id: 'entity-1',
-            name: 'connection pool',
-            type: 'concept',
-            text: 'a Postgres connection pool (concept)',
-            mentions: 5,
-            baseline: 1,
-          },
-          ['episode-1'],
-        ),
+        descriptionFreshnessDurableKey(STALE_ENTITY, mentionSourceDigest([MENTION])),
       ),
     ).toBe(first);
 
@@ -232,15 +225,24 @@ describe('what the nomination writes down', () => {
     expect(
       descriptionFreshnessWorkKey(
         descriptionFreshnessDurableKey(
-          {
-            id: 'entity-1',
-            name: 'connection pool',
-            type: 'concept',
-            text: 'a Postgres connection pool (concept)',
-            mentions: 8,
-            baseline: 1,
-          },
-          ['episode-4', 'episode-3', 'episode-2', 'episode-1'],
+          { ...STALE_ENTITY, mentions: 8 },
+          mentionSourceDigest([
+            { episodeId: 'episode-4', text: 'the pool lost a node' },
+            { episodeId: 'episode-3', text: 'the pool was resized again' },
+            { episodeId: 'episode-2', text: 'the pool moved behind the queue' },
+            MENTION,
+          ]),
+        ),
+      ),
+    ).not.toBe(first);
+
+    // The same episode, rewritten where it stands. The id the prompt cited still reads, and the
+    // sentence the model was given does not.
+    expect(
+      descriptionFreshnessWorkKey(
+        descriptionFreshnessDurableKey(
+          STALE_ENTITY,
+          mentionSourceDigest([{ ...MENTION, text: '[redacted]' }]),
         ),
       ),
     ).not.toBe(first);

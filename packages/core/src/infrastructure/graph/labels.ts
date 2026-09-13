@@ -28,7 +28,9 @@ export type NodeLabel =
   | 'Event'
   | 'Pattern'
   | 'Trend'
-  | 'Bridge';
+  | 'Bridge'
+  | 'Synthesis'
+  | 'Preference';
 
 /**
  * Carried by every node, whatever its type, so a lookup by id alone can seek an index:
@@ -89,6 +91,8 @@ export const NODE_LABELS: readonly NodeLabel[] = [
   'Pattern',
   'Trend',
   'Bridge',
+  'Synthesis',
+  'Preference',
 ];
 
 /**
@@ -122,6 +126,8 @@ const COMPANION_LABELS: Record<NodeLabel, readonly string[]> = {
   Pattern: ['Memory'],
   Trend: ['Memory'],
   Bridge: ['Memory'],
+  Synthesis: ['Memory'],
+  Preference: ['Memory'],
 };
 
 /** Primary label first, then its companions, then the base label. Used verbatim in the Cypher label list. */

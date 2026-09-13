@@ -1,12 +1,15 @@
 import type { Driver } from 'neo4j-driver';
 
 import { BITEMPORAL_PROPERTIES, currentOnly } from './bitemporal.js';
-import { runRead, runWrite } from './connection.js';
+import { inWriteTransaction, runRead, runWrite, type GraphTransaction } from './connection.js';
 import { ENTITY_MENTION_TYPE, ENTITY_TYPE_PROPERTY } from './entity-queries.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
+import { GraphNodeNotFoundError } from './errors.js';
 import { BASE_NODE_LABEL, ENTITY_LABEL } from './labels.js';
+import { lockNodeInTransaction } from './locks.js';
 import { ENTITY_NAME_PROPERTY, STRUCTURAL_PROPERTY } from './seed-queries.js';
 import { toGraphDateTime, toGraphInteger, toGraphVector, type Row } from './values.js';
+import { hashContent } from '../../reflection/domain/content.js';
 import { vectorInputHash } from '../../reflection/domain/vector-input.js';
 import type { Vector } from '../providers/types.js';
 
@@ -287,24 +290,35 @@ export async function findEntityMentionContexts(
 }
 
 /**
- * Which of these mentioning episodes a reader can still see.
+ * Which of these mentioning episodes a reader can still see, and what each one now says.
  *
  * A re-synthesis prompt is grounded in the episodes it selected, so what its answer has to be
  * checked against is those ids. A count of whatever mentions the entity carries now is a
  * different question: five sources can go out, one of them can be forgotten while the request is
- * at the remote, and four will still be standing when the answer lands.
+ * at the remote, and four will still be standing when the answer lands. The text comes back with
+ * the id because a readable id is not the input the model was given.
  */
 const FIND_READABLE_MENTION_SOURCES = [
   `MATCH (ep:Episode)-[:${ENTITY_MENTION_TYPE}]->(:${BASE_NODE_LABEL}:${ENTITY_LABEL} { id: $entityId })`,
   `WHERE ep.id IN $episodeIds AND ep.${BITEMPORAL_PROPERTIES.forgottenAt} IS NULL`,
-  'RETURN ep.id AS episode_id',
+  `RETURN ep.id AS episode_id, coalesce(ep.${MEMORY_PROPERTIES.summary}, ep.${MEMORY_PROPERTIES.text}) AS text`,
 ].join('\n');
+
+/** One episode the prompt quoted, as the prompt read it. */
+export type QuotedMentionSource = {
+  readonly episodeId: string;
+  readonly text: string;
+};
+
+function toQuotedSource(row: Row): QuotedMentionSource {
+  return { episodeId: row.episode_id as string, text: (row.text as string | null) ?? '' };
+}
 
 export async function readableMentionSources(
   driver: Driver,
   entityId: string,
   episodeIds: readonly string[],
-): Promise<string[]> {
+): Promise<QuotedMentionSource[]> {
   if (episodeIds.length === 0) {
     return [];
   }
@@ -314,8 +328,40 @@ export async function readableMentionSources(
       cypher: FIND_READABLE_MENTION_SOURCES,
       parameters: { entityId, episodeIds: [...episodeIds] },
     },
-    (row: Row) => row.episode_id as string,
+    toQuotedSource,
   );
+}
+
+/**
+ * The selected sources in the order they were quoted, or nothing where one of them is no longer
+ * readable. Order is part of it: the prompt numbers its excerpts, so the same five episodes in
+ * another order are a different reading.
+ */
+export function quotedMentionSources(
+  selected: readonly string[],
+  readable: readonly QuotedMentionSource[],
+): readonly QuotedMentionSource[] | undefined {
+  const byId = new Map(readable.map((source) => [source.episodeId, source.text]));
+  const quoted: QuotedMentionSource[] = [];
+  for (const episodeId of selected) {
+    const text = byId.get(episodeId);
+    if (text === undefined) {
+      return undefined;
+    }
+    quoted.push({ episodeId, text });
+  }
+  return quoted;
+}
+
+/**
+ * What the prompt read, as one value: the selected episodes and their text.
+ *
+ * The ids alone do not describe it. An episode can be rewritten while a request about it is at
+ * the remote, and an answer checked against ids would publish a sentence derived from text the
+ * store no longer holds.
+ */
+export function mentionSourceDigest(sources: readonly QuotedMentionSource[]): string {
+  return hashContent(sources.map((source) => [source.episodeId, source.text]));
 }
 
 /**
@@ -330,8 +376,8 @@ export async function readableMentionSources(
  * and this write is an in-place replacement with no bitemporal close to undo it.
  *
  * A caller that is publishing an answer about a gloss it read earlier names that gloss and the
- * sources the answer was grounded in, and both are tested inside this statement rather than
- * before it. The window between any check and this write holds an embed, and a description
+ * sources the answer was grounded in, and both are tested under the entity's own lock rather
+ * than before it. The window between any check and this write holds an embed, and a description
  * another pass committed in that window must not be overwritten by the answer to the older
  * question. `$expectedText` and `$sourceCount` are null for a caller writing a description it
  * derived from the node it is looking at, which has no earlier reading to defend.
@@ -373,17 +419,62 @@ export type RefreshEntityDescriptionInput = {
   readonly expectedText?: string;
   /** The mentions the answer was grounded in. The write matches only while all are readable. */
   readonly sources?: readonly string[];
+  /** What those mentions said where the request was built, re-read and compared under the lock. */
+  readonly expectedSourceDigest?: string;
 };
 
+/**
+ * The sources still say what the answer was written from. A caller that named no digest has
+ * nothing to defend.
+ */
+async function quotesTheSameSources(
+  tx: GraphTransaction,
+  input: RefreshEntityDescriptionInput,
+): Promise<boolean> {
+  if (input.expectedSourceDigest === undefined) {
+    return true;
+  }
+  const selected = input.sources ?? [];
+  const readable = await tx.run(
+    FIND_READABLE_MENTION_SOURCES,
+    { entityId: input.id, episodeIds: [...selected] },
+    toQuotedSource,
+  );
+  const quoted = quotedMentionSources(selected, readable);
+  return quoted !== undefined && mentionSourceDigest(quoted) === input.expectedSourceDigest;
+}
+
+/**
+ * Everything the decision rests on is read, compared and written inside one transaction holding
+ * the entity's own lock.
+ *
+ * A single statement carrying both the test and the write does not serialize two writers: Neo4j
+ * takes no lock for the match, so two of them naming the same expected gloss can both pass it and
+ * both write, and the second answer silently replaces the first. Taking the lock first is what
+ * makes whichever writer arrives second read what the first committed (`locks.ts`).
+ *
+ * An id that names no node at all is not an error here. The entity was absorbed or forgotten
+ * while its answer was at the remote, which is the same refusal as a gloss that moved.
+ */
 export async function refreshEntityDescription(
   driver: Driver,
   input: RefreshEntityDescriptionInput,
 ): Promise<boolean> {
-  const rows = await runWrite(
-    driver,
-    {
-      cypher: REFRESH_ENTITY_DESCRIPTION,
-      parameters: {
+  return inWriteTransaction(driver, async (tx) => {
+    try {
+      await lockNodeInTransaction(tx, input.id, input.now);
+    } catch (err) {
+      if (err instanceof GraphNodeNotFoundError) {
+        return false;
+      }
+      throw err;
+    }
+    if (!(await quotesTheSameSources(tx, input))) {
+      return false;
+    }
+    const rows = await tx.run(
+      REFRESH_ENTITY_DESCRIPTION,
+      {
         id: input.id,
         text: input.text,
         contentVector: toGraphVector(input.contentVector),
@@ -392,12 +483,12 @@ export async function refreshEntityDescription(
         now: toGraphDateTime(input.now),
         method: DESCRIPTION_REFRESH_METHOD,
         expectedText: input.expectedText ?? null,
-        sources: input.sources === undefined ? [] : [...input.sources],
+        sources: [...(input.sources ?? [])],
         sourceCount:
           input.sources === undefined ? null : toGraphInteger(new Set(input.sources).size),
       },
-    },
-    (row: Row) => row.id as string,
-  );
-  return rows.length > 0;
+      (row: Row) => row.id as string,
+    );
+    return rows.length > 0;
+  });
 }

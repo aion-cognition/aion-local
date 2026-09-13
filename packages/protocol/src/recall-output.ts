@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { CurrencySchema, IsoTimestampSchema, SupersededBySchema } from './common.js';
 import { HistoryCoverageSchema } from './history-coverage.js';
+import { StandingSchema } from './standing.js';
 
 /**
  * Every method that can produce a recalled item: four seed strategies, hybrid-search
@@ -91,58 +92,6 @@ export const RelatedClaimSchema = z.strictObject({
 
 export type RelatedClaim = z.infer<typeof RelatedClaimSchema>;
 
-/**
- * How the substrate came by the line, so a quotation and a conclusion drawn from one never
- * read alike. A Turn is text somebody typed and the substrate stored verbatim; a Decision is a
- * position the extraction found stated; every other cognitive type is a model's reading of a
- * capture. Collapsing the three renders an inference in the voice of a quotation.
- */
-export const StandingKindSchema = z.enum([
-  'recorded_utterance',
-  'recorded_session',
-  'recorded_decision',
-  'extracted_interpretation',
-  'synthesized',
-  'stated_description',
-]);
-
-export type StandingKind = z.infer<typeof StandingKindSchema>;
-
-/**
- * How far the line can be traced to anyone. A transport role is a label the calling client
- * chose, and agent-to-agent traffic arrives under `user`, so a recorded role is a report and
- * never an identity: it renders as `reported`. `attributed` needs a confirmation record that
- * names who confirmed and cites where the confirmation is written down. Nothing infers either
- * one from a retrieval score.
- */
-export const AttributionSchema = z.enum(['unknown', 'reported', 'attributed']);
-
-export type Attribution = z.infer<typeof AttributionSchema>;
-
-/**
- * A confirmation as the substrate holds it: who, when, and the reference the confirmation is
- * recorded under. It is evidence a reader weighs, never a permission the substrate waits on,
- * so nothing in recall or reflection branches on its presence.
- */
-export const ConfirmationSchema = z.strictObject({
-  by: z.string().min(1),
-  at: IsoTimestampSchema,
-  evidence: z.string().min(1),
-});
-
-export type Confirmation = z.infer<typeof ConfirmationSchema>;
-
-export const StandingSchema = z.strictObject({
-  kind: StandingKindSchema,
-  /** The role capture recorded, verbatim and uninterpreted. Absent when none was recorded. */
-  recorded_role: z.string().min(1).optional(),
-  attribution: AttributionSchema,
-  /** Present only where a confirmation record names a confirmer and cites its evidence. */
-  confirmed: ConfirmationSchema.optional(),
-});
-
-export type Standing = z.infer<typeof StandingSchema>;
-
 /** How many roots one item reports. A long chain names its nearest roots and says it was cut. */
 export const MAX_DERIVATION_ROOTS = 3;
 
@@ -223,6 +172,13 @@ export const MemoryPackItemSchema = z.strictObject({
    * rationale (method, score, path), and the two answer different questions.
    */
   why: z.string().min(1).optional(),
+  /**
+   * The condition a contextual preference holds under, in the words the model read it in.
+   * Present only on a preference that carries one. It is part of the statement rather than a
+   * qualifier on it: "does not require approval" served without "for local throwaway test stores
+   * only" is a different preference, and acting on it is a different act.
+   */
+  context: z.string().min(1).optional(),
   currency: CurrencySchema,
   superseded_by: SupersededBySchema.optional(),
   /**

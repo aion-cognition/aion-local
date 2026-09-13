@@ -6,8 +6,8 @@ import { deadlineFor } from '../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../infrastructure/providers/types.js';
 import type { EntityMergeJudgePass } from '../../infrastructure/sqlite/entity-merge-decisions.js';
 import {
-  DETECT_LOCAL as DETECT_SYSTEM_PROMPT,
-  REVIEW_LOCAL as REVIEW_SYSTEM_PROMPT,
+  DETECT_PROMPT as DETECT_SYSTEM_PROMPT,
+  REVIEW_PROMPT as REVIEW_SYSTEM_PROMPT,
 } from '../../prompts/entity-merge-judge.js';
 import { ENTITY_TYPES } from '../domain/entity-extraction.js';
 import type { TypeCounts } from '../domain/entity-reconciliation.js';

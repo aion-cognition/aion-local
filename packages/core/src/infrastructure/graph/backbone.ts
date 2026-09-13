@@ -85,6 +85,23 @@ export async function readSubstrateIdInTransaction(
 }
 
 /**
+ * The Member's id, undefined before the backbone exists.
+ *
+ * One substrate holds one member, so a writer that keys a node on who it is about reads this
+ * rather than folding on a name: a rename moves the label on the identity and must not mint a
+ * second node for the same person.
+ */
+export async function readMemberId(driver: Driver): Promise<string | undefined> {
+  const rows = await runRead(
+    driver,
+    `MATCH (n:Member) RETURN n.id AS id ORDER BY n.${BITEMPORAL_PROPERTIES.txFrom}, n.id LIMIT 1`,
+    {},
+    (row) => row.id as string,
+  );
+  return rows[0];
+}
+
+/**
  * The stored Member's display name, undefined before the backbone exists. `bootstrapBackbone`
  * merges the name it is given on every call, so a process that did not create the backbone
  * (the long-lived MCP service, which never prompts) reads the name back and passes it in

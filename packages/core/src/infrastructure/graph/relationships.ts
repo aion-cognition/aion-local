@@ -13,6 +13,10 @@ export const UNDIRECTED_RELATIONSHIP_TYPES = [
   // Undirected because tension is mutual: two entities or claims in tension state the
   // same claim whichever end it is written from.
   'CONTRADICTS',
+  // Two readings the same evidence supports, neither of them the other's correction. It is
+  // undirected because the pair is symmetric: whichever was drawn first, both stand, and a
+  // reader arriving at either end wants the other.
+  'ALTERNATIVE_TO',
 ] as const;
 
 export const DIRECTED_RELATIONSHIP_TYPES = [
@@ -57,6 +61,9 @@ export const SUPERSEDES_TYPE = 'SUPERSEDES';
 
 /** The disagreement the relationship stage records between two claims, short of a close. */
 export const CONTRADICTION_TYPE = 'CONTRADICTS';
+
+/** The edge between two conclusions the same premises support. Neither closes the other. */
+export const ALTERNATIVE_TYPE: RelationshipType = 'ALTERNATIVE_TO';
 
 export function isRelationshipType(value: string): value is RelationshipType {
   return (RELATIONSHIP_TYPES as readonly string[]).includes(value);

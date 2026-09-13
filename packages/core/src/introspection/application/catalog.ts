@@ -36,6 +36,7 @@ import { structuralDiscoveryOperation } from './operations/structural-discovery.
 import { symbiosisBridgeOperation } from './operations/symbiosis-bridge.js';
 import { vectorBackfillOperation } from './operations/vector-backfill.js';
 import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-operations.js';
+import type { ReinforcementDrain } from '../../plasticity/application/drain.js';
 
 /**
  * The registration seam: the one list the service hands the engine. An operation joins
@@ -93,7 +94,15 @@ import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-
  * step further: what it would be scored on lowering is the resident population, and an operation
  * rewarded for removing more of that is the last incentive a destructive pass should carry.
  */
-export function introspectionOperations(config: Config): readonly IntrospectionOperation[] {
+export function introspectionOperations(
+  config: Config,
+  /**
+   * The process's reinforcement drain, where one is installed. The flush operation delegates to
+   * it rather than drawing its own batches, so the service's cadence and a manual maintenance
+   * run cannot consume the same rows. Absent, the operation builds an owner for its own call.
+   */
+  reinforcement?: ReinforcementDrain,
+): readonly IntrospectionOperation[] {
   return [
     // Substrate hygiene. Each of these answers a gap `aion doctor` could already name and
     // nothing could close: a node with no vector is invisible to search, an episode with no
@@ -111,7 +120,7 @@ export function introspectionOperations(config: Config): readonly IntrospectionO
     // Plasticity: the two bounded weight operations, on the loop's clock rather than a
     // caller's, then the sweep that closes what decay's own floor clamp leaves traversable
     // in name only.
-    reinforcementFlushOperation(),
+    reinforcementFlushOperation(reinforcement),
     memoryDecayOperation(),
     edgePruneOperation(),
     identifierDecayOperation(),

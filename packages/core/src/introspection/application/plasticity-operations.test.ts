@@ -9,7 +9,6 @@ import {
   MEMORY_DECAY_OPERATION,
   REINFORCEMENT_FLUSH_OPERATION,
   decayScanQuota,
-  drainReinforcementQueue,
   memoryDecayOperation,
   memoryDecayRelevance,
   reinforcementFlushOperation,
@@ -19,7 +18,6 @@ import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import { refusingProvider } from '../../infrastructure/providers/test-support/refusing-provider.fixture.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import type { HebbianFlushReport } from '../../plasticity/application/flush.js';
 import { decide, DEPRIORITIZED_WEIGHT, type DecisionInput } from '../domain/decide.js';
 import {
   NEUTRAL_GRAPH_HEALTH,
@@ -28,22 +26,6 @@ import {
 } from '../domain/health.js';
 import type { OperationContext } from '../domain/operation.js';
 import { healthFixture } from '../domain/test-support/health.fixture.js';
-
-const EMPTY_BATCH: HebbianFlushReport = {
-  signalsClaimed: 0,
-  pairsApplied: 0,
-  edgesUpdated: 0,
-  signalsDeleted: 0,
-};
-
-function batchOf(signalsClaimed: number): HebbianFlushReport {
-  return {
-    signalsClaimed,
-    pairsApplied: signalsClaimed,
-    edgesUpdated: signalsClaimed,
-    signalsDeleted: signalsClaimed,
-  };
-}
 
 /**
  * Both operations' relevance functions, and the decisions they drive, exercised without a
@@ -387,103 +369,5 @@ describe('the kill switches', () => {
       itemsAffected: 0,
       detail: 'decay disabled by AION_MAINTENANCE_MEMORY_DECAY; no edges scanned',
     });
-  });
-});
-
-describe('drainReinforcementQueue', () => {
-  it('calls once and stops on an empty queue', async () => {
-    let calls = 0;
-    const report = await drainReinforcementQueue(
-      async () => {
-        calls += 1;
-        return EMPTY_BATCH;
-      },
-      DEFAULT_HEBBIAN_FLUSH_CEILING,
-      new AbortController().signal,
-    );
-    expect(calls).toBe(1);
-    expect(report).toMatchObject({
-      signalsClaimed: 0,
-      batches: 1,
-      ceilingHit: false,
-      aborted: false,
-    });
-  });
-
-  it('keeps draining full batches until the queue empties, below the ceiling', async () => {
-    const queue = [100, 100, 40, 0];
-    let index = 0;
-    const report = await drainReinforcementQueue(
-      async () => batchOf(queue[index++] ?? 0),
-      1_000,
-      new AbortController().signal,
-    );
-    expect(index).toBe(4);
-    expect(report).toMatchObject({
-      signalsClaimed: 240,
-      batches: 4,
-      ceilingHit: false,
-      aborted: false,
-    });
-  });
-
-  it('stops at the ceiling with signals still queued, rather than draining forever', async () => {
-    let calls = 0;
-    const report = await drainReinforcementQueue(
-      async () => {
-        calls += 1;
-        return batchOf(100);
-      },
-      250,
-      new AbortController().signal,
-    );
-    // 100, 200, 300: the third call is what crosses 250, and the loop takes the whole burst
-    // rather than splitting it, the same rounding one batch already does.
-    expect(calls).toBe(3);
-    expect(report).toMatchObject({
-      signalsClaimed: 300,
-      batches: 3,
-      ceilingHit: true,
-      aborted: false,
-    });
-  });
-
-  it('stops mid-drain once the signal aborts, keeping what it already claimed', async () => {
-    const controller = new AbortController();
-    let calls = 0;
-    const report = await drainReinforcementQueue(
-      async () => {
-        calls += 1;
-        if (calls === 2) {
-          controller.abort();
-        }
-        return batchOf(100);
-      },
-      DEFAULT_HEBBIAN_FLUSH_CEILING,
-      controller.signal,
-    );
-    expect(calls).toBe(2);
-    expect(report).toMatchObject({
-      signalsClaimed: 200,
-      batches: 2,
-      ceilingHit: false,
-      aborted: true,
-    });
-  });
-
-  it('never calls the batch function at all when the signal starts already aborted', async () => {
-    const controller = new AbortController();
-    controller.abort();
-    let calls = 0;
-    const report = await drainReinforcementQueue(
-      async () => {
-        calls += 1;
-        return batchOf(100);
-      },
-      DEFAULT_HEBBIAN_FLUSH_CEILING,
-      controller.signal,
-    );
-    expect(calls).toBe(0);
-    expect(report).toMatchObject({ signalsClaimed: 0, batches: 0, aborted: true });
   });
 });

@@ -1,15 +1,20 @@
 import { sweepEdgeDecay } from '../../plasticity/application/decay.js';
 import {
-  flushReinforcementQueue,
-  type HebbianFlushReport,
-} from '../../plasticity/application/flush.js';
+  reinforcementDrain,
+  type ReinforcementDrain,
+  type ReinforcementDrainReport,
+} from '../../plasticity/application/drain.js';
 import type { HealthSnapshot } from '../domain/health.js';
 import type { IntrospectionOperation, OperationOutcome } from '../domain/operation.js';
 
 /**
- * Adapts the existing reinforcement flush and decay sweep to the operation contract. The flush
- * side adds one behaviour beyond relevance and outcome shape: a bounded per-run drain loop,
- * since arrival on a heavy day outruns what a single claimed batch can clear.
+ * Adapts the reinforcement drain and the decay sweep to the operation contract.
+ *
+ * The flush side owns no draining of its own. Ordinary reinforcement runs on its own cadence
+ * (`plasticity/application/drain.ts`), and this operation delegates to the same owner, so a
+ * manual `aion maintain` and the service's timer cannot read the same oldest bursts and apply
+ * one window twice. Where no owner is installed, which is a caller running the operation
+ * outside the service, it builds one for the call.
  *
  * Each carries the kill switch every other weight operation carries. Off, the run is a noop:
  * reinforcement rows wait in the queue for a deployment that turns it back on, and stale edges
@@ -100,59 +105,7 @@ export function decayScanQuota(decayableEdges: number, fraction: number): number
   return Math.max(1, Math.ceil(decayableEdges * fraction));
 }
 
-export type ReinforcementDrainReport = HebbianFlushReport & {
-  /** Batches the loop actually called `flushReinforcementQueue` for. */
-  readonly batches: number;
-  /** True when the ceiling stopped the loop with signals still queued, rather than an empty queue. */
-  readonly ceilingHit: boolean;
-  /** True when the shutdown signal stopped the loop before the queue emptied or the ceiling was hit. */
-  readonly aborted: boolean;
-};
-
-/**
- * Drains batches until the queue reports empty, the run ceiling is reached, or the signal
- * aborts, whichever comes first. One call can carry the total past the ceiling by up to the
- * size of the last burst it claimed, the same rounding `claimReinforcementSignals` already
- * does inside one batch, extended to the run as a whole.
- *
- * `drainOneBatch` is injected so the loop's own stopping conditions are unit-testable against
- * canned reports, with no queue, database, or graph behind it.
- */
-export async function drainReinforcementQueue(
-  drainOneBatch: () => Promise<HebbianFlushReport>,
-  ceiling: number,
-  signal: AbortSignal,
-): Promise<ReinforcementDrainReport> {
-  let signalsClaimed = 0;
-  let pairsApplied = 0;
-  let edgesUpdated = 0;
-  let signalsDeleted = 0;
-  let batches = 0;
-
-  while (signalsClaimed < ceiling && !signal.aborted) {
-    const report = await drainOneBatch();
-    batches += 1;
-    signalsClaimed += report.signalsClaimed;
-    pairsApplied += report.pairsApplied;
-    edgesUpdated += report.edgesUpdated;
-    signalsDeleted += report.signalsDeleted;
-    if (report.signalsClaimed === 0) {
-      break;
-    }
-  }
-
-  return {
-    signalsClaimed,
-    pairsApplied,
-    edgesUpdated,
-    signalsDeleted,
-    batches,
-    ceilingHit: signalsClaimed >= ceiling,
-    aborted: signal.aborted,
-  };
-}
-
-export function reinforcementFlushOperation(): IntrospectionOperation {
+export function reinforcementFlushOperation(owner?: ReinforcementDrain): IntrospectionOperation {
   return {
     name: REINFORCEMENT_FLUSH_OPERATION,
     bucket: 'quarter-hour',
@@ -169,20 +122,27 @@ export function reinforcementFlushOperation(): IntrospectionOperation {
             'reinforcement disabled by AION_MAINTENANCE_REINFORCEMENT_FLUSH; the queue is left as is',
         };
       }
-      const report = await drainReinforcementQueue(
-        () =>
-          flushReinforcementQueue(
-            { driver: ctx.driver, db: ctx.db, logger: ctx.logger },
-            {
-              batchSize: ctx.config.hebbian.batchSize,
-              learningRate: ctx.config.hebbian.learningRate,
-              weightFloor: ctx.config.hebbian.weightFloor,
-              now: ctx.now,
-            },
-          ),
-        ctx.config.hebbian.flushCeiling,
-        ctx.signal,
-      );
+      const drain =
+        owner ??
+        reinforcementDrain(
+          { driver: ctx.driver, db: ctx.db, logger: ctx.logger },
+          {
+            batchSize: ctx.config.hebbian.batchSize,
+            learningRate: ctx.config.hebbian.learningRate,
+            weightFloor: ctx.config.hebbian.weightFloor,
+            ceiling: ctx.config.hebbian.flushCeiling,
+            now: () => ctx.now,
+          },
+        );
+      const report: ReinforcementDrainReport = await drain.drainOnce(ctx.signal);
+      if (report.deferred) {
+        return {
+          status: 'noop',
+          itemsProcessed: 0,
+          itemsAffected: 0,
+          detail: 'the reinforcement drain was already running; this run consumed nothing',
+        };
+      }
       const stop = report.aborted ? ', stopped by shutdown' : '';
       return {
         status: report.signalsClaimed === 0 ? 'noop' : 'applied',

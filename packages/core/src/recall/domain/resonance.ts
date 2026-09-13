@@ -97,6 +97,10 @@ export function resonantItem(candidate: SeedCandidate, similarity: number): Fuse
       ? {}
       : { sourceEpisodeId: candidate.sourceEpisodeId }),
     ...(candidate.why === undefined ? {} : { why: candidate.why }),
+    // The condition a preference holds under and the standing of a conclusion are part of the
+    // statement, not of the leg that found it. A resonant hit is still the same reading.
+    ...(candidate.context === undefined ? {} : { context: candidate.context }),
+    ...(candidate.contested === undefined ? {} : { contested: candidate.contested }),
     currency: candidate.currency,
     ...(candidate.supersededBy === undefined ? {} : { supersededBy: candidate.supersededBy }),
     rationale: { method: 'resonance', score: similarity, path: RESONANCE_PATH },

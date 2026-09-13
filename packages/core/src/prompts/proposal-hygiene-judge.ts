@@ -9,5 +9,4 @@ const HYGIENE = [
   'Answer with the verdict and one sentence of reason.',
 ].join(' ');
 
-export const LOCAL = HYGIENE;
-export const KEYED = HYGIENE;
+export const HYGIENE_PROMPT = HYGIENE;

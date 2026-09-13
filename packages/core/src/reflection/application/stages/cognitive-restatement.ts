@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema } from '../../../infrastructure/providers/types.js';
-import { LOCAL as RESTATEMENT_SYSTEM_PROMPT } from '../../../prompts/cognitive-restatement.js';
+import { RESTATEMENT_PROMPT as RESTATEMENT_SYSTEM_PROMPT } from '../../../prompts/cognitive-restatement.js';
 import type { StageContext } from '../../domain/stage.js';
 
 /**

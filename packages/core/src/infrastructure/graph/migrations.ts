@@ -42,7 +42,7 @@ export type GraphSchemaContext = {
 };
 
 /** The version this build declares. It moves when the statements below change. */
-export const GRAPH_SCHEMA_VERSION = 7;
+export const GRAPH_SCHEMA_VERSION = 8;
 
 export function graphSchemaStatements(ctx: GraphSchemaContext): readonly string[] {
   return [
@@ -71,6 +71,11 @@ export function graphSchemaStatements(ctx: GraphSchemaContext): readonly string[
     'CREATE CONSTRAINT pattern_id_unique IF NOT EXISTS FOR (n:Pattern) REQUIRE n.id IS UNIQUE',
     'CREATE CONSTRAINT trend_id_unique IF NOT EXISTS FOR (n:Trend) REQUIRE n.id IS UNIQUE',
     'CREATE CONSTRAINT bridge_id_unique IF NOT EXISTS FOR (n:Bridge) REQUIRE n.id IS UNIQUE',
+    // The two inference kinds, keyed the same way. A synthesis id is folded from its premise set
+    // and its conclusion's normalized text, and a preference id from the member and its own, so
+    // both writes MERGE on an id a second pass reproduces and the rule is what makes that safe.
+    'CREATE CONSTRAINT synthesis_id_unique IF NOT EXISTS FOR (n:Synthesis) REQUIRE n.id IS UNIQUE',
+    'CREATE CONSTRAINT preference_id_unique IF NOT EXISTS FOR (n:Preference) REQUIRE n.id IS UNIQUE',
     // The uniqueness rule behind the publication guard, declared before any coordinator can use
     // one. Only the rule belongs here: the guard node itself is created under the substrate's
     // bootstrap marker, so a guard that goes missing afterwards is reported rather than silently
@@ -93,11 +98,13 @@ export function graphSchemaStatements(ctx: GraphSchemaContext): readonly string[
     // rows the composite seek returns.
     `CREATE RANGE INDEX claim_subject_aspect_idx IF NOT EXISTS FOR (n:${MEMORY_LABEL}) ON (n.${CLAIM_SUBJECT_PROPERTY}, n.${CLAIM_ASPECT_PROPERTY})`,
     // One fulltext index over every content-bearing label. `summary` covers `Narrative.summary`
-    // and `text` covers the cognitive types' text property. `Bridge` carries `Memory` and holds
-    // text and is still left out: a bridge's text is a sentence the introspection loop generated
-    // about two communities, so a keyword hit on it answers with the substrate's own connector
-    // rather than with anything a person said. Its content vector puts it in `content_vec_idx`,
-    // and spreading activation reaches it from either endpoint it joins.
+    // and `text` covers the cognitive types' text property. Three labels carry `Memory`, hold
+    // text and are still left out, for one reason: their text is a sentence the substrate wrote
+    // about other memories rather than anything a person said, so a keyword hit on it answers
+    // with the substrate's own reading instead of with the material. `Bridge` names two
+    // communities, `Synthesis` is a conclusion drawn across memories, and `Preference` is a
+    // description of how somebody works. All three sit in `content_vec_idx`, and activation
+    // reaches them from what they were drawn from.
     `CREATE FULLTEXT INDEX ${CONTENT_FULLTEXT_INDEX} IF NOT EXISTS FOR (n:Episode|Turn|Entity|Narrative|Goal|Plan|Decision|Insight|Concept|Context|Event|Pattern|Trend) ON EACH [n.${MEMORY_PROPERTIES.summary}, n.${MEMORY_PROPERTIES.text}, n.${ENTITY_NAME_PROPERTY}]`,
   ];
 }

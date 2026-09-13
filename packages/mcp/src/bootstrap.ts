@@ -11,6 +11,8 @@ import {
   IdleNarrativeSweeper,
   Introspector,
   introspectionOperations,
+  ReinforcementCadence,
+  reinforcementDrain,
   LaneAssigner,
   appliedGraphSchemaVersion,
   loadConfig,
@@ -123,6 +125,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
   let worker: ReflectionWorker | undefined;
   let idleNarratives: IdleNarrativeSweeper | undefined;
   let introspector: Introspector | undefined;
+  let reinforcement: ReinforcementCadence | undefined;
   let service: AionMcpService | undefined;
   let idleSessions: SessionIdleSweeper | undefined;
   let narratives: SessionNarrativeCloser | undefined;
@@ -134,6 +137,9 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
    */
   const teardown = async (): Promise<void> => {
     idleSessions?.stop();
+    if (reinforcement !== undefined) {
+      await reinforcement.stop();
+    }
     if (introspector !== undefined) {
       await introspector.stop();
     }
@@ -349,9 +355,31 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     idleNarratives.start();
     const sessionNarratives = narratives;
 
+    // Ordinary reinforcement, on its own bounded cadence rather than on the maintenance tick.
+    // The drain is the one consumer: the maintenance operation below is handed this same owner,
+    // so a manual `aion maintain` and this timer cannot read the same oldest bursts and apply
+    // one window twice. It stops ahead of the introspector for the reason the introspector stops
+    // ahead of the driver: a drain that has begun still holds a graph write.
+    const drain = reinforcementDrain(
+      { driver, db: store.db, logger },
+      {
+        batchSize: config.hebbian.batchSize,
+        learningRate: config.hebbian.learningRate,
+        weightFloor: config.hebbian.weightFloor,
+        ceiling: config.hebbian.flushCeiling,
+      },
+    );
+    reinforcement = new ReinforcementCadence(drain, {
+      intervalMs: config.hebbian.drainIntervalMs,
+      logger,
+    });
+    if (config.maintenance.reinforcementFlush) {
+      reinforcement.start();
+    }
+
     // The introspection loop. It stops in `close` below ahead of the driver, because a tick
     // that has begun can still hold a graph write. The catalog owns what may join it.
-    const maintenanceOperations = introspectionOperations(config);
+    const maintenanceOperations = introspectionOperations(config, drain);
     introspector = new Introspector(
       {
         driver,

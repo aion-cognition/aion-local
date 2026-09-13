@@ -12,8 +12,11 @@ import {
 import { withCurrency } from '../../../infrastructure/graph/read-modes.js';
 import { contentVectors } from '../../../infrastructure/graph/seed-queries.js';
 import { isLedgerApplied, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
-import { cliqueDiscount } from '../../../plasticity/domain/reinforcement.js';
-import { coOccurringPairs, coOccursLedgerKey } from '../../domain/associations.js';
+import {
+  coOccurrenceBirthStrength,
+  coOccurringPairs,
+  coOccursLedgerKey,
+} from '../../domain/associations.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
 
 /**
@@ -114,11 +117,11 @@ export class AssociationInferenceStage implements ReflectionStage {
    * double-observing the same episode. The key is marked only after the last pair lands, so
    * an interrupted loop stays retryable rather than half-recorded and closed.
    *
-   * What one pair of this episode is worth is the same clique discount the reinforcement
-   * queue applies to the same evidence, read from the same function so the two cannot drift:
-   * an episode's n entities split one node's worth of evidence across the n-1 partners it
-   * gave each of them, so a focused episode's single pair keeps its full signal and a
-   * twenty-entity episode's 190 pairs each carry a nineteenth of one.
+   * What one pair of this episode is worth is `coOccurrenceBirthStrength`: the episode's one
+   * observation divided by the pairs it spent it on, floored at the strength recall will still
+   * walk. A focused episode's single pair keeps the whole of it; a thirty-entity episode's 435
+   * pairs are each born at the floor, and repetition through the bounded step is what tells the
+   * pair that keeps recurring from the pair that was named once.
    */
   async #linkCoOccurrences(
     ctx: StageContext,
@@ -133,7 +136,7 @@ export class AssociationInferenceStage implements ReflectionStage {
     }
 
     const pairs = coOccurringPairs(entityIds);
-    const observationStrength = cliqueDiscount(entityIds.length);
+    const observationStrength = coOccurrenceBirthStrength(pairs.length, this.#options.weightFloor);
     let written = 0;
     try {
       for (const pair of pairs) {

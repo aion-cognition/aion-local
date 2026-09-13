@@ -14,5 +14,4 @@ const RESTATEMENT = [
   'list only when none of them are.',
 ].join(' ');
 
-export const LOCAL = RESTATEMENT;
-export const KEYED = RESTATEMENT;
+export const RESTATEMENT_PROMPT = RESTATEMENT;

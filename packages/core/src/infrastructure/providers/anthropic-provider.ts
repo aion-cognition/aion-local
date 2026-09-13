@@ -1,4 +1,3 @@
-import { systemField } from './anthropic-cache.js';
 import { AnthropicRequestError, AnthropicResponseError } from './anthropic-errors.js';
 import { parseJsonPayload } from './anthropic-json.js';
 import { thinkingConfig } from './anthropic-thinking.js';
@@ -6,6 +5,13 @@ import { readUsage } from './anthropic-usage.js';
 import { estimateApiCost } from './api-pricing.js';
 import { CircuitBreaker } from './circuit-breaker.js';
 import { abortRequested } from './deadline-signal.js';
+import {
+  composeSystemBlocks,
+  FRAME_CACHE_TTL,
+  marksACacheWrite,
+  type FrameOverride,
+  type SystemBlock,
+} from './request-blocks.js';
 import { boundedTokens, type SpendingGuard } from './spending.js';
 import type {
   ApiCall,
@@ -93,38 +99,33 @@ function closeNode(node: unknown): unknown {
   return closed;
 }
 
-function schemaInstruction(schema: JsonSchema): string {
-  return [
-    'Answer with one JSON value and nothing else: no prose, no explanation, no code fence.',
-    'The value must satisfy this JSON Schema:',
-    JSON.stringify(schema),
-  ].join('\n');
-}
-
-function joinInstructions(base: string | undefined, extra: string): string {
-  if (base === undefined) {
-    return extra;
-  }
-  return `${base}\n\n${extra}`;
-}
-
 /**
  * The Messages body a batched request carries as its `params`.
  *
- * It is the system_prompt delivery the synchronous route defaults to, through the same three
- * helpers, so a surface that moves onto the batch lane asks the model exactly what it asked
- * before. What it leaves out is what a batch has no use for: no cache marker, since a batch of
- * one request per entity shares no prefix inside the five-minute window, and no thinking budget,
- * since every surface that batches its work sets `think: false`.
+ * It is the same two-block composition the synchronous route sends, through the same builder, so
+ * a surface that moves onto the batch lane asks the model exactly what it asked before and
+ * carries the same frame ahead of the same breakpoint. Batch caching is best effort, and the
+ * frame is the one part of a batch of per-entity requests that every one of them shares, so the
+ * marker belongs here for the same reason it belongs on the synchronous route.
+ *
+ * The thinking budget stays out: every surface that batches its work sets `think: false`.
  */
-export function batchMessagesBody(req: StructuredRequest): Record<string, unknown> {
+export function batchMessagesBody(
+  req: StructuredRequest,
+  options: { readonly promptCache?: boolean; readonly frameOverride?: FrameOverride } = {},
+): Record<string, unknown> {
   const { system, rest } = splitSystem(req.messages);
-  const instructions = joinInstructions(system, schemaInstruction(req.schema));
   return {
     model: req.model,
     max_tokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
     ...(req.temperature === undefined ? {} : { temperature: req.temperature }),
-    system: instructions,
+    system: composeSystemBlocks({
+      surface: req.surface,
+      instructions: system,
+      schema: req.schema,
+      promptCache: options.promptCache !== false,
+      ...(options.frameOverride === undefined ? {} : { frameOverride: options.frameOverride }),
+    }),
     messages: rest,
   };
 }
@@ -140,6 +141,11 @@ export type AnthropicRequestOptions = {
    * surface (see `anthropic-cache.ts`).
    */
   readonly promptCache?: boolean;
+  /**
+   * The shared frame this route sends in place of each surface's allocation, for a harness
+   * comparing the same code with and without it. Absent, the allocation decides.
+   */
+  readonly frameOverride?: FrameOverride;
   /** Tokens a thinking call asks for. Clamped against the call's own `max_tokens` below. */
   readonly thinkingBudgetTokens?: number;
   readonly recordApiCall?: (call: ApiCall) => void;
@@ -193,10 +199,15 @@ async function askAnthropic(
   const started = now();
   const fetchImpl = options.fetchImpl ?? fetch;
   const { system, rest } = splitSystem(req.messages);
-  const instructions = viaPrompt ? joinInstructions(system, schemaInstruction(req.schema)) : system;
-  // In system_prompt mode the schema is part of the prefix, so it is stable per surface and
-  // volatile across surfaces. `anthropic-cache.ts` decides whether marking it does anything.
-  const cachedInstructions = systemField(instructions, options.promptCache !== false);
+  // One composition for both delivery modes: the frame is block one either way, and what changes
+  // is only whether the schema rides in block two or in `output_config` below.
+  const systemBlocks: readonly SystemBlock[] = composeSystemBlocks({
+    surface: req.surface,
+    instructions: system,
+    ...(viaPrompt ? { schema: req.schema } : {}),
+    promptCache: options.promptCache !== false,
+    ...(options.frameOverride === undefined ? {} : { frameOverride: options.frameOverride }),
+  });
 
   const maxTokens = req.maxTokens ?? options.maxTokens ?? DEFAULT_MAX_TOKENS;
   const thinking = thinkingConfig(req.think, maxTokens, options.thinkingBudgetTokens);
@@ -216,7 +227,7 @@ async function askAnthropic(
       : { temperature: req.temperature }),
     max_tokens: maxTokens,
     ...(thinking === undefined ? {} : { thinking }),
-    ...(cachedInstructions === undefined ? {} : { system: cachedInstructions }),
+    ...(systemBlocks.length === 0 ? {} : { system: systemBlocks }),
     ...(viaPrompt
       ? {}
       : {
@@ -236,8 +247,10 @@ async function askAnthropic(
     model: req.model,
     route: 'messages',
     ...boundedTokens(Buffer.byteLength(requestBody, 'utf8'), maxTokens),
-    // A marked prefix is the one shape whose input can bill at the cache-write rate.
-    cacheWrite: Array.isArray(cachedInstructions),
+    // A marked prefix is the one shape whose input can bill at the cache-write rate, and the
+    // frame is written for the hour, which is the more expensive of the two write rates.
+    cacheWrite: marksACacheWrite(systemBlocks),
+    cacheWriteTtl: FRAME_CACHE_TTL,
     now: new Date(started),
   });
   if (held !== undefined && 'refused' in held) {
@@ -374,6 +387,8 @@ export type AnthropicProviderOptions = {
   readonly maxTokens?: number;
   readonly schemaDelivery?: SchemaDelivery;
   readonly promptCache?: boolean;
+  /** The frame override, for the harness. See `AnthropicRequestOptions`. */
+  readonly frameOverride?: FrameOverride;
   readonly thinkingBudgetTokens?: number;
   readonly recordApiCall?: (call: ApiCall) => void;
   /** The day's spending backstop. Absent leaves this provider's calls unbounded. */
@@ -406,6 +421,7 @@ export class AnthropicProvider implements GenerationBackend {
       ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
       ...(options.schemaDelivery === undefined ? {} : { schemaDelivery: options.schemaDelivery }),
       ...(options.promptCache === undefined ? {} : { promptCache: options.promptCache }),
+      ...(options.frameOverride === undefined ? {} : { frameOverride: options.frameOverride }),
       ...(options.thinkingBudgetTokens === undefined
         ? {}
         : { thinkingBudgetTokens: options.thinkingBudgetTokens }),

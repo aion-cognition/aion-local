@@ -3,7 +3,10 @@ import type { ApiCall, ApiPricingTier } from './types.js';
 type TokenPrices = {
   readonly input: number;
   readonly output: number;
+  /** Writing an entry that lives five minutes: 1.25x ordinary input. */
   readonly cacheCreation: number;
+  /** Writing an entry that lives an hour: 2x ordinary input. */
+  readonly cacheCreation1h: number;
   readonly cacheRead: number;
 };
 
@@ -24,8 +27,17 @@ function multiplierFor(tier: ApiPricingTier | undefined): number {
 }
 
 // USD per million tokens, verified 2026-09-06 against
-// https://platform.claude.com/docs/en/about-claude/pricing. Cache writes use the 5-minute TTL.
-const HAIKU_45_PRICES: TokenPrices = { input: 1, output: 5, cacheCreation: 1.25, cacheRead: 0.1 };
+// https://platform.claude.com/docs/en/about-claude/pricing, and the hour-long write rate re-read
+// there 2026-09-13. The two write classes are priced apart because the API bills them apart: an
+// entry that lives five minutes costs 1.25x ordinary input to write and one that lives an hour
+// costs 2x, and a single aggregate cache-creation count cannot price a request that wrote both.
+const HAIKU_45_PRICES: TokenPrices = {
+  input: 1,
+  output: 5,
+  cacheCreation: 1.25,
+  cacheCreation1h: 2,
+  cacheRead: 0.1,
+};
 const API_PRICES: ReadonlyMap<string, TokenPrices> = new Map([
   ['claude-haiku-4-5', HAIKU_45_PRICES],
   ['claude-haiku-4-5-20251001', HAIKU_45_PRICES],
@@ -44,6 +56,7 @@ const UNLISTED_MODEL_PRICES: TokenPrices = {
   input: 10,
   output: 50,
   cacheCreation: 12.5,
+  cacheCreation1h: 20,
   cacheRead: 1,
 };
 
@@ -53,7 +66,7 @@ export function estimateApiCost(
     ApiCall,
     'model' | 'inputTokens' | 'outputTokens' | 'cacheCreationTokens' | 'cacheReadTokens'
   > &
-    Partial<Pick<ApiCall, 'pricingTier'>>,
+    Partial<Pick<ApiCall, 'pricingTier' | 'cacheCreation5mTokens' | 'cacheCreation1hTokens'>>,
 ): number | undefined {
   const price = API_PRICES.get(call.model);
   if (price === undefined) {
@@ -63,10 +76,38 @@ export function estimateApiCost(
     (multiplierFor(call.pricingTier) *
       (call.inputTokens * price.input +
         call.outputTokens * price.output +
-        call.cacheCreationTokens * price.cacheCreation +
+        cacheCreationCost(call, price) +
         call.cacheReadTokens * price.cacheRead)) /
     1_000_000
   );
+}
+
+/**
+ * What the write half cost, for one response or for a day's worth of them summed.
+ *
+ * The response reports the split when it wrote anything, and the split is what prices it: an
+ * hour-long entry costs 2x ordinary input against a five-minute entry's 1.25x, so charging the
+ * aggregate at one rate is wrong by 60% on a request that wrote for the hour. A response whose
+ * usage block carried no breakdown falls back to the aggregate at the five-minute rate, which is
+ * what every request written before the split existed was, and what a request without a marked
+ * hour-long prefix still is.
+ *
+ * A summed group can hold both kinds at once, and the part the two shares do not cover is
+ * exactly the calls that reported nothing. It prices at the same five-minute fallback, so a
+ * group mixing reported and unreported writes costs what its rows cost one at a time.
+ */
+function cacheCreationCost(
+  call: Pick<ApiCall, 'cacheCreationTokens'> &
+    Partial<Pick<ApiCall, 'cacheCreation5mTokens' | 'cacheCreation1hTokens'>>,
+  price: TokenPrices,
+): number {
+  const hour = call.cacheCreation1hTokens;
+  const minutes = call.cacheCreation5mTokens;
+  if (hour === undefined && minutes === undefined) {
+    return call.cacheCreationTokens * price.cacheCreation;
+  }
+  const unreported = Math.max(0, call.cacheCreationTokens - (minutes ?? 0) - (hour ?? 0));
+  return ((minutes ?? 0) + unreported) * price.cacheCreation + (hour ?? 0) * price.cacheCreation1h;
 }
 
 export type ApiCostBound = {
@@ -80,6 +121,12 @@ export type ApiCostBound = {
    * there would hold dollars no request of that shape can spend.
    */
   readonly cacheWrite: boolean;
+  /**
+   * Which write rate the marked prefix would bill at. The hour-long class is the more expensive
+   * of the two, so a bound that priced every marked request at the five-minute rate would wave
+   * an hour-long write past a ceiling it cannot actually afford.
+   */
+  readonly cacheWriteTtl?: '5m' | '1h';
 };
 
 /**
@@ -100,7 +147,8 @@ export function boundApiCost(bound: ApiCostBound): {
 } {
   const price = API_PRICES.get(bound.model);
   const card = price ?? UNLISTED_MODEL_PRICES;
-  const inputRate = bound.cacheWrite ? card.cacheCreation : card.input;
+  const writeRate = bound.cacheWriteTtl === '1h' ? card.cacheCreation1h : card.cacheCreation;
+  const inputRate = bound.cacheWrite ? writeRate : card.input;
   return {
     maxUsd:
       (multiplierFor(bound.pricingTier) *

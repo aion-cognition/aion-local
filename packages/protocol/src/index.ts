@@ -6,3 +6,4 @@ export * from './recall-result.js';
 export * from './reflection-input.js';
 export * from './reflection-output.js';
 export * from './source-search.js';
+export * from './standing.js';

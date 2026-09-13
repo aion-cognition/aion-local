@@ -35,9 +35,10 @@ export type BucketCaps = Readonly<Record<PackBucket, number>>;
  * connects, which is a fact about the substrate, and it carries a summary and a content vector
  * of its own, so the vector leg returns it.
  *
- * Preferences still have no producer, since preference extraction is unbuilt, so that bucket is
- * structurally absent from a pack rather than empty. A label with no bucket cannot be packed and
- * its item is dropped.
+ * A Preference answers in the bucket named after it, and it is the only label that does. The
+ * bucket is what a reader scans for how somebody likes to work; the item's `inferred preference`
+ * standing is what stops it reading as something the member stated in those words. A label with
+ * no bucket cannot be packed and its item is dropped.
  *
  * The resonant and intentions buckets are not in this table and never will be. Every other
  * bucket answers "what kind of memory is this", which a label decides; those two answer "how was
@@ -62,6 +63,10 @@ const BUCKET_BY_LABEL: Readonly<Record<string, PackBucket>> = {
   Event: 'facts',
   Pattern: 'facts',
   Trend: 'facts',
+  // A drawn conclusion is what the substrate knows, so it answers where a reader looks for what
+  // is known. Its standing is what says nobody stated it: `concluded`, printed on the item.
+  Synthesis: 'facts',
+  Preference: 'preferences',
 };
 
 export const BUCKET_HEADINGS: Readonly<Record<PackBucket, string>> = {

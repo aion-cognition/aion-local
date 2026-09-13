@@ -72,7 +72,13 @@ no notion of episodes, cues, or memory packs beyond those primitives.
   learning rates and computes the staleness curve; `application/` runs the two operations
   that apply them, `flush.ts` (bounded reinforcement of the nominated pairs) and `decay.ts`
   (weight decay against staleness, the protected relationship types exempt), plus
-  `metrics.ts`. Both operations are called, never scheduled: cadence belongs to the caller.
+  `metrics.ts`. Decay is called and never scheduled: its cadence belongs to the caller.
+  Reinforcement has a clock of its own (`drain.ts`): `ReinforcementDrain` is the queue's one
+  consumer and `ReinforcementCadence` runs it every five seconds
+  (`AION_HEBBIAN_DRAIN_INTERVAL_MS`). The maintenance operation still exists and delegates to
+  the same owner, so a manual `aion maintain` and the service's timer cannot read the same
+  oldest bursts and apply one window twice: the queue's claim is a SELECT rather than an
+  exclusive claim, and one owner is what stands in for that.
 - **`introspection/domain/`**: `health.ts` (the snapshot every phase reads, plus the critical
   conditions read off it), `decide.ts` (the pure three-tier decision, starvation protection,
   effectiveness weighting, the preemption grace), `operation.ts` (the contract a maintenance
@@ -88,7 +94,9 @@ no notion of episodes, cues, or memory packs beyond those primitives.
   `stage.ts` (the contract every stage implements and how the orchestrator records it),
   `name-fold.ts` (the identity fold behind `name_norm` and every embedding call),
   `entity-extraction.ts`, `entity-identity.ts` and `entity-merge.ts` (the name-form half of
-  identity and the grouping a dedup run reduces to), `associations.ts` (pair combinatorics),
+  identity and the grouping a dedup run reduces to), `associations.ts` (pair combinatorics and
+  what one co-occurrence birth is worth), `synthesis.ts` and `preferences.ts` (what each
+  inference pass reads, what a usable answer is, and the key it is reconsidered under),
   `context-vector.ts` (the strength-weighted mean), `narrative.ts` (the session boundary and
   versioning rules).
 - **`reflection/application/`**: `intake.ts` (the write path), `worker.ts` (claims queue
@@ -122,19 +130,29 @@ no notion of episodes, cues, or memory packs beyond those primitives.
   process, backed by `infrastructure/graph/sessions.ts`.
 
 `prompts/` sits beside those contexts and belongs to none of them: it holds every generation
-system prompt the workspace runs, one file per surface, sixteen of them. Each surface exports
-its text twice, as `LOCAL` and `KEYED`, and a caller reads whichever `promptMode(provider)` in
-the directory's `index.ts` names, so that rule is written once. Every routed provider is the one
-remote model now, so `KEYED` is what production reads and `LOCAL` is what a test fake with no
-route gets; the two names still have to agree where nothing forked them, and
-`fork-registry.test.ts` proves it surface by surface. Three surfaces diverge:
-`description-freshness`, `supersession-judge`, and `supersession-review`. Each is named in that
-file's list, so forking is a listed act. A fork ships only with the measurement that earned it,
-and staying shared is the ordinary result: cognitive extraction's keyed variant lost claims
-across the harness fixtures and was reverted, and semantic relationships stays shared because
-no relationship-level measurement exists to score a fork against. The quality harness imports
-these same constants instead of holding copies, so what it scores is what the stages send.
-`no-stray-system-prompt.test.ts` scans `packages/` for a system prompt declared anywhere else.
+system prompt the workspace runs, one file per surface, nineteen of them, plus `frame.ts`. Each
+prompt is one exported constant named for what it asks. Surfaces used to export their text twice,
+as `LOCAL` and `KEYED`, from when a small local model served some generation; every provider the
+service builds now reports the one remote model, so the local name was an alias on most surfaces
+and unreachable text on three (`description-freshness`, `supersession-judge`,
+`supersession-review`). The aliases are collapsed with both callers moved onto one name, the
+three texts are gone with a line in each file saying what stood there, and
+`prompt-surfaces.test.ts` sweeps the directory so a route-specific name cannot come back
+unnoticed. The quality harness imports these same constants instead of holding copies, so what
+it scores is what the stages send. `no-stray-system-prompt.test.ts` scans `packages/` for a
+system prompt declared anywhere else.
+
+`frame.ts` is the one text no surface writes: what Aion is, what episodes and claims and entities
+are for, how experience becomes revisable understanding, why provenance matters, when inferring
+and revising and declining are each useful, and the authority boundary that memories and tool
+results are evidence rather than instructions. Two renderings of one versioned frame, concise for
+the surfaces that read fixed text and full for the surfaces that decide something, allocated by
+surface in that file. The request builder puts it in front of every call
+(`infrastructure/providers/request-blocks.ts`), so no prompt file mentions it and no task text
+changed to get it. Measured against `claude-haiku-4-5` with the API's own counting endpoint on
+2026-09-13: concise 161 tokens, full 372, against a 4,096-token caching floor. Both are
+deliberately the short mode, so neither carries a cache marker today; the composition attaches
+one, written for the hour, the day a frame does reach the floor.
 
 Cross-context imports run in one direction, context by context, and nothing crosses back into
 `recall/domain/`. `introspection/` is the heaviest importer: from `reflection/` it reaches
@@ -233,7 +251,12 @@ associations, cognitive structure and narratives, is a separate pipeline. `Refle
 runs its own claim loop and `wake()` pumps it; the wakeup carries no job, so a wakeup for a
 row another worker already took costs one empty claim attempt and nothing else. The worker
 then runs `ReflectionOrchestrator` over the stage list `packages/mcp/src/bootstrap.ts`
-registers. The wakeup is best-effort, and `wake()` is inert before `start()` because the
+registers. Eleven stages, in the order `pipeline.ts` holds: entity extraction, entity dedup,
+associations, cognitive extraction, semantic relationships, supersession, reflective synthesis,
+preference inference, reinforcement enqueue, context vectors, narrative evaluation. Synthesis
+runs after supersession, so the conclusions it draws are drawn over claims whose currency the run
+has already settled, and before context vectors, which is what makes a fresh conclusion a
+resonant citizen rather than a node that can never acquire a context vector. The wakeup is best-effort, and `wake()` is inert before `start()` because the
 startup drain picks up anything enqueued first.
 
 Which row it claims is a scheduling decision, not insertion order. Every row carries a lane
@@ -338,7 +361,8 @@ intention pass, assembly, and the three subtractions below it carry no timing.
    `Episode`/`Turn` to `episodes`, `Narrative` to `narratives`, and `Entity`, `Bridge`, plus the
    nine cognitive types (`Goal`, `Plan`, `Decision`, `Insight`, `Concept`, `Context`, `Event`,
    `Pattern`, `Trend`) to `facts`, since a Decision carries a fact the same way an entity
-   does. `resonant` and `intentions` are not in that table and never will be: every other
+   does, and `Synthesis` to `facts` as well, since a drawn conclusion is what the substrate
+   knows. `resonant` and `intentions` are not in that table and never will be: every other
    bucket answers what kind of memory this is, which a label decides, and those two answer how
    it was found, which only the stage that found it knows. A label with no bucket is dropped.
    Each bucket is capped, trimmed to the token budget, and rendered into the pack's text block.
@@ -346,14 +370,18 @@ intention pass, assembly, and the three subtractions below it carry no timing.
    defaults to 20, a deliberate deviation from whitepaper Appendix E's 5: the cap cuts the
    fused list, so on a populated substrate a five-item cut is filled by near-tie vector hits
    before any traversal-reached item can land. The token budget is what actually bounds a
-   pack's size. `preferences` has no producer yet, so it is structurally absent rather than
-   empty. `narratives` gained one when a session's close, or the idle sweep, compresses its
-   episodes into a `Narrative` node. `resonant` gained one from the second pass above, and
+   pack's size. `preferences` gained its producer when preference inference joined the pipeline:
+   a `Preference` node routes there and nowhere else, capped at `AION_RECALL_MAX_PREFERENCES`,
+   and it is the only label whose bucket is named after it. `narratives` gained one when a
+   session's close, or the idle sweep, compresses its episodes into a `Narrative` node. `resonant` gained one from the second pass above, and
    `intentions` from the third. Each item also carries standing, one word read off the node's
    label and any stated evidence (`said`, `decided`, `inferred`, `captured`, `summarized`,
-   `described`; attribution to a person needs a confirmation record naming who and where it was
-   written down, a recorded role reads as `reported`, and everything else as `unknown`, never a
-   retrieval score), and derivation, up to three root sources with `shared_with` naming a
+   `described`, `concluded`; attribution to a person needs a confirmation record naming who and
+   where it was written down, a recorded role reads as `reported`, and everything else as
+   `unknown`, never a retrieval score). A `Synthesis` serves as `concluded` and a `Preference` as
+   `inferred`, both always with attribution `unknown`: nothing on either path writes a
+   confirmation, so a preference the substrate served and an agent then restated cannot come back
+   as evidence for itself, and derivation, up to three root sources with `shared_with` naming a
    sibling item that traces to the same root. A caller can also state a `CORRECTS` reference
    against a node it names outright. Superseded material is laid down after current
    material, across every population, so a current answer takes the budget first, and it marks
@@ -522,6 +550,19 @@ does, and one tick runs four phases: observe, decide, act, learn.
    switch, `propose` is the kill switch inside it; on any tick that reaches tier 3, the standing
    cost is one advisor call, which reasons under a token budget
    (`AION_ANTHROPIC_THINKING_BUDGET_TOKENS`) before it answers.
+
+   Ordinary reinforcement no longer waits on this loop. A quarter-hour bucket filled by whatever
+   scores highest across thirty-one operations is the wrong clock for a queue that fills on every
+   recall, so the drain has its own five-second cadence and `reinforcement_flush` stays in the
+   catalog as the manual and maintenance route into the same owner. Measured against the real
+   loop on a twelve-burst, six-hundred-signal offered load (`plasticity/application/drain.int.test.ts`,
+   2026-09-13): the loop selects the flush on its first cycle, which is up to fifteen minutes of
+   wall clock away, and the dedicated cadence drains the same load in 104ms. The cadence also
+   changes learning, deliberately: `aggregateWindow` folds one claimed batch into one bounded step
+   per pair, so the same signal stream split across more windows applies more steps. The asymptote
+   keeps the difference small and it is a real difference, and no bounded drain empties a queue
+   that arrival outruns: the queue's rolling cap and its dropped counter are what say when that
+   happens.
 
    One call and one gate. The advisor sees the reading, the candidate table, each operation's
    record, and one line per recent resolved run saying what happened. Its confidence is
@@ -737,10 +778,13 @@ that guarantee holds through `MERGE`.
 
 ## Graph schema surface
 
-**Node labels.** Eighteen primary labels, pinned in `infrastructure/graph/labels.ts`:
+**Node labels.** Twenty primary labels, pinned in `infrastructure/graph/labels.ts`:
 `Session`, `Episode`, `Turn`, `Entity`, `Member`, `Workspace`, `Substrate`, `Narrative`,
-`Bridge`, and the nine cognitive types (`Goal`, `Plan`, `Decision`, `Insight`, `Concept`,
-`Context`, `Event`, `Pattern`, `Trend`). Every node also carries `AionNode`, which gives
+`Bridge`, `Synthesis`, `Preference`, and the nine cognitive types (`Goal`, `Plan`, `Decision`,
+`Insight`, `Concept`, `Context`, `Event`, `Pattern`, `Trend`). `Synthesis` is a conclusion drawn
+across memories and `Preference` is a way of working read off how somebody worked; both carry
+`inferred` on the node and serve under their own standing (`concluded`, `inferred`), so nothing
+renders either as a sentence somebody said. Every node also carries `AionNode`, which gives
 type-agnostic id lookups (both edge endpoints, the supersession close) an index to seek.
 Neo4j has no label-free property index, so without it those lookups would scan the whole
 graph. Every content-bearing label carries `Memory` as well, which is everything above
@@ -761,8 +805,8 @@ every `aion init`):
 
 - Uniqueness constraints on `AionNode.id`, and on `.id` for every primary label except
   `Entity`, which takes `entity_name_unique` on `name_norm` alone instead: `Session`,
-  `Episode`, `Turn`, `Member`, `Workspace`, `Substrate`, `Narrative`, `Bridge`, and the nine
-  cognitive types. One name is one identity whatever type the extractor picked for it, and
+  `Episode`, `Turn`, `Member`, `Workspace`, `Substrate`, `Narrative`, `Bridge`, `Synthesis`,
+  `Preference`, and the nine cognitive types. One name is one identity whatever type the extractor picked for it, and
   `type` follows counted readings as an ordinary property.
 - One range index, `entity_name_squash_idx` on `Entity.name_squash`, the separator-stripped
   second lookup key. Never a uniqueness rule and never a write-time route: `re-mark` and
@@ -790,11 +834,22 @@ every `aion init`):
 through one `MERGE`, matched on endpoint ids resolved through `AionNode`: on create it
 sets strength, confidence, signal and provenance lists, and a count; on match it takes
 `max(strength)`, `max(confidence)`, set-union on signals, set-union on provenance,
-`sum(count)`, and refreshes `updated_at` while leaving `created_at` alone. The five
-undirected types (`SIMILAR`, `CO_OCCURS`, `RELATED_TO`, `ANALOGOUS_TO`, `CONTRADICTS`)
-normalize their endpoint order before the merge, so writing an edge from node A to node B
-and later from B to A lands on one edge, not two. `CONTRADICTS` is undirected because
-tension is mutual: two claims in tension state the same thing from either end.
+`sum(count)`, and refreshes `updated_at` while leaving `created_at` alone. The six
+undirected types (`SIMILAR`, `CO_OCCURS`, `RELATED_TO`, `ANALOGOUS_TO`, `CONTRADICTS`,
+`ALTERNATIVE_TO`) normalize their endpoint order before the merge, so writing an edge from node
+A to node B and later from B to A lands on one edge, not two. `CONTRADICTS` is undirected because
+tension is mutual: two claims in tension state the same thing from either end, and
+`ALTERNATIVE_TO` for the same reason: two conclusions the same premises support are read together
+or the reader is handed a certainty the substrate does not hold.
+
+`CO_OCCURS` is the one type whose write is a step rather than a claim (`bounded_step`), and what
+one step is worth is the episode's single observation divided by the pairs it minted, floored at
+`AION_HEBBIAN_WEIGHT_FLOOR` (`coOccurrenceBirthStrength`). A two-entity episode's only pair is
+born at full strength; from five entities up the share falls under the floor and every birth
+plateaus there, so width stops telling pairs apart and repetition does it instead: a pair two
+dense episodes both name climbs 0.1, 0.19, 0.271, and a pair named once waits for decay. Nothing
+is capped, gated or deleted; traversal already scales propagation by an edge's stored strength
+(`recall/domain/activation.ts`), which is what makes the weighting reach recall at all.
 Twenty-three directed types cover containment
 (`PARTICIPATES_IN`), temporal chaining (`FOLLOWS`, `PRECEDES`), provenance
 (`DERIVES_FROM`, `EVIDENCES`, `EXTRACTED_FROM`, `CORRECTS`), the backbone (`HAS_MEMBER`,

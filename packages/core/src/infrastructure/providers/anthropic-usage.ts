@@ -14,6 +14,17 @@ const USAGE_SCHEMA = z.object({
   input_tokens: z.number().int().nonnegative(),
   output_tokens: z.number().int().nonnegative(),
   cache_creation_input_tokens: z.number().int().nonnegative().default(0),
+  /**
+   * The write total broken down by how long each entry lives. The API sends it when the request
+   * wrote anything and omits it otherwise, and the two classes are priced apart, so a bill that
+   * read only the aggregate above charges an hour-long write at the five-minute rate.
+   */
+  cache_creation: z
+    .object({
+      ephemeral_5m_input_tokens: z.number().int().nonnegative().optional(),
+      ephemeral_1h_input_tokens: z.number().int().nonnegative().optional(),
+    })
+    .nullish(),
   cache_read_input_tokens: z.number().int().nonnegative().default(0),
   /**
    * The reasoning share of `output_tokens`, never an addition to it.
@@ -37,7 +48,12 @@ export type UsageCounters = Pick<
   ApiCall,
   'inputTokens' | 'outputTokens' | 'cacheCreationTokens' | 'cacheReadTokens'
 > &
-  Partial<Pick<ApiCall, 'thinkingTokens' | 'usageError'>>;
+  Partial<
+    Pick<
+      ApiCall,
+      'thinkingTokens' | 'usageError' | 'cacheCreation5mTokens' | 'cacheCreation1hTokens'
+    >
+  >;
 
 /**
  * The counters a response reported, or placeholders marked unknown where it reported none.
@@ -60,10 +76,18 @@ export function readUsage(usage: unknown): UsageCounters {
   // Left off the record entirely when the response carried no breakdown. The bill is known and
   // the split inside it is not, and those are different facts.
   const thinkingTokens = parsed.data.output_tokens_details?.thinking_tokens;
+  // Left off entirely where the response carried no breakdown, for the reason the thinking share
+  // is: the write total is known and the split inside it is not, and a zero would price a write
+  // that happened as though it had happened in the other class.
+  const written = parsed.data.cache_creation;
+  const minutes = written?.ephemeral_5m_input_tokens;
+  const hour = written?.ephemeral_1h_input_tokens;
   return {
     inputTokens: parsed.data.input_tokens,
     outputTokens: parsed.data.output_tokens,
     cacheCreationTokens: parsed.data.cache_creation_input_tokens,
+    ...(minutes === undefined ? {} : { cacheCreation5mTokens: minutes }),
+    ...(hour === undefined ? {} : { cacheCreation1hTokens: hour }),
     cacheReadTokens: parsed.data.cache_read_input_tokens,
     ...(thinkingTokens === undefined ? {} : { thinkingTokens }),
   };

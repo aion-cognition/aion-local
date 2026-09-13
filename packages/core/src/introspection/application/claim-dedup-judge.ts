@@ -5,8 +5,8 @@ import { errorMessage } from '../../infrastructure/errors.js';
 import { deadlineFor } from '../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../infrastructure/providers/types.js';
 import {
-  DETECT_LOCAL as DETECT_SYSTEM_PROMPT,
-  REVIEW_LOCAL as REVIEW_SYSTEM_PROMPT,
+  DETECT_PROMPT as DETECT_SYSTEM_PROMPT,
+  REVIEW_PROMPT as REVIEW_SYSTEM_PROMPT,
 } from '../../prompts/claim-dedup-judge.js';
 
 /**

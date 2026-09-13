@@ -19,6 +19,8 @@ const KIND_BY_LABEL: readonly (readonly [string, StandingKind])[] = [
   ['Episode', 'recorded_session'],
   ['Decision', 'recorded_decision'],
   ['Narrative', 'synthesized'],
+  ['Synthesis', 'drawn_conclusion'],
+  ['Preference', 'inferred_preference'],
   ['Entity', 'stated_description'],
 ];
 
@@ -26,6 +28,11 @@ const KIND_BY_LABEL: readonly (readonly [string, StandingKind])[] = [
  * Everything else is a model's reading of a capture: the eight cognitive types beside Decision
  * plus Bridge. Calling that an interpretation is the point of the field, since a reader who
  * takes it for a quotation is reading an inference as though somebody had said it.
+ *
+ * A Synthesis and a Preference sit above this default rather than under it. Both are inferences
+ * over other memories rather than readings of one capture, and a reader who cannot separate
+ * "the model read this out of what you said" from "the substrate concluded this across what you
+ * said" is being handed the second in the voice of the first.
  */
 const DEFAULT_KIND: StandingKind = 'extracted_interpretation';
 
@@ -52,12 +59,20 @@ function attributionFor(role: string | undefined, confirmed: boolean): Attributi
   return role === undefined ? 'unknown' : 'reported';
 }
 
+/**
+ * The contest travels with the kind because it is the same question: what kind of statement this
+ * is, and how far the substrate stands behind it. A conclusion the substrate also holds a second
+ * reading of is still a drawn conclusion, and a reader handed one of the two without being told
+ * so reads a contested interpretation as settled. Nothing resolves the contest here; the pack has
+ * no winner to pick.
+ */
 export function standingFor(item: FusedItem, provenance?: ItemProvenance): Standing {
   const confirmation = provenance?.confirmation;
   const role = provenance?.recordedRole;
   return {
     kind: kindFor(item.labels),
     ...(role === undefined ? {} : { recorded_role: role }),
+    ...(item.contested === true ? { contested: true as const } : {}),
     attribution: attributionFor(role, confirmation !== undefined),
     ...(confirmation === undefined
       ? {}

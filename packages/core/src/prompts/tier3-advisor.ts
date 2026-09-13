@@ -21,5 +21,4 @@ const ADVICE = [
   'naming the number in the reading you chose it for.',
 ].join(' ');
 
-export const ADVICE_LOCAL = ADVICE;
-export const ADVICE_KEYED = ADVICE;
+export const ADVICE_PROMPT = ADVICE;

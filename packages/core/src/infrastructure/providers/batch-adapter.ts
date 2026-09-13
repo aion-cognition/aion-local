@@ -11,15 +11,17 @@ import {
 import { parseJsonPayload } from './anthropic-json.js';
 import { readUsage } from './anthropic-usage.js';
 import { boundApiCost } from './api-pricing.js';
+import { cacheWriteClassOf, type CacheWriteClass } from './request-blocks.js';
 import { boundedTokens, type SpendingGuard } from './spending.js';
 import type { Logger } from '../logging/logger.js';
-import { appendApiCall, chargedApiUsd } from '../sqlite/api-usage.js';
+import { appendApiCall, chargedApiUsd, unaccountedApiRequests } from '../sqlite/api-usage.js';
 import {
   markBatchSubmitted,
   pendingBatchWork,
   outstandingBatchIds,
   returnBatchWork,
   settleBatchWork,
+  settledBatchWorkKeys,
   submittedBatchWork,
   type BatchWorkItem,
 } from '../sqlite/batch-work.js';
@@ -148,9 +150,30 @@ function boundOf(items: readonly BatchWorkItem[]): {
   return { model, inputTokens, outputTokens };
 }
 
-/** The same bound in dollars. `batchMessagesBody` marks no prefix, so none of it is a cache write. */
+/**
+ * The write class this submission can be billed at, read off the bodies it is actually sending.
+ *
+ * `batchMessagesBody` marks the shared frame where it reaches the cache floor, so whether a batch
+ * bills any of its input at a write rate is a property of the stored requests and not of the lane.
+ * The dearest class any of them carries covers the batch, since one hold bounds the whole of it.
+ */
+function cacheClassOf(items: readonly BatchWorkItem[]): CacheWriteClass {
+  let held: CacheWriteClass = { cacheWrite: false };
+  for (const item of items) {
+    const read = cacheWriteClassOf(item.request);
+    if (!read.cacheWrite) {
+      continue;
+    }
+    if (!held.cacheWrite || read.cacheWriteTtl === '1h') {
+      held = read;
+    }
+  }
+  return held;
+}
+
+/** The same bound in dollars, at the class the submitted bodies can actually be billed at. */
 function boundUsd(items: readonly BatchWorkItem[]): number {
-  return boundApiCost({ ...boundOf(items), pricingTier: 'batch', cacheWrite: false }).maxUsd;
+  return boundApiCost({ ...boundOf(items), pricingTier: 'batch', ...cacheClassOf(items) }).maxUsd;
 }
 
 /**
@@ -200,8 +223,9 @@ export async function submitBatchWork(
     surface: 'batch_submission',
     route: 'batch',
     now: clock(deps),
-    // `batchMessagesBody` attaches no cache marker, so no request here can bill as a cache write.
-    cacheWrite: false,
+    // Read off the bodies being sent: a marked prefix is the one shape whose input bills at a
+    // write rate, and which rate it is the body's own `ttl` settles.
+    ...cacheClassOf(owed),
     ...boundOf(owed),
   });
   if (held !== undefined && 'refused' in held) {
@@ -432,7 +456,9 @@ export async function consumeBatchWork(deps: BatchAdapterDeps): Promise<ConsumeR
  * again, in this process or a later one, settles to the same number instead of a growing one.
  *
  * A charge that cannot be priced leaves the hold untouched at its bound, which is the only honest
- * reading of money nobody can size. Missing usage rows are the same case, not a complete bill.
+ * reading of money nobody can size. A charge with no usage row at all is the same money: the hold
+ * settles at its bound as an unresolved obligation rather than at the total of whatever rows did
+ * land.
  */
 function reconcileSubmission(
   deps: BatchAdapterDeps,
@@ -443,6 +469,23 @@ function reconcileSubmission(
     (item) => item.reservationId !== undefined,
   )?.reservationId;
   if (reservationId === undefined || deps.spending === undefined) {
+    return;
+  }
+  // Every request this batch has settled was answered, so every one of them is a charge. A
+  // settled row with no bill under its own request identity is a charge that was never written
+  // down, and the sum of the rows that were written cannot see it. The hold stays at its bound
+  // and the day names it as unresolved, which is what an obligation nobody can size costs. It
+  // outlives the work: the row is terminal and no answer is coming back to price it.
+  const unaccounted = unaccountedApiRequests(
+    deps.db,
+    settledBatchWorkKeys(deps.db, batchId).map((workKey) => `${batchId}:${workKey}`),
+  );
+  if (unaccounted.length > 0) {
+    settleGenerationSpend(deps.db, reservationId, undefined, clock(deps));
+    deps.logger.error(
+      { batchId, unaccounted: unaccounted.length },
+      'answers of this batch carry no usage record; its bound is held as an unaccounted charge',
+    );
     return;
   }
   const charged = chargedApiUsd(deps.db, batchId);

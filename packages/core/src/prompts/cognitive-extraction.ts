@@ -40,5 +40,4 @@ const EXTRACTION = [
   'for a condition with no date in it ("after the reset lands") and for everything else.',
 ].join(' ');
 
-export const LOCAL = EXTRACTION;
-export const KEYED = EXTRACTION;
+export const EXTRACTION_PROMPT = EXTRACTION;

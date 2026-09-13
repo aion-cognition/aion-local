@@ -1,22 +1,19 @@
 /**
  * Every generation system prompt the workspace runs lives in this directory, one file per
- * surface. A surface exports its text under both `LOCAL` and `KEYED`: where the two routes read
- * the same words, both names point at one constant, and `fork-registry.test.ts` proves it. A
- * surface whose modes diverge joins that file's list in the same commit as the fork, so a
- * divergence cannot land unnamed. Parameterized surfaces export builder functions under the same
- * two names. User-message builders stay with the stage that assembles them: they are logic
- * rather than text.
+ * surface, and each prompt is one exported constant named for what it asks rather than for a
+ * route. `prompt-surfaces.test.ts` sweeps the directory and holds that shape.
+ *
+ * Surfaces used to export their text twice, under `LOCAL` and `KEYED`, from when a small local
+ * model served some generation. No local route exists now: every provider the service builds
+ * reports the one remote model. Three surfaces carried a genuinely different local text and the
+ * rest carried an alias; the aliases are collapsed and the three texts are gone, each with a line
+ * in its own file saying what stood there and why nothing could reach it.
+ *
+ * Parameterized surfaces export builder functions under the same convention. User-message
+ * builders stay with the stage that assembles them: they are logic rather than text.
+ *
+ * The shared frame every surface is told before its own instructions lives in `frame.ts`, and
+ * the request builder is what puts it there. A prompt file never mentions it.
  */
 
-import type { Provider } from '../infrastructure/providers/types.js';
-
-export type PromptMode = 'local' | 'keyed';
-
-/**
- * Which text a call site reads, written once here so no consumer restates the rule. An absent
- * route reads as local, matching how the provider contract treats a test fake or a bare Ollama
- * client.
- */
-export function promptMode(provider: Pick<Provider, 'route'>): PromptMode {
-  return provider.route?.provider === 'anthropic' ? 'keyed' : 'local';
-}
+export { FRAME_VERSION, frameFor, frameText, type FrameRendering } from './frame.js';

@@ -20,5 +20,4 @@ const BRIDGE = [
   'or near zero and say plainly what is missing.',
 ].join(' ');
 
-export const LOCAL = BRIDGE;
-export const KEYED = BRIDGE;
+export const BRIDGE_PROMPT = BRIDGE;

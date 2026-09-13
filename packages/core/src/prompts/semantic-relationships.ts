@@ -38,5 +38,4 @@ const RELATIONSHIPS = [
   'a weak guess.',
 ].join(' ');
 
-export const LOCAL = RELATIONSHIPS;
-export const KEYED = RELATIONSHIPS;
+export const RELATIONSHIPS_PROMPT = RELATIONSHIPS;

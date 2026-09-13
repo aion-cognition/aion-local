@@ -3,6 +3,8 @@ import { z } from 'zod';
 import {
   findEntityMentionContexts,
   findStaleDescriptionEntities,
+  mentionSourceDigest,
+  quotedMentionSources,
   readableMentionSources,
   readEntityDescriptionState,
   refreshEntityDescription,
@@ -11,15 +13,14 @@ import {
 import { batchMessagesBody } from '../../../infrastructure/providers/anthropic-provider.js';
 import type { BatchWorkHandler } from '../../../infrastructure/providers/batch-adapter.js';
 import type { ChatMessage, JsonSchema } from '../../../infrastructure/providers/types.js';
-import { enqueueBatchWork, type BatchWorkItem } from '../../../infrastructure/sqlite/batch-work.js';
-import { readSubstratePairing } from '../../../infrastructure/sqlite/publication-control.js';
 import {
-  KEYED as FRESHNESS_KEYED,
-  KEYED_MAX_TOKENS,
-  LOCAL as FRESHNESS_LOCAL,
-  LOCAL_MAX_TOKENS,
-} from '../../../prompts/description-freshness.js';
-import { promptMode, type PromptMode } from '../../../prompts/index.js';
+  enqueueBatchWork,
+  reopenDiscardedBatchWork,
+  type BatchWorkItem,
+} from '../../../infrastructure/sqlite/batch-work.js';
+import { readSubstratePairing } from '../../../infrastructure/sqlite/publication-control.js';
+import { FRESHNESS_PROMPT, MAX_TOKENS } from '../../../prompts/description-freshness.js';
+import { FRAME_VERSION } from '../../../prompts/frame.js';
 import { hashContent } from '../../../reflection/domain/content.js';
 import type {
   IntrospectionOperation,
@@ -78,6 +79,9 @@ const DescriptionSchema = z.object({ description: z.string() });
  * prompt was grounded in rather than whatever the entity has reached by the time it lands.
  * `sources` names the episodes the prompt actually quoted, which is what the answer is about: an
  * entity that still has mentions is not the same fact as an entity that still has these ones.
+ * `sourceDigest` carries what those episodes said. A readable id is not the input the model was
+ * given: the residue purge rewrites an episode's text in place and leaves the id readable, and an
+ * answer quoting the plaintext it replaced is about a sentence the store no longer holds.
  */
 const RevalidationSchema = z.object({
   entityId: z.string().min(1),
@@ -85,28 +89,13 @@ const RevalidationSchema = z.object({
   mentions: z.number().int().nonnegative(),
   text: z.string(),
   sources: z.array(z.string().min(1)).min(1),
+  sourceDigest: z.string().min(1),
 });
 
 type FreshnessRevalidation = z.infer<typeof RevalidationSchema>;
 
 function clip(text: string, maxChars: number): string {
   return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
-}
-
-type FreshnessPrompt = {
-  readonly system: string;
-  readonly maxTokens: number;
-};
-
-/**
- * Text and budget travel together, since the number is only ever the room the words ask for: the
- * keyed prompt wants three to four sentences naming connections, the local one wants two.
- */
-function promptFor(mode: PromptMode): FreshnessPrompt {
-  if (mode === 'keyed') {
-    return { system: FRESHNESS_KEYED, maxTokens: KEYED_MAX_TOKENS };
-  }
-  return { system: FRESHNESS_LOCAL, maxTokens: LOCAL_MAX_TOKENS };
 }
 
 function buildMessages(
@@ -140,19 +129,19 @@ const REMOTE_ID_PREFIX = 'df-';
 
 /**
  * The identity of one question: this entity, this gloss, this baseline, and the exact mentions
- * the prompt quotes.
+ * the prompt quotes, as it quotes them.
  *
  * Stable, so a nomination the next pass makes again finds the row it already wrote instead of
  * paying for the same question twice. It moves the moment any input does, so an entity whose
- * gloss a correction retired, whose baseline another refresh advanced, or that has been mentioned
- * somewhere new is a new question rather than one a terminal row blocks forever. The evidence
- * belongs in it for the answer that changes nothing: that answer leaves the gloss and the
- * baseline where they were and settles the row, and without the mentions in the identity there
- * would be no question left to ask once new ones arrived.
+ * gloss a correction retired, whose baseline another refresh advanced, that has been mentioned
+ * somewhere new, or whose quoted evidence was rewritten is a new question rather than one a
+ * terminal row blocks forever. The evidence belongs in it for the answer that changes nothing:
+ * that answer leaves the gloss and the baseline where they were and settles the row, and without
+ * the mentions in the identity there would be no question left to ask once new ones arrived.
  */
 export function descriptionFreshnessDurableKey(
   entity: StaleDescriptionEntity,
-  sources: readonly string[],
+  sourceDigest: string,
 ): string {
   return [
     DESCRIPTION_FRESHNESS_SURFACE,
@@ -160,7 +149,7 @@ export function descriptionFreshnessDurableKey(
     String(entity.baseline),
     String(entity.mentions),
     hashContent(entity.text),
-    hashContent(sources),
+    sourceDigest,
   ].join(':');
 }
 
@@ -206,7 +195,6 @@ export function descriptionFreshnessOperation(): IntrospectionOperation {
         };
       }
 
-      const prompt = promptFor(promptMode(ctx.provider));
       const batch = ctx.config.maintenance.descriptionRefreshBatch;
       const candidates = await findStaleDescriptionEntities(ctx.driver, {
         growthThreshold: ctx.config.maintenance.descriptionRefreshMentionGrowth,
@@ -233,16 +221,19 @@ export function descriptionFreshnessOperation(): IntrospectionOperation {
           continue;
         }
         const sources = contexts.map((context) => context.episodeId);
+        const sourceDigest = mentionSourceDigest(contexts);
         const revalidation: FreshnessRevalidation = {
           entityId: entity.id,
           baseline: entity.baseline,
           mentions: entity.mentions,
           text: entity.text,
           sources,
+          sourceDigest,
         };
-        const durableKey = descriptionFreshnessDurableKey(entity, sources);
+        const durableKey = descriptionFreshnessDurableKey(entity, sourceDigest);
+        const workKey = descriptionFreshnessWorkKey(durableKey);
         const wrote = enqueueBatchWork(ctx.db, {
-          workKey: descriptionFreshnessWorkKey(durableKey),
+          workKey,
           durableKey,
           substrateId: substrate.substrateId,
           surface: DESCRIPTION_FRESHNESS_SURFACE,
@@ -250,15 +241,24 @@ export function descriptionFreshnessOperation(): IntrospectionOperation {
           request: batchMessagesBody({
             surface: DESCRIPTION_FRESHNESS_SURFACE,
             model: ctx.config.anthropic.model,
-            messages: buildMessages(entity, contexts, prompt.system),
+            messages: buildMessages(entity, contexts, FRESHNESS_PROMPT),
             schema: DESCRIPTION_JSON_SCHEMA,
-            maxTokens: prompt.maxTokens,
+            maxTokens: MAX_TOKENS,
             temperature: DESCRIPTION_TEMPERATURE,
             think: false,
           }),
+          // Recorded beside the body rather than derived from it. The body is replayed verbatim,
+          // so a bump to the frame does not reach a request already outstanding, and this is what
+          // says which frame that request was written under.
+          frameVersion: FRAME_VERSION,
           now: ctx.now,
         });
-        if (wrote) {
+        // A discarded row carries the same key only when every input this nomination just read is
+        // the one the discarded question was asked about, down to what its sources say. The
+        // answer was thrown away because something moved while it was at the remote, and this
+        // read is the proof that it moved back, so the question is owed again rather than closed
+        // by a row nobody can clear.
+        if (wrote || reopenDiscardedBatchWork(ctx.db, workKey, substrate.substrateId, ctx.now)) {
           enqueued += 1;
         }
       }
@@ -282,10 +282,11 @@ export function descriptionFreshnessOperation(): IntrospectionOperation {
  * Both halves take the run's own driver and provider, so the embed and the write are the ones the
  * loop would have made inline. `isCurrent` is a real reading of the substrate rather than a
  * formality: it refuses an answer about a gloss that has moved, an entity that has gone, and one
- * whose own grounding mentions are no longer readable.
+ * whose own grounding mentions are no longer readable or no longer say what it read.
  *
  * `apply` does not trust that reading to survive the embed it takes next. The gloss the answer
- * revised and the sources it was grounded in go into the guarded write itself, so a description
+ * revised and the sources it was grounded in, with what they said, go into the guarded write
+ * itself, so a description
  * another pass committed in that window keeps the node and the older answer is owed again rather
  * than published over it.
  */
@@ -306,13 +307,15 @@ export function descriptionFreshnessHandler(ctx: OperationContext): BatchWorkHan
       }
       // The sources the prompt quoted, not a count of what the entity still has. An answer
       // written from five episodes is about those five, and four survivors do not make it
-      // current: the sentence it produced rests on the one that went.
+      // current: the sentence it produced rests on the one that went. What they say is read
+      // with them, because an episode rewritten in place is as gone as one that was forgotten.
       const readable = await readableMentionSources(
         ctx.driver,
         parsed.data.entityId,
         parsed.data.sources,
       );
-      return readable.length === new Set(parsed.data.sources).size;
+      const quoted = quotedMentionSources(parsed.data.sources, readable);
+      return quoted !== undefined && mentionSourceDigest(quoted) === parsed.data.sourceDigest;
     },
     apply: async (item: BatchWorkItem, answer: unknown): Promise<void> => {
       const revalidation = RevalidationSchema.parse(item.revalidation);
@@ -339,11 +342,13 @@ export function descriptionFreshnessHandler(ctx: OperationContext): BatchWorkHan
         now: ctx.now,
         expectedText: revalidation.text,
         sources: revalidation.sources,
+        expectedSourceDigest: revalidation.sourceDigest,
       });
       if (!applied) {
         // The guarded write is the last word, and it matched nothing: the entity was closed, its
         // gloss moved under the embed above, or one of the sources this answer rests on was
-        // forgotten. The work stays owed, and the next nomination asks about what is there now.
+        // forgotten or rewritten. The work stays owed, and the next nomination asks about what is
+        // there now.
         throw new Error(
           `the question about entity ${revalidation.entityId} moved under its answer`,
         );

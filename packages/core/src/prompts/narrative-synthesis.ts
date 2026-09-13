@@ -32,5 +32,4 @@ function sessionNarrative(sentenceBudget: number): string {
   });
 }
 
-export const LOCAL = sessionNarrative;
-export const KEYED = sessionNarrative;
+export const SESSION_PROMPT = sessionNarrative;

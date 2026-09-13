@@ -182,4 +182,30 @@ export const REFLECTION_KNOBS = {
   keyedNarrativeSentences: ['AION_KEYED_NARRATIVE_SENTENCES', positiveInt, 12],
   keyedNarrativeEpisodeChars: ['AION_KEYED_NARRATIVE_EPISODE_CHARS', positiveInt, 4_000],
   narrativeSweepLimit: ['AION_REFLECTION_NARRATIVE_SWEEP_LIMIT', positiveInt, 20],
+  // Conclusions one synthesis pass may write over one neighbourhood. Three, because a pass that
+  // finds more than three things to say across a handful of memories is restating them, which
+  // is the failure the prompt is written against. The pass declines the rest rather than
+  // truncating quietly, and the count rides its summary.
+  maxSynthesisConclusions: ['AION_REFLECTION_MAX_SYNTHESIS_CONCLUSIONS', positiveInt, 3],
+  // The cosine a memory from another episode has to reach to join a synthesis neighbourhood.
+  // Set at the supersession judge's own neighbour threshold and for the same reason: this is a
+  // nomination floor over the same population of fact-bearing claims, read in the same space,
+  // and two floors over one population would drift apart the first time either was retuned.
+  // Nothing decides on the number: the model reads the neighbourhood and answers, and the
+  // premise citation is what says which memories a conclusion actually rests on.
+  synthesisNeighbourThreshold: ['AION_REFLECTION_SYNTHESIS_NEIGHBOUR_THRESHOLD', proportion, 0.75],
+  // Per-changed-memory cap on the neighbours one pass reads. Four, against the supersession
+  // stage's three, because this pass reads the neighbourhood whole in one call rather than
+  // judging pair by pair: what it costs is context in one request, and what a thinner window
+  // costs is the cross-episode tension the pass exists to find.
+  maxSynthesisNeighbours: ['AION_REFLECTION_MAX_SYNTHESIS_NEIGHBOURS', positiveInt, 4],
+  // Lines of one episode the preference pass reads, taken from the end. It bounds the model's
+  // input, which the three serving slots do not: a pass shown two lines and asked for three
+  // preferences invents two of them. Twenty-four is about a working exchange, and the tail is
+  // the half that shows how the session actually went rather than how it opened.
+  maxPreferenceSignals: ['AION_REFLECTION_MAX_PREFERENCE_SIGNALS', positiveInt, 24],
+  // Held preferences one pass is shown, so a revision has something to name. Wider than the
+  // three serving renders, because a preference the pack had no room for is still one a later
+  // signal can correct, and a pass that could not see it would write a second node beside it.
+  maxStandingPreferences: ['AION_REFLECTION_MAX_STANDING_PREFERENCES', positiveInt, 12],
 } as const;

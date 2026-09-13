@@ -4,11 +4,7 @@ import type { OverAllowance } from './supersession-judge.js';
 import { admitRenderedInput } from '../../../evidence/domain/budget.js';
 import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../../infrastructure/providers/types.js';
-import { promptMode } from '../../../prompts/index.js';
-import {
-  KEYED as REVIEW_KEYED,
-  LOCAL as REVIEW_LOCAL,
-} from '../../../prompts/supersession-review.js';
+import { REVIEW_PROMPT } from '../../../prompts/supersession-review.js';
 
 /**
  * The second pass over an affirmative contradiction judgment, arguing the other side.
@@ -130,7 +126,7 @@ export async function reviewContradiction(
   pair: ReviewPair,
   options: ReviewContradictionOptions,
 ): Promise<ReviewOutcome> {
-  const systemPrompt = promptMode(provider) === 'keyed' ? REVIEW_KEYED : REVIEW_LOCAL;
+  const systemPrompt = REVIEW_PROMPT;
   const messages = buildReviewMessages(pair, systemPrompt);
   const admission = admitRenderedInput('live_supersession', messages);
   if (admission.status === 'over') {

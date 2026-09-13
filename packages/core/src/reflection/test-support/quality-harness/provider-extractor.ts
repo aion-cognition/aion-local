@@ -8,15 +8,8 @@ import type {
 import { describeError, formatZodError } from '../../../infrastructure/errors.js';
 import { COGNITIVE_NODE_LABELS } from '../../../infrastructure/graph/cognitive-queries.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../../infrastructure/providers/types.js';
-import {
-  KEYED as COGNITIVE_KEYED,
-  LOCAL as COGNITIVE_LOCAL,
-} from '../../../prompts/cognitive-extraction.js';
-import {
-  KEYED as ENTITY_KEYED,
-  LOCAL as ENTITY_LOCAL,
-} from '../../../prompts/entity-extraction.js';
-import { promptMode } from '../../../prompts/index.js';
+import { EXTRACTION_PROMPT as COGNITIVE_PROMPT } from '../../../prompts/cognitive-extraction.js';
+import { EXTRACTION_PROMPT as ENTITY_PROMPT } from '../../../prompts/entity-extraction.js';
 import { COGNITIVE_JSON_SCHEMA } from '../../application/stages/cognitive.js';
 import { ENTITY_EXTRACTION_JSON_SCHEMA, ENTITY_TYPES } from '../../domain/entity-extraction.js';
 
@@ -61,23 +54,24 @@ const CognitiveExtractionOutputSchema = z.object({
 export type ProviderGenerateDeps = {
   readonly generate: Provider['generate'];
   readonly model: string;
-  /** Which variant a forked surface renders here. Absent reads local, as the provider contract does. */
+  /**
+   * The route the caller states, carried for the provider contract and read by nothing here: no
+   * surface has two texts any more, so every route sends the one constant its surface ships.
+   */
   readonly route?: Provider['route'];
   readonly timeoutMs?: number;
 };
 
-function entityMessages(deps: ProviderGenerateDeps, text: string): ChatMessage[] {
-  const system = promptMode(deps) === 'keyed' ? ENTITY_KEYED : ENTITY_LOCAL;
+function entityMessages(text: string): ChatMessage[] {
   return [
-    { role: 'system', content: system },
+    { role: 'system', content: ENTITY_PROMPT },
     { role: 'user', content: `Record:\n${text}` },
   ];
 }
 
-function cognitiveMessages(deps: ProviderGenerateDeps, text: string): ChatMessage[] {
-  const system = promptMode(deps) === 'keyed' ? COGNITIVE_KEYED : COGNITIVE_LOCAL;
+function cognitiveMessages(text: string): ChatMessage[] {
   return [
-    { role: 'system', content: system },
+    { role: 'system', content: COGNITIVE_PROMPT },
     { role: 'user', content: `Episode:\n${text}` },
   ];
 }
@@ -131,7 +125,7 @@ export function extractEntitiesViaProvider(
 ): Promise<ExtractorOutcome<EntityExtractionResult>> {
   return runStructuredExtraction(
     deps,
-    entityMessages(deps, text),
+    entityMessages(text),
     ENTITY_EXTRACTION_JSON_SCHEMA,
     EntityExtractionOutputSchema,
   );
@@ -143,7 +137,7 @@ export function extractCognitiveViaProvider(
 ): Promise<ExtractorOutcome<CognitiveExtractionResult>> {
   return runStructuredExtraction(
     deps,
-    cognitiveMessages(deps, text),
+    cognitiveMessages(text),
     COGNITIVE_JSON_SCHEMA,
     CognitiveExtractionOutputSchema,
   );

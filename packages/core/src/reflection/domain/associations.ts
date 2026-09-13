@@ -27,6 +27,35 @@ export function coOccurringPairs(entityIds: readonly string[]): readonly EntityP
 }
 
 /**
+ * What one pair of an episode's all-pairs clique is worth the first time it is written.
+ *
+ * The share is `1 / pairCount`, floored. An episode naming n entities mints n(n-1)/2 pairs and
+ * asserts nothing about any one of them beyond having named both, so the evidence one birth
+ * carries is the whole of the episode's one observation divided by the pairs it spent it on. A
+ * two-entity episode says one thing and its only pair gets all of it; a thirty-entity episode
+ * mints 435 pairs and each of them is born barely traversable.
+ *
+ * The floor is the plateau, and it is `hebbian.weightFloor` rather than a number of its own: an
+ * edge written under it is one recall refuses to walk the moment it is made, which deletes the
+ * information rather than weighting it. At the shipped floor of 0.1 the plateau starts at five
+ * entities, where `1/10` first falls under it, so every episode from five entities up births at
+ * the floor and is told apart by repetition instead of by width.
+ *
+ * Repetition is what promotes: the birth is a step and not a target (`edges.ts`'s
+ * `bounded_step`), so a pair two dense episodes both name climbs 0.1, 0.19, 0.271 and a pair
+ * named once stays at the floor for decay to bury. Nothing is deleted, nothing is capped and
+ * nothing is gated; the weighting alone is the whole mechanism.
+ *
+ * This is not `cliqueDiscount`. That is the per-node allocation the reinforcement queue folds a
+ * burst under, `1 / (n - 1)`, and it answers a different question: what one co-activation signal
+ * inside a burst is worth. The two are deliberately separate numbers for the two separate
+ * writes, and collapsing them would tie a birth's weight to a fold's.
+ */
+export function coOccurrenceBirthStrength(pairCount: number, weightFloor: number): number {
+  return Math.max(weightFloor, 1 / Math.max(1, pairCount));
+}
+
+/**
  * Scopes co-occurrence idempotency to the episode: the stage checks this key before writing
  * any `CO_OCCURS` edge and marks it once every pair has landed, so re-running the same
  * episode's pipeline (the crash-before-ledger-mark case the orchestrator contract calls out)

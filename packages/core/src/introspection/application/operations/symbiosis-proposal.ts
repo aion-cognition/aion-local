@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { CommunityMember } from '../../../infrastructure/graph/community-queries.js';
 import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../../infrastructure/providers/types.js';
-import { LOCAL as SYSTEM_PROMPT } from '../../../prompts/symbiosis-bridge.js';
+import { BRIDGE_PROMPT as SYSTEM_PROMPT } from '../../../prompts/symbiosis-bridge.js';
 import type { CommunityPairScore } from '../../domain/bridge-pairs.js';
 
 /**

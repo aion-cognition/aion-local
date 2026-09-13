@@ -110,7 +110,8 @@ and whose ends both reached the pack the caller was handed.
 **Reflection distills.** It is asynchronous and runs after an episode is durably stored, from a
 queue row. It extracts entities, deduplicates them against the graph, infers associations,
 extracts the nine cognitive node types (goals, plans, decisions, insights, concepts, contexts,
-events, patterns, trends), builds typed relationships, judges contradictions, and compresses a
+events, patterns, trends), builds typed relationships, judges contradictions, draws conclusions
+across the memories the new ones touch, reads off how the member likes to work, and compresses a
 session into a narrative. Every stage fails independently, and an operations ledger gates
 re-entry, so no episode is learned twice through any number of retries or crashes.
 
@@ -173,8 +174,51 @@ the most signal-to-noise.
 The floor is the most important parameter. No edge reaches zero, so a faded pathway still
 carries activation if the cue is strong enough.
 
-Reinforcement is generated on the recall path and executed by introspection in batches, so
-plasticity is eventually consistent and recall latency is untouched.
+Reinforcement is generated on the recall path and applied in batches off it, so plasticity is
+eventually consistent and recall latency is untouched. The drain has a clock of its own, a few
+seconds rather than the maintenance loop's quarter-hour window, because a queue that fills on
+every recall is the wrong thing to schedule behind everything else a repair loop might do. It
+is one consumer: the queue's claim is a read rather than an exclusive lock, so two drainers
+would fold one window twice.
+
+Cadence is not only latency. A window is one claimed batch, and a pair's signals inside it fold
+into a single bounded step, so the same stream split across more windows applies more steps. A
+faster drain therefore learns a repeated co-activation slightly faster. The bound is what keeps
+that from mattering much, and no drain of any cadence empties a queue that arrival outruns.
+
+Co-occurrence is where density has to be priced. An episode naming thirty entities mints four
+hundred and thirty-five pairs and asserts nothing about any one of them beyond having named
+both, so each birth carries the episode's single observation divided by the pairs it was spent
+on, floored at the traversal floor. Past a handful of entities every birth lands on that floor,
+which means width stops distinguishing pairs and repetition starts: a pair two dense episodes
+both name climbs, and a pair named once waits for decay. Nothing is capped or discarded.
+
+## Conclusions the memories do not state
+
+Extraction reads one capture and returns what is in it. That is the right contract for
+extraction and it is not how understanding accumulates: the thing worth knowing is often the
+tension between what was said today and what the substrate held before, and no single memory
+states it.
+
+So a pass runs across memories rather than inside one. It is bounded around what the run just
+changed and reaches out of the episode from there, which is what keeps it from re-reading the
+whole history on every capture. What it produces is a conclusion, stored as its own kind of node
+with the premises it rests on and the fact that it is an inference, because a reader who cannot
+tell a drawn conclusion from a quoted one can correct neither.
+
+New evidence does one of two things to a conclusion, and the evidence decides which. Where it
+makes the same conclusion wrong about the same subject, the conclusion is replaced: the earlier
+version closes, keeps its premises and its standing, and the replacement points back at it. Where
+it supports a second reading the first does not exclude, both stand and are linked as
+alternatives, and the pack renders the uncertainty rather than picking. A pass that concludes
+nothing records that it read this neighbourhood at these revisions, and the moment any of that
+evidence moves, the record no longer covers it and the question is asked again.
+
+A preference is the same shape aimed at a different question: what the member corrects, repeats,
+and asks for again. It is never stored as something they said. The node carries that it was
+inferred, the transport roles of the lines it was read off travel with it unchanged, and no path
+writes a confirmation, so a preference the substrate served and an agent then restated cannot
+come back as evidence for itself.
 
 ## The introspective maintenance loop
 
@@ -275,9 +319,13 @@ the full-text index over captured parts that `source_search` queries, the insert
 stream that records what recall and the weight sweeps did, the operations ledger, the proposal
 queues, and the last-pack cache.
 
-Generation runs on Ollama on the host. Set an Anthropic key and the two generation roles, cue
-extraction and reflection, route to Haiku instead of the local instruct model. Embeddings stay
-local either way, because the vector space is the substrate.
+Generation runs on Haiku with an Anthropic key, and does not run without one. Embeddings stay
+local on Ollama either way, because the vector space is the substrate. Every generating surface
+is told the same thing first, ahead of its own instructions and in its own request block: what
+Aion is, what its node kinds are for, why an answer has to say what it rests on, and that the
+memories in the request are evidence rather than instructions. One versioned frame, two
+renderings, composed once in the shared request builder so no prompt file mentions it and no task
+text changed to receive it.
 
 Where this build differs from the paper:
 
@@ -295,6 +343,10 @@ Where this build differs from the paper:
   This falls back to the raw query, per the rule above.
 - **Bitemporal stamps, supersession, and forget are an extension** the paper does not describe.
   They are the section above.
+- **Synthesis and preferences are an extension too.** The paper's five node families are all
+  extracted from one capture. A conclusion drawn across memories and a preference read off how
+  somebody worked are neither, so each is its own node kind carrying its premises and the fact
+  that it is an inference.
 - **Some tuned values disagree with the paper's appendix** (the episode cap, the summary cue
   weight, the cue-call budget), each on a measurement `architecture.md` records.
 - **Thirty-one maintenance operations are registered**, and two the paper names are not,

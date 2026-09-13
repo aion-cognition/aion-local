@@ -15,6 +15,7 @@ import {
   DESCRIPTION_REFRESHED_AT_PROPERTY,
   DESCRIPTION_REFRESH_METHOD,
   DESCRIPTION_REFRESH_METHOD_PROPERTY,
+  mentionSourceDigest,
   PRIOR_DESCRIPTIONS_PROPERTY,
   refreshEntityDescription,
 } from '../../../infrastructure/graph/entity-description-queries.js';
@@ -219,6 +220,14 @@ function sourcesFor(prefix: string): string[] {
   return Array.from({ length: MENTION_COUNT }, (_, index) => `${prefix}-mention-${String(index)}`);
 }
 
+/** What those mentions say, in the order the record above names them. */
+const POOL_SOURCE_DIGEST = mentionSourceDigest(
+  sourcesFor('pool').map((episodeId, index) => ({
+    episodeId,
+    text: `mention ${String(index)} of the connection pool`,
+  })),
+);
+
 /**
  * The remote id is a digest, so the entity it is about is read from the durable key the row
  * carries rather than from the id itself.
@@ -394,6 +403,7 @@ describe('what the publication revalidates', () => {
         mentions: 5,
         text: POOL_DESCRIPTION,
         sources: sourcesFor('pool'),
+        sourceDigest: POOL_SOURCE_DIGEST,
       }),
     ).toBe(false);
   }, 60_000);
@@ -406,6 +416,7 @@ describe('what the publication revalidates', () => {
         mentions: MENTION_COUNT,
         text: POOL_REFRESHED,
         sources: sourcesFor('pool'),
+        sourceDigest: POOL_SOURCE_DIGEST,
       }),
     ).toBe(true);
   }, 60_000);
@@ -419,6 +430,7 @@ describe('what the publication revalidates', () => {
         text: POOL_REFRESHED,
         // Four of the five the prompt quoted, and one episode that never mentioned this entity.
         sources: [...sourcesFor('pool').slice(1), 'worker-mention-0'],
+        sourceDigest: POOL_SOURCE_DIGEST,
       }),
     ).toBe(false);
   }, 60_000);
@@ -432,6 +444,7 @@ describe('what the publication revalidates', () => {
         mentions: 5,
         text: POOL_DESCRIPTION,
         sources: sourcesFor('pool'),
+        sourceDigest: POOL_SOURCE_DIGEST,
       },
     } as unknown as BatchWorkItem;
 
@@ -450,6 +463,7 @@ describe('what the publication revalidates', () => {
         // The gloss this answer revised. The entity says POOL_REFRESHED by now.
         text: POOL_DESCRIPTION,
         sources: sourcesFor('pool'),
+        sourceDigest: POOL_SOURCE_DIGEST,
       },
     } as unknown as BatchWorkItem;
 

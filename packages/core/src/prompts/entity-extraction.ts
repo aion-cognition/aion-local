@@ -24,8 +24,6 @@ const REFINEMENT =
   'return a correct extraction. Keep the entities the previous attempt got right, drop ' +
   'anything the record does not name, and use only the allowed types.';
 
-export const LOCAL = EXTRACTION;
-export const KEYED = EXTRACTION;
+export const EXTRACTION_PROMPT = EXTRACTION;
 
-export const REFINEMENT_LOCAL = REFINEMENT;
-export const REFINEMENT_KEYED = REFINEMENT;
+export const REFINEMENT_PROMPT = REFINEMENT;

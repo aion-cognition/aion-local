@@ -1,6 +1,7 @@
 import { AnthropicProvider } from './anthropic-provider.js';
 import { GenerationUnavailableError } from './errors.js';
 import { OllamaProvider } from './ollama-provider.js';
+import type { FrameOverride } from './request-blocks.js';
 import { resolveProviderRouting, type GenerationRole, type ProviderRouting } from './routing.js';
 import type { SpendingGuard } from './spending.js';
 import type {
@@ -32,6 +33,15 @@ export type ProviderRouterOptions = {
   readonly onGeneration?: (event: GenerationEvent) => void;
   readonly now?: () => number;
   readonly recordApiCall?: (call: ApiCall) => void;
+  /**
+   * The shared frame every generation surface reads, overridden for one run.
+   *
+   * This is the seam a battery comparing the same code, inputs, model and thinking settings with
+   * and without the frame runs through: it changes the request and nothing else. Absent, each
+   * surface's allocation decides, which is what the service always gets, since nothing reads this
+   * from config and no deployment can set it.
+   */
+  readonly frameOverride?: FrameOverride;
   /**
    * The day's spending backstop, shared with every other route into the same store. Absent
    * leaves this router's calls unbounded, which is what a composition with no substrate store
@@ -148,6 +158,7 @@ export class ProviderRouter {
           apiKey: config.anthropic.apiKey.trim(),
           model: config.anthropic.model,
           promptCache: config.anthropic.promptCache,
+          ...(options.frameOverride === undefined ? {} : { frameOverride: options.frameOverride }),
           thinkingBudgetTokens: config.anthropic.thinkingBudgetTokens,
           now: this.#now,
           ...(options.recordApiCall === undefined ? {} : { recordApiCall: options.recordApiCall }),

@@ -80,6 +80,20 @@ export type SeedCandidate = CurrencyAnnotation & {
   readonly why?: string;
   /** Distinct current episodes mentioning the node; absent for a node type `MENTIONS` never targets. */
   readonly mentionCount?: number;
+  /**
+   * The condition a contextual Preference holds under (`preference-queries.ts`). Absent on every
+   * other node type and on an unconditional preference. It travels with the content because the
+   * two are one statement, and serving the sentence without the condition serves a narrow habit
+   * as a general rule.
+   */
+  readonly context?: string;
+  /**
+   * Set where the substrate holds a second reading of the same memories this one was drawn from
+   * (`synthesis-queries.ts` marks both ends `contested`). Absent on every other node type and on
+   * a conclusion nothing competes with. It is a property of the reading rather than of the pack,
+   * so it reaches the pack whether or not the competing reading also did.
+   */
+  readonly contested?: true;
 };
 
 export type ScoredSeedCandidate = SeedCandidate & {
@@ -154,6 +168,11 @@ export function candidateProjection(nodeVar: string, fragment: ReadFragment): st
     `${nodeVar}.rationale AS why`,
     // 'MENTIONS' mirrors `entity-mention-queries.ts`'s `ENTITY_MENTION_TYPE`, inlined here to avoid an import cycle back into that module.
     `COUNT { MATCH (ep:Episode)-[:MENTIONS]->(${nodeVar}) WHERE ${currentOnly('ep')} } AS mention_count`,
+    // 'context' and 'standing' mirror `preference-queries.ts`'s `PREFERENCE_CONTEXT_PROPERTY` and
+    // `synthesis-queries.ts`'s `SYNTHESIS_STANDING_PROPERTY`, inlined for the reason above. Each
+    // reads null on every node type that never carries it.
+    `${nodeVar}.context AS context`,
+    `${nodeVar}.standing AS standing`,
     fragment.projection,
   ].join(', ');
 }
@@ -162,7 +181,7 @@ export function candidateProjection(nodeVar: string, fragment: ReadFragment): st
 export function mapCandidate(row: Row): SeedCandidate {
   const occurredAt = row.occurred_at;
   const sourceEpisodeId = row.source_episode_id;
-  const { why } = row;
+  const { why, context } = row;
   const mentionCount = (row.mention_count as number | null) ?? 0;
   return {
     id: row.id as string,
@@ -173,6 +192,8 @@ export function mapCandidate(row: Row): SeedCandidate {
     ...(typeof sourceEpisodeId === 'string' ? { sourceEpisodeId } : {}),
     ...(typeof why === 'string' && why.trim().length > 0 ? { why } : {}),
     ...(mentionCount > 0 ? { mentionCount } : {}),
+    ...(typeof context === 'string' && context.trim().length > 0 ? { context } : {}),
+    ...(row.standing === 'contested' ? { contested: true as const } : {}),
     ...readCurrencyAnnotation(row),
   };
 }

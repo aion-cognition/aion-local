@@ -27,8 +27,8 @@ import {
 import { openLogger } from '../../../infrastructure/logging/logger.js';
 import type { Provider, Vector } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
-import { cliqueDiscount } from '../../../plasticity/domain/reinforcement.js';
 import { SessionManager } from '../../../session/session-manager.js';
+import { coOccurrenceBirthStrength, coOccurringPairs } from '../../domain/associations.js';
 import type { StageContext, StageOutcome } from '../../domain/stage.js';
 import { PIPELINE_VERSION } from '../../domain/version.js';
 import { directIntakePublisher } from '../../test-support/direct-intake.fixture.js';
@@ -210,9 +210,15 @@ describe('co-occurrence', () => {
     const widePair = pairs.find((pair) => pair.a === 'W1' && pair.b === 'W2');
     const focusedPair = pairs.find((pair) => pair.a === 'F1' && pair.b === 'F2');
 
-    // One node's worth of evidence split across the four partners a five-entity episode gave
-    // each of them, against the whole of it for the only pair a two-entity episode names.
-    expect(widePair?.strength).toBeCloseTo(cliqueDiscount(wideNames.length), 10);
+    // The episode's one observation split across the ten pairs a five-entity episode minted,
+    // which lands under the floor and plateaus on it, against the whole of that observation for
+    // the only pair a two-entity episode names.
+    const wideBirth = coOccurrenceBirthStrength(
+      coOccurringPairs(wideNames).length,
+      DEFAULTS.hebbian.weightFloor,
+    );
+    expect(wideBirth).toBe(DEFAULTS.hebbian.weightFloor);
+    expect(widePair?.strength).toBeCloseTo(wideBirth, 10);
     expect(focusedPair?.strength).toBe(1);
 
     // Saying it again closes part of the remaining gap rather than jumping to the ceiling.
@@ -225,8 +231,7 @@ describe('co-occurrence', () => {
     const grown = (await coOccurrencePairs(harness.driver)).find(
       (pair) => pair.a === 'W1' && pair.b === 'W2',
     );
-    const eta = cliqueDiscount(wideNames.length);
-    expect(grown?.strength).toBeCloseTo(eta + eta * (1 - eta), 10);
+    expect(grown?.strength).toBeCloseTo(wideBirth + wideBirth * (1 - wideBirth), 10);
     expect(grown?.strength).toBeLessThan(1);
   }, 180_000);
 
@@ -248,7 +253,10 @@ describe('co-occurrence', () => {
     const faded = (await coOccurrencePairs(harness.driver)).find(
       (pair) => pair.a === 'D1' && pair.b === 'D2',
     );
-    const eta = cliqueDiscount(3);
+    const eta = coOccurrenceBirthStrength(
+      coOccurringPairs(['D1', 'D2', 'D3']).length,
+      DEFAULTS.hebbian.weightFloor,
+    );
     expect(faded?.strength).toBeCloseTo(0.2 + eta * (1 - 0.2), 10);
   }, 180_000);
 });

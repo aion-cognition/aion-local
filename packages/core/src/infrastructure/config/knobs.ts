@@ -313,6 +313,13 @@ export const KNOBS = {
     decaySigma: ['AION_HEBBIAN_DECAY_SIGMA', positive, 15],
     batchSize: ['AION_HEBBIAN_BATCH_SIZE', positiveInt, 100],
     flushCeiling: ['AION_HEBBIAN_FLUSH_CEILING', positiveInt, 2_000],
+    // How long a reinforcement signal waits for the first batch that could claim it. Five
+    // seconds is the paper's cadence, run on the existing batch machinery rather than beside
+    // it: the flush already drains toward `flushCeiling` in `batchSize` batches, so this is
+    // the wait before the first of those and not a second bound on the work. It is a cadence
+    // and not a guarantee, since no bounded drain empties a queue arrival outruns; the queue's
+    // own rolling cap and its dropped counter are what say when that happens.
+    drainIntervalMs: ['AION_HEBBIAN_DRAIN_INTERVAL_MS', positiveInt, 5_000],
     decayScanFraction: ['AION_HEBBIAN_DECAY_SCAN_FRACTION', proportion, 0.15],
   },
   contextResonance: {
@@ -372,8 +379,8 @@ export const KNOBS = {
   temporal: TEMPORAL_KNOBS,
   sqlite: {
     path: [SQLITE_PATH_ENV_VAR, text, DEFAULT_SQLITE_PATH],
-    // Rows past this are dropped oldest-first at enqueue. The plasticity flush drains the table
-    // on the introspector's cadence, so the cap bounds what accumulates between two flushes.
+    // Rows past this are dropped oldest-first at enqueue. The drain empties the table on its own
+    // cadence (`hebbian.drainIntervalMs`), so the cap bounds what accumulates between two drains.
 
     reinforcementQueueCap: [
       'AION_REINFORCEMENT_QUEUE_CAP',

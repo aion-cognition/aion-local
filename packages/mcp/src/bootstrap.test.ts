@@ -13,6 +13,12 @@ import {
   semanticRelationshipOptions,
   supersessionOptions,
   SupersessionStage,
+  preferenceOptions,
+  PreferenceInferenceStage,
+  PREFERENCE_STAGE_NAME,
+  ReflectiveSynthesisStage,
+  SYNTHESIS_STAGE_NAME,
+  synthesisOptions,
   type Config,
   type Logger,
   type Provider,
@@ -49,6 +55,9 @@ const configured: Config = {
   ...DEFAULTS,
   anthropic: { ...DEFAULTS.anthropic, model: 'wiring-probe-model' },
   hebbian: { ...DEFAULTS.hebbian, weightFloor: 0.13 },
+  // The preferences producer reads the serving cap, so the fixture has to move it too or the
+  // assertion below passes on the stage's own constructor default.
+  recall: { ...DEFAULTS.recall, maxPreferences: 4 },
   sqlite: { ...DEFAULTS.sqlite, reinforcementQueueCap: 4_242 },
   temporal: { ...DEFAULTS.temporal, readingHorizonDays: 31, intentionHorizonDays: 33 },
   operational: {
@@ -89,6 +98,11 @@ const configured: Config = {
     keyedNarrativeSentences: 13,
     keyedNarrativeEpisodeChars: 4_100,
     narrativeSweepLimit: 21,
+    maxSynthesisConclusions: 4,
+    synthesisNeighbourThreshold: 0.77,
+    maxSynthesisNeighbours: 5,
+    maxPreferenceSignals: 25,
+    maxStandingPreferences: 13,
   },
 };
 
@@ -135,6 +149,8 @@ describe('reflectionStages', () => {
       'cognitive',
       'semantic-relationships',
       'supersession',
+      SYNTHESIS_STAGE_NAME,
+      PREFERENCE_STAGE_NAME,
       'reinforcement',
       'context-vectors',
       NARRATIVE_STAGE_NAME,
@@ -226,6 +242,39 @@ describe('reflectionStages', () => {
     expect(reinforcementOptions(configured)).toEqual({
       reinforcementQueueCap: configured.sqlite.reinforcementQueueCap,
     });
+  });
+
+  it('gives synthesis the configured model, hang guard, cap and neighbourhood bounds', () => {
+    const synthesis = stageOfType(
+      stages,
+      (stage): stage is ReflectiveSynthesisStage => stage instanceof ReflectiveSynthesisStage,
+    );
+
+    expect(synthesis.describe()).toEqual({
+      model: configured.anthropic.model,
+      timeoutMs: configured.reflection.stageTimeoutMs,
+      maxConclusions: configured.reflection.maxSynthesisConclusions,
+      neighbourThreshold: configured.reflection.synthesisNeighbourThreshold,
+      maxNeighbours: configured.reflection.maxSynthesisNeighbours,
+    });
+    expect(synthesisOptions(configured)).toEqual(synthesis.describe());
+  });
+
+  it('gives preference inference the serving cap and its own input bounds', () => {
+    const preferences = stageOfType(
+      stages,
+      (stage): stage is PreferenceInferenceStage => stage instanceof PreferenceInferenceStage,
+    );
+
+    expect(preferences.describe()).toEqual({
+      model: configured.anthropic.model,
+      timeoutMs: configured.reflection.stageTimeoutMs,
+      maxPreferences: configured.recall.maxPreferences,
+      maxSignals: configured.reflection.maxPreferenceSignals,
+      maxStanding: configured.reflection.maxStandingPreferences,
+      minExtractionChars: configured.reflection.minExtractionChars,
+    });
+    expect(preferenceOptions(configured)).toEqual(preferences.describe());
   });
 });
 

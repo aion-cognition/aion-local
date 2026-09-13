@@ -1,23 +1,15 @@
 /** The rewrite of one entity's gloss from the mentions it has collected since. */
 
-const FRESHNESS_LOCAL = [
-  "You maintain one entity's description in a personal memory system.",
-  'You are given the description written when the entity was first mentioned, and episodes',
-  'that have mentioned it since, most recent first.',
-  'Write an updated description in one to two sentences that folds in anything the newer',
-  'episodes add. State only what the current description or the episodes state; never invent',
-  'a fact, cause, or relationship none of them contain.',
-  'If the newer episodes add nothing worth keeping, answer with the current description',
-  'unchanged.',
-].join(' ');
-
 /**
- * The keyed route asks for more rather than for the same gloss in different words. Recall renders
- * a description whenever the entity is in the pack, so the connections the episodes state are the
- * part worth carrying, and a remote model holding the whole mention set can name them where the
- * small one drops them. Every containment rule is the local text's, word for word.
+ * It asks for the connections as well as the gloss. Recall renders a description whenever the
+ * entity is in the pack, so the relationships the episodes state are the part worth carrying, and
+ * a model holding the whole mention set can name them.
+ *
+ * A second, shorter text stood beside this one until the local generation route was removed. It
+ * asked for one to two sentences and named no connections, and nothing could reach it: every
+ * provider the service builds routes to the one remote model.
  */
-const FRESHNESS_KEYED = [
+const FRESHNESS = [
   "You maintain one entity's description in a personal memory system.",
   'You are given the description written when the entity was first mentioned, and episodes',
   'that have mentioned it since, most recent first.',
@@ -31,14 +23,11 @@ const FRESHNESS_KEYED = [
   'unchanged.',
 ].join(' ');
 
-export const LOCAL = FRESHNESS_LOCAL;
-export const KEYED = FRESHNESS_KEYED;
+export const FRESHNESS_PROMPT = FRESHNESS;
 
 /**
- * The answer budget belongs beside the words that set it: the keyed text asks for three to four
- * sentences naming connections, so it needs room the one-to-two-sentence text does not. Not a
- * knob, because an operator lowering it would only truncate an answer the prompt already asked
- * for.
+ * The answer budget belongs beside the words that set it: the text asks for three to four
+ * sentences naming connections, so it needs the room for one. Not a knob, because an operator
+ * lowering it would only truncate an answer the prompt already asked for.
  */
-export const LOCAL_MAX_TOKENS = 300;
-export const KEYED_MAX_TOKENS = 450;
+export const MAX_TOKENS = 450;

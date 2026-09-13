@@ -10,7 +10,7 @@ import {
 import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Vector } from '../../../infrastructure/providers/types.js';
 import { markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
-import { LOCAL as SYSTEM_PROMPT } from '../../../prompts/curiosity.js';
+import { QUESTION_PROMPT as SYSTEM_PROMPT } from '../../../prompts/curiosity.js';
 import {
   derivedNode,
   owesBirthEstablishment,

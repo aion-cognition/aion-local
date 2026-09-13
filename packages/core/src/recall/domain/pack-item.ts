@@ -38,6 +38,13 @@ export const MAX_WHY_CHARS = 220;
 /** A claim is one extracted sentence, so it is capped where a stored why is, and for the same reason. */
 export const MAX_RELATED_CLAIM_CHARS = 220;
 
+/**
+ * The prompt asks a contextual preference to name its situation in a clause, so this cap guards
+ * the rare long one. It is never dropped instead of cut: the condition is part of the preference,
+ * and a preference served without it reads as one that holds everywhere.
+ */
+export const MAX_CONTEXT_CHARS = 220;
+
 function capText(text: string, limit: number): string {
   if (text.length <= limit) {
     return text;
@@ -145,6 +152,7 @@ export function toPackItem(
           },
         }),
     ...(item.why === undefined ? {} : { why: capText(item.why, MAX_WHY_CHARS) }),
+    ...(item.context === undefined ? {} : { context: capText(item.context, MAX_CONTEXT_CHARS) }),
     currency: item.currency,
     ...(item.supersededBy === undefined
       ? {}
@@ -192,6 +200,12 @@ const STANDING_PHRASES: Readonly<Record<StandingKind, string>> = {
   extracted_interpretation: 'inferred',
   synthesized: 'summarized',
   stated_description: 'described',
+  drawn_conclusion: 'concluded',
+  // The same word an extracted interpretation prints. The two are separate kinds on the wire,
+  // where an inspection can tell them apart, and one word in the pack, where the Preferences
+  // heading above the item already supplies the noun and a second legend entry would cost every
+  // pack ever assembled a few tokens to say what the heading says.
+  inferred_preference: 'inferred',
 };
 
 /**
@@ -203,23 +217,31 @@ const STANDING_PHRASES: Readonly<Record<StandingKind, string>> = {
  * item line to carry only the departures from it: a recorded role, or a confirmation.
  */
 export const STANDING_LEGEND =
-  'standing: said, decided, inferred, captured, summarized, described.' +
+  'standing: said, decided, inferred, captured, summarized, described, concluded.' +
   ' Authorship is unattributed unless a line names a role or a confirmation.';
 
 /**
- * The kind, and what the substrate can say about who stands behind it.
+ * The kind, what the substrate can say about who stands behind it, and whether it stands alone.
  *
  * Only an utterance carries a role, so the authorship clause prints exactly there: the role
  * verbatim, then "authorship unknown", because the role is a label the calling client set and
- * agent-to-agent traffic arrives under `user`. An attributed item says nothing here: its
+ * agent-to-agent traffic arrives under `user`. An attributed item says nothing there: its
  * confirmation line below names the confirmer and cites the evidence.
+ *
+ * The contest prints on the item and not once in the legend, because it is true of this reading
+ * rather than of the vocabulary: a pack may serve one contested conclusion beside a dozen sole
+ * ones, and a legend entry would say it of all of them.
  */
 function renderStanding(standing: Standing): string {
   const kind = STANDING_PHRASES[standing.kind];
+  const contest =
+    standing.contested === true
+      ? ', contested: a competing reading of the same memories stands'
+      : '';
   if (standing.attribution === 'attributed' || standing.recorded_role === undefined) {
-    return kind;
+    return `${kind}${contest}`;
   }
-  return `${kind}, role ${standing.recorded_role}, authorship unknown`;
+  return `${kind}, role ${standing.recorded_role}, authorship unknown${contest}`;
 }
 
 /**
@@ -248,11 +270,14 @@ function renderDerivation(derivation: Derivation): string {
 }
 
 /**
- * Content on its own line, then the node's own reason when it stored one, then one line of
- * provenance: id, the method that found it, the rule that admitted it with the evidence that
- * qualified, the path for an activated item, and the lineage marker for a superseded one. The
- * marker belongs wherever superseded knowledge surfaces, so it is part of the rendered block
- * and not only of the structured item.
+ * Content on its own line, then the condition a contextual preference holds under, then the
+ * node's own reason when it stored one, then one line of provenance: id, the method that found
+ * it, the rule that admitted it with the evidence that qualified, the path for an activated item,
+ * and the lineage marker for a superseded one. The marker belongs wherever superseded knowledge
+ * surfaces, so it is part of the rendered block and not only of the structured item.
+ *
+ * The condition sits directly under the sentence it narrows, because the two are one statement
+ * and a reader who acts on the first line alone has acted outside it.
  *
  * An aged-out reading is marked too, and it needs its own word: nothing superseded it, so it
  * has no lineage line, and the reading beside its occurrence date is otherwise indistinguishable
@@ -302,6 +327,7 @@ export function renderItem(entry: PackEntry): string {
     facts.push('expired');
   }
   const why = item.why === undefined ? '' : `\n   why: ${item.why}`;
+  const held = item.context === undefined ? '' : `\n   holds when: ${item.context}`;
   const confirmed =
     item.standing?.confirmed === undefined
       ? ''
@@ -318,7 +344,7 @@ export function renderItem(entry: PackEntry): string {
       ? ''
       : `\n   current related claim: ${item.related_claim.text} [${item.related_claim.id}]`;
   return (
-    `${String(item.rank)}. ${item.content}${why}\n   ${facts.join(' | ')}` +
+    `${String(item.rank)}. ${item.content}${held}${why}\n   ${facts.join(' | ')}` +
     `${confirmed}${correction}${derivation}${related}`
   );
 }

@@ -59,6 +59,14 @@ export type ApiCall = {
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly cacheCreationTokens: number;
+  /**
+   * The five-minute and hour-long shares of `cacheCreationTokens`, inside that total rather than
+   * beside it. Present only where the response reported the breakdown; absent leaves the split
+   * unknown and prices the aggregate at the five-minute rate, which is the class a request
+   * without a marked hour-long prefix writes.
+   */
+  readonly cacheCreation5mTokens?: number;
+  readonly cacheCreation1hTokens?: number;
   readonly cacheReadTokens: number;
   /**
    * The share of `outputTokens` the model spent reasoning. Inside the output count rather than

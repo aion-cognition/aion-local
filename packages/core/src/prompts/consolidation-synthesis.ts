@@ -40,11 +40,8 @@ const REVIEW = [
   'result reads.',
 ].join(' ');
 
-export const ROLLUP_LOCAL = rollup;
-export const ROLLUP_KEYED = rollup;
+export const ROLLUP_PROMPT = rollup;
 
-export const SUBJECT_LOCAL = subjectAxis;
-export const SUBJECT_KEYED = subjectAxis;
+export const SUBJECT_PROMPT = subjectAxis;
 
-export const REVIEW_LOCAL = REVIEW;
-export const REVIEW_KEYED = REVIEW;
+export const REVIEW_PROMPT = REVIEW;

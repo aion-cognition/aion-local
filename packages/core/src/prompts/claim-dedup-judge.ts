@@ -23,8 +23,6 @@ const REVIEW = [
   'have relied on.',
 ].join(' ');
 
-export const DETECT_LOCAL = DETECT;
-export const DETECT_KEYED = DETECT;
+export const DETECT_PROMPT = DETECT;
 
-export const REVIEW_LOCAL = REVIEW;
-export const REVIEW_KEYED = REVIEW;
+export const REVIEW_PROMPT = REVIEW;

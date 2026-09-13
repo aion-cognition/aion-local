@@ -9,8 +9,11 @@ import type { ApiCall } from './types.js';
  * docs: a marked prefix over the floor is written once and read back on the next identical call,
  * and a prefix under it caches nothing whatever the marker says.
  *
- * The long prefix here is a test probe. Nothing in `prompts/` is padded to reach the floor, and
- * the measurement that says none of them do is `prompts/prompt-prefix-size.test.ts`.
+ * The marked prefix is the shared frame, which is the only block the composition marks: a task
+ * block differs per surface and would write an entry per surface for a prefix read once. So the
+ * probe overrides the frame rather than lengthening the task text. The long frame here is a test
+ * probe; neither shipped rendering is padded to reach the floor, and the measurement that says so
+ * is `prompts/frame-size.int.test.ts`.
  */
 
 const API_KEY = (process.env.AION_ANTHROPIC_API_KEY ?? '').trim();
@@ -43,11 +46,12 @@ const SCHEMA = {
   required: ['answer'],
 };
 
-async function callTwice(system: string): Promise<readonly ApiCall[]> {
+async function callTwice(frame?: string): Promise<readonly ApiCall[]> {
   const calls: ApiCall[] = [];
   const provider = new AnthropicProvider({
     apiKey: API_KEY,
     model: MODEL,
+    ...(frame === undefined ? {} : { frameOverride: { text: frame } }),
     recordApiCall: (call) => calls.push(call),
   });
   for (const question of ['Answer with the word one.', 'Answer with the word two.']) {
@@ -55,7 +59,7 @@ async function callTwice(system: string): Promise<readonly ApiCall[]> {
       surface: 'cache-probe',
       model: MODEL,
       messages: [
-        { role: 'system', content: system },
+        { role: 'system', content: 'You answer with one word and nothing else.' },
         { role: 'user', content: question },
       ],
       schema: SCHEMA,
@@ -84,13 +88,13 @@ describe.skipIf(API_KEY === '')('prompt caching against the live API', () => {
     const accounted = calls.map((call) => call.cacheCreationTokens + call.cacheReadTokens);
     expect(accounted[1]).toBe(accounted[0]);
     // The cached tokens replace the ordinary input charge rather than adding to it, so the
-    // uncached input is the question alone. Measured 2026-09-13: a 4,315-token prefix written
-    // once and read back, against 12 uncached input tokens a call.
-    expect(calls[1]?.inputTokens).toBeLessThan(100);
+    // uncached input is what sits behind the breakpoint: the task block, its schema instruction
+    // and the question. A few hundred tokens against a prefix over four thousand.
+    expect(calls[1]?.inputTokens).toBeLessThan(400);
   }, 120_000);
 
-  it('caches nothing for a prefix under the floor, which is every shipped surface', async () => {
-    const calls = await callTwice('You answer with one word and nothing else.');
+  it('caches nothing under the shipped frame, which does not reach the floor', async () => {
+    const calls = await callTwice();
 
     expect(calls).toHaveLength(2);
     expect(calls.map((call) => call.cacheCreationTokens)).toEqual([0, 0]);

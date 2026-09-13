@@ -59,6 +59,8 @@ export type SpendHoldRequest = {
    * what every request this workspace builds is (`anthropic-cache.ts`).
    */
   readonly cacheWrite?: boolean;
+  /** Which write rate a marked prefix bills at. Absent reads as the five-minute default. */
+  readonly cacheWriteTtl?: '5m' | '1h';
   readonly now: Date;
 };
 
@@ -119,6 +121,7 @@ export class GenerationSpendGuard implements SpendingGuard {
       outputTokens: request.outputTokens,
       pricingTier: tierFor(request.route),
       cacheWrite: request.cacheWrite === true,
+      ...(request.cacheWriteTtl === undefined ? {} : { cacheWriteTtl: request.cacheWriteTtl }),
     });
     const outcome = reserveGenerationSpend(this.#db, {
       surface: request.surface,

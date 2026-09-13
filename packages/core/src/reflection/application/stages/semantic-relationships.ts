@@ -16,7 +16,7 @@ import {
 } from '../../../infrastructure/graph/semantic-relationship-queries.js';
 import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema } from '../../../infrastructure/providers/types.js';
-import { LOCAL as SYSTEM_PROMPT } from '../../../prompts/semantic-relationships.js';
+import { RELATIONSHIPS_PROMPT as SYSTEM_PROMPT } from '../../../prompts/semantic-relationships.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
 
 /**

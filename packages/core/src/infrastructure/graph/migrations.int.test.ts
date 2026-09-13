@@ -34,6 +34,7 @@ const EXPECTED_CONSTRAINTS = [
   { name: 'narrative_id_unique', labelsOrTypes: ['Narrative'], properties: ['id'] },
   { name: 'pattern_id_unique', labelsOrTypes: ['Pattern'], properties: ['id'] },
   { name: 'plan_id_unique', labelsOrTypes: ['Plan'], properties: ['id'] },
+  { name: 'preference_id_unique', labelsOrTypes: ['Preference'], properties: ['id'] },
   {
     name: 'publication_guard_substrate_id_unique',
     labelsOrTypes: ['PublicationGuard'],
@@ -41,6 +42,7 @@ const EXPECTED_CONSTRAINTS = [
   },
   { name: 'session_id_unique', labelsOrTypes: ['Session'], properties: ['id'] },
   { name: 'substrate_id_unique', labelsOrTypes: ['Substrate'], properties: ['id'] },
+  { name: 'synthesis_id_unique', labelsOrTypes: ['Synthesis'], properties: ['id'] },
   { name: 'trend_id_unique', labelsOrTypes: ['Trend'], properties: ['id'] },
   { name: 'turn_id_unique', labelsOrTypes: ['Turn'], properties: ['id'] },
   { name: 'workspace_id_unique', labelsOrTypes: ['Workspace'], properties: ['id'] },

@@ -8,6 +8,7 @@ import {
 import { ContextVectorStage } from './stages/context-vectors.js';
 import { EntityExtractionStage, type EntityStageOptions } from './stages/entities.js';
 import { EntityDedupStage, type EntityDedupStageOptions } from './stages/entity-dedup.js';
+import { PreferenceInferenceStage, type PreferenceStageOptions } from './stages/preferences.js';
 import {
   ReinforcementEnqueueStage,
   type ReinforcementEnqueueStageOptions,
@@ -17,6 +18,7 @@ import {
   type SemanticRelationshipStageOptions,
 } from './stages/semantic-relationships.js';
 import { SupersessionStage, type SupersessionStageOptions } from './stages/supersession.js';
+import { ReflectiveSynthesisStage, type SynthesisStageOptions } from './stages/synthesis.js';
 import type { ReflectionWorkerOptions } from './worker.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import type { ReflectionStage } from '../domain/stage.js';
@@ -119,6 +121,29 @@ export function supersessionOptions(config: Config): SupersessionStageOptions {
   };
 }
 
+export function synthesisOptions(config: Config): SynthesisStageOptions {
+  return {
+    model: config.anthropic.model,
+    timeoutMs: config.reflection.stageTimeoutMs,
+    maxConclusions: config.reflection.maxSynthesisConclusions,
+    neighbourThreshold: config.reflection.synthesisNeighbourThreshold,
+    maxNeighbours: config.reflection.maxSynthesisNeighbours,
+  };
+}
+
+export function preferenceOptions(config: Config): PreferenceStageOptions {
+  return {
+    model: config.anthropic.model,
+    timeoutMs: config.reflection.stageTimeoutMs,
+    // The serving cap, threaded from where it is declared: a deployment that widened the bucket
+    // would otherwise find the producer still writing three.
+    maxPreferences: config.recall.maxPreferences,
+    maxSignals: config.reflection.maxPreferenceSignals,
+    maxStanding: config.reflection.maxStandingPreferences,
+    minExtractionChars: config.reflection.minExtractionChars,
+  };
+}
+
 export function reinforcementOptions(config: Config): Required<ReinforcementEnqueueStageOptions> {
   return { reinforcementQueueCap: config.sqlite.reinforcementQueueCap };
 }
@@ -160,8 +185,11 @@ export function workerOptions(config: Config): Required<Omit<ReflectionWorkerOpt
  * it: extraction, then deduplication, because a later stage that pairs, links, or judges
  * duplicate entities writes the duplication into the graph as structure. Supersession
  * follows cognitive extraction, since the facts it judges are the Decision and Insight nodes
- * that stage writes. Context vectors run last: they aggregate over whatever the rest of the
- * run just changed.
+ * that stage writes. Synthesis follows supersession, so the conclusions it draws are drawn over
+ * claims whose currency this run has already settled. Context vectors run after it, which is
+ * what makes a fresh conclusion a resonant citizen rather than a node that can never acquire a
+ * context vector. Context vectors run last: they aggregate over whatever the rest of the run
+ * just changed.
  *
  * Narrative evaluation is last. It carries the idle rule rather than the close: a session
  * whose episodes are reflecting seconds after they arrived is still open, and the stage
@@ -180,6 +208,8 @@ export function reflectionStages(config: Config): readonly ReflectionStage[] {
     new CognitiveExtractionStage(cognitiveOptions(config)),
     new SemanticRelationshipStage(semanticRelationshipOptions(config)),
     new SupersessionStage(supersessionOptions(config)),
+    new ReflectiveSynthesisStage(synthesisOptions(config)),
+    new PreferenceInferenceStage(preferenceOptions(config)),
     new ReinforcementEnqueueStage(reinforcementOptions(config)),
     new ContextVectorStage(),
     new SessionNarrativeStage(narrativeOptions(config)),

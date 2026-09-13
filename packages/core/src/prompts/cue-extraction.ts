@@ -39,5 +39,4 @@ const CUES =
   'choice that was already made, even though the question opens with "why". ' +
   'Judge the query alone: the summary never changes this answer.';
 
-export const LOCAL = CUES;
-export const KEYED = CUES;
+export const CUES_PROMPT = CUES;

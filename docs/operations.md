@@ -141,7 +141,8 @@ The thinking column is a share of the output column, not an addition to it. The 
 reasoning as output, so a total that sums the two counts it twice. It says how much of the output
 bill was the model reasoning before it answered, which is the number that moves when
 `AION_ANTHROPIC_THINKING_BUDGET_TOKENS` changes. Only surfaces that ask to reason spend it:
-today that is `tier3_advisor` and `symbiosis_bridge`. Measured 2026-09-13 against Haiku 4.5, one
+today that is `tier3_advisor`, `symbiosis_bridge` and `synthesis`, which is the one enrichment
+stage whose whole question is what several memories add up to. Measured 2026-09-13 against Haiku 4.5, one
 tier-3 advisor call read 774 input tokens and wrote 916 output, 794 of which were reasoning.
 Not every response reports the breakdown. Where one carried no reasoning share, the row stores
 the input and output totals it did report and leaves that share out, because zero is what a call
@@ -167,15 +168,28 @@ because one unknown row leaves the window's denominator unknown.
 
 A failed ledger write logs `API usage write failed` without retrying the paid generation.
 
-Estimates use the provider price table dated 2026-09-06. For Haiku 4.5, rates per million
-tokens are $1 input, $5 output, $1.25 cache write, and $0.10 cache read. The cache-effectiveness
-line divides read tokens by all input tokens, including newly written and uncached tokens.
-Each group's cache share uses the same denominator.
+Estimates use the provider price table dated 2026-09-06, with the hour-long cache-write rate
+re-read 2026-09-13. For Haiku 4.5, rates per million tokens are $1 input, $5 output, $1.25 for a
+five-minute cache write, $2 for an hour-long one, and $0.10 cache read. The two write classes are
+priced apart because the API bills them apart: a response reports `ephemeral_5m_input_tokens` and
+`ephemeral_1h_input_tokens` inside its write total, and charging that total at one rate is wrong
+by sixty percent on a request written for the hour. A response that carried no breakdown keeps
+the aggregate at the five-minute rate, which is what a request without a marked hour-long prefix
+writes. The cache-effectiveness line divides read tokens by all input tokens, including newly
+written and uncached tokens. Each group's cache share uses the same denominator.
+
+The shared frame every request carries is the one prefix a marker would go on, and it would be
+written for the hour: a five-minute entry pays for itself on the second call and an hour-long one
+on the third, and the gap between two calls of different surfaces is what the frame is shared
+across. Nothing carries the marker today. Measured against Haiku 4.5 with the API's own counting
+endpoint on 2026-09-13, the concise frame is 161 tokens and the full one 372, against a
+4,096-token floor, so the provider leaves the marker off and the day's bound prices those
+requests as ordinary input.
 
 | Control | Default | Effect |
 |---|---|---|
 | `AION_ANTHROPIC_DAILY_CEILING_USD` | `5` | Dollars of generation one UTC day may commit, shared by ordinary Messages calls and batch submissions. Consulted before dispatch, never after. |
-| `AION_ANTHROPIC_PROMPT_CACHE` | `true` | Allows the marker on a system prefix that reaches the API's 4,096-token floor. No shipped surface does, so no shipped call carries it; the provider decides per call rather than marking unconditionally. `false` switches the marker off whatever the length. |
+| `AION_ANTHROPIC_PROMPT_CACHE` | `true` | Allows the marker on the shared frame when it reaches the API's 4,096-token floor. Neither rendering does, so no shipped call carries it; the provider decides per call rather than marking unconditionally. `false` switches the marker off whatever the length. |
 | `AION_CUE_CACHE_TTL_MINUTES` | `30` | Reuses successful cue results in this process for identical generation requests. `0` disables it. The cache holds at most 256 entries. |
 
 ### The daily ceiling
@@ -191,8 +205,10 @@ The reservations are rows in `generation_spend`, so two callers in one process, 
 one process across a restart all read the same committed total, and a batch submitted before a
 restart is still money committed after it. A request that reached the wire and never came back
 with a charge keeps its bound rather than giving it back: a lost response, an abort after the
-remote answered, and a usage block that will not parse are all charges of an unknown size, and
-`aion costs` names how many of them the day is carrying. Only a request that never left the
+remote answered, a usage block that will not parse, and an answer whose usage row could not be
+written are all charges of an unknown size, and `aion costs` names how many of them the day is
+carrying. A batch settles at what its answers were charged only when every answer it settled has
+a bill under its own request identity. Only a request that never left the
 machine is released.
 
 A day that cannot cover the next dispatch refuses it as generation being unavailable, the same
@@ -230,7 +246,9 @@ lives in the `batch_work` table. Four rules hold it:
   sent, rather than costing everyone else in the batch their submission.
 - Every answer is revalidated against the substrate before it is applied. Hours passed, and the
   pair a judgment is about may have merged, been superseded, or been forgotten. A stale answer is
-  discarded and recorded as discarded.
+  discarded and recorded as discarded. Discarding it settles the question with nothing written, so
+  a producer that reads back exactly the inputs that question was asked about reopens the row
+  rather than finding its own work blocked by a terminal key.
 - No remote job holds the publication guard. A handler takes its own publication when the answer
   is in hand.
 
@@ -256,16 +274,19 @@ mentions, builds each request with the same prompt and result schema the inline 
 writes it to `batch_work`; the pump sends them and hands each answer back to the surface's own
 handler.
 
-A question's identity is the entity, the gloss, the baseline, the mention count and the episodes
-the prompt quotes. The evidence is in it deliberately: an answer that changes nothing settles the
-row while leaving the gloss and the baseline where they were, and an identity without the
-mentions would have no question left to ask once new ones arrived.
+A question's identity is the entity, the gloss, the baseline, the mention count, the episodes the
+prompt quotes and what those episodes say. The evidence is in it deliberately: an answer that
+changes nothing settles the row while leaving the gloss and the baseline where they were, and an
+identity without the mentions would have no question left to ask once new ones arrived. The text
+is in it because an episode can be rewritten where it stands, and an id that still reads does not
+say the model read the same sentence.
 
 The handler re-reads the entity and refuses an answer whose gloss or baseline moved while the
-batch was out, or that rests on a source the store has since forgotten. Four surviving mentions
-out of the five the prompt quoted is not the same fact as the question still standing. The gloss
-and those sources then go into the guarded write itself, so a description another pass committed
-while the answer was being embedded keeps the node and the older answer is owed again.
+batch was out, or that rests on a source the store has since forgotten or rewritten. Four
+surviving mentions out of the five the prompt quoted is not the same fact as the question still
+standing. The gloss and those sources are then read and compared again inside the write's own
+transaction, under the entity's lock, so a description another pass committed while the answer
+was being embedded keeps the node and the older answer is owed again.
 
 Foreground cues stay on Messages. A surface that moves its own judgment off the hot path
 registers its handler in `catalog.ts` beside that one.
@@ -512,6 +533,15 @@ else: the batch bounds, the transactions, the protected relationship set and the
 all still hold. It exists because one operation's subject is not proportional. Thirteen leaking
 nodes out of two thousand is a small share to a scoring function and an incident to a person,
 and before this there was no way to say so.
+
+Ordinary reinforcement is the one thing `maintain run reinforcement_flush` no longer schedules
+on its own. The drain has its own five-second cadence inside the service
+(`AION_HEBBIAN_DRAIN_INTERVAL_MS`), and the operation delegates to that same owner rather than
+drawing its own batches: the queue's claim is a read over the oldest bursts rather than an
+exclusive lock, so two drainers would fold one window twice and then both delete it. A manual run
+that arrives while the cadence is mid-drain reports `noop` and says so. Turning the cadence off is
+the switch it has always been, `AION_MAINTENANCE_REINFORCEMENT_FLUSH=false`, and it stops the
+timer and the operation together.
 
 `aion status` prints a `lanes` section: one line per operation that acts on its own between
 ticks (`merge_auto`, `entity_dedup`, `supersession`, `keyed_close`, `proposal_resolution`,
@@ -905,6 +935,29 @@ or one model call. `AION_MAINTENANCE_EPISODE_EVICT_MIN_AGE_MS` (default `8640000
 source's complete coverage must stand before its raw projection may go, measured from recorded
 clocks and never from `occurred_at`. `AION_MAINTENANCE_EPISODE_EVICT_BATCH` (default `8`) bounds
 eviction attempts per invocation, one source each.
+
+Reflective synthesis carries three knobs of its own.
+`AION_REFLECTION_MAX_SYNTHESIS_CONCLUSIONS` (default `3`) bounds what one pass writes over one
+neighbourhood; past it the pass declines the rest rather than truncating quietly, and its summary
+says how many. `AION_REFLECTION_SYNTHESIS_NEIGHBOUR_THRESHOLD` (default `0.75`) is the cosine a
+memory from another episode has to reach to join the neighbourhood, set at the supersession
+judge's own neighbour floor over the same population. `AION_REFLECTION_MAX_SYNTHESIS_NEIGHBOURS`
+(default `4`) caps neighbours per changed memory. The pass reads a neighbourhood once per set of
+premise revisions: a run that concludes nothing records that reading, and the record stops
+covering the neighbourhood the moment any premise in it is revised or a memory joins it.
+
+Preference inference carries two. `AION_REFLECTION_MAX_PREFERENCE_SIGNALS` (default `24`) is how
+many of an episode's lines one pass reads, taken from the end. `AION_REFLECTION_MAX_STANDING_PREFERENCES`
+(default `12`) is how many held preferences it is shown so a revision has something to name; it is
+wider than the three `AION_RECALL_MAX_PREFERENCES` serves, because a preference the pack had no
+room for is still one a later signal can correct. What a pass writes is bounded by the serving cap
+rather than by a knob of its own.
+
+`AION_HEBBIAN_DRAIN_INTERVAL_MS` (default `5000`) is how long a reinforcement signal waits for the
+first batch that could claim it. It is a cadence and not a guarantee: the flush still drains in
+`AION_HEBBIAN_BATCH_SIZE` batches toward `AION_HEBBIAN_FLUSH_CEILING` per run, and no bounded
+drain empties a queue that arrival outruns. `AION_REINFORCEMENT_QUEUE_CAP` and the dropped
+counter `aion status` prints are what say when that happens.
 
 `AION_RECALL_PATH_STRENGTH_SLOTS` (default `2`) bounds the disclosed path-strength lane: how many
 activation-only arrivals with no qualifying cosine and no exact match may still reach a pack, per

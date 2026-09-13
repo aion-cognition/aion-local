@@ -33,11 +33,42 @@ export function prefixReachesCacheFloor(prefix: string): boolean {
   return prefix.length >= MIN_CACHEABLE_PREFIX_CHARS;
 }
 
+/**
+ * How long a written cache entry lives. Five minutes is the API default and costs 1.25x ordinary
+ * input to write; an hour costs 2x and needs three reads rather than two to pay for itself. A
+ * block written for the hour must appear before any block written for five minutes.
+ */
+export type CacheTtl = '5m' | '1h';
+
+export type CacheControl = {
+  readonly type: 'ephemeral';
+  /** Omitted for the API's own default of five minutes. */
+  readonly ttl?: CacheTtl;
+};
+
 export type SystemBlock = {
   readonly type: 'text';
   readonly text: string;
-  readonly cache_control?: { readonly type: 'ephemeral' };
+  readonly cache_control?: CacheControl;
 };
+
+/**
+ * The marker a block carries, or nothing, spread onto the block by its caller.
+ *
+ * Attached only where the prefix reaches the floor, for the reason the module opens with: the
+ * API accepts a marker on a shorter prefix and then ignores it, so a request that carried one
+ * would look cached and bill as though it were not.
+ */
+export function cacheControlFor(
+  prefix: string,
+  promptCache: boolean,
+  ttl: CacheTtl,
+): { readonly cache_control?: CacheControl } {
+  if (!promptCache || !prefixReachesCacheFloor(prefix)) {
+    return {};
+  }
+  return { cache_control: ttl === '5m' ? { type: 'ephemeral' } : { type: 'ephemeral', ttl } };
+}
 
 /**
  * The `system` field for one call: the plain string when nothing is being cached, and a single

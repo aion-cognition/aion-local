@@ -15,9 +15,9 @@ import {
 import type { RollupScope } from './rollup.js';
 import type { ChatMessage, JsonSchema } from '../../infrastructure/providers/types.js';
 import {
-  REVIEW_LOCAL as REVIEW_SYSTEM_PROMPT,
-  ROLLUP_LOCAL as rollupPrompt,
-  SUBJECT_LOCAL as subjectPrompt,
+  REVIEW_PROMPT as REVIEW_SYSTEM_PROMPT,
+  ROLLUP_PROMPT as rollupPrompt,
+  SUBJECT_PROMPT as subjectPrompt,
 } from '../../prompts/consolidation-synthesis.js';
 
 /**

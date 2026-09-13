@@ -6,7 +6,7 @@ import { errorMessage } from '../../infrastructure/errors.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import { deadlineFor } from '../../infrastructure/providers/deadline-signal.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../infrastructure/providers/types.js';
-import { ADVICE_LOCAL as ADVICE_SYSTEM_PROMPT } from '../../prompts/tier3-advisor.js';
+import { ADVICE_PROMPT as ADVICE_SYSTEM_PROMPT } from '../../prompts/tier3-advisor.js';
 import { describeEffectiveness, type OperationCandidate } from '../domain/decide.js';
 import type { HealthSnapshot, OperationEffectiveness } from '../domain/health.js';
 import type { Tier3Advisor, Tier3Outcome, Tier3Request } from '../domain/tier3.js';

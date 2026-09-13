@@ -18,6 +18,8 @@ export type BatchWorkItem = {
   /** What the substrate looked like where the request was built, read back at apply time. */
   readonly revalidation: unknown;
   readonly request: unknown;
+  /** The shared frame version the request was assembled under, where the producer recorded one. */
+  readonly frameVersion: string | undefined;
   readonly state: BatchWorkState;
   readonly batchId: string | undefined;
   /** The day's spending hold the submission took, so the answers can reconcile it. */
@@ -36,6 +38,7 @@ type Row = {
   surface: string;
   revalidation_json: string;
   request_json: string;
+  frame_version: string | null;
   state: string;
   batch_id: string | null;
   reservation_id: string | null;
@@ -54,6 +57,7 @@ function toItem(row: Row): BatchWorkItem {
     surface: row.surface,
     revalidation: JSON.parse(row.revalidation_json) as unknown,
     request: JSON.parse(row.request_json) as unknown,
+    frameVersion: row.frame_version ?? undefined,
     state: row.state as BatchWorkState,
     batchId: row.batch_id ?? undefined,
     reservationId: row.reservation_id ?? undefined,
@@ -77,6 +81,14 @@ export type EnqueueBatchWork = {
   readonly surface: string;
   readonly revalidation: unknown;
   readonly request: unknown;
+  /**
+   * The frame version the request was assembled under, recorded beside it.
+   *
+   * An outstanding request is never rebuilt: the stored body is what is submitted, so the frame
+   * it carries is the frame it was written with whatever the release has moved on to. This is
+   * the version as a column so a reader can say which one that was without parsing the body.
+   */
+  readonly frameVersion?: string;
   readonly now: Date;
 };
 
@@ -91,9 +103,9 @@ export function enqueueBatchWork(db: SqliteHandle, work: EnqueueBatchWork): bool
   const result = db
     .prepare(
       `INSERT INTO batch_work
-         (work_key, durable_key, substrate_id, surface, revalidation_json, request_json, state,
-          enqueued_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
+         (work_key, durable_key, substrate_id, surface, revalidation_json, request_json,
+          frame_version, state, enqueued_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
        ON CONFLICT(work_key) DO NOTHING`,
     )
     .run(
@@ -103,6 +115,7 @@ export function enqueueBatchWork(db: SqliteHandle, work: EnqueueBatchWork): bool
       work.surface,
       JSON.stringify(work.revalidation),
       JSON.stringify(work.request),
+      work.frameVersion ?? null,
       work.now.toISOString(),
     );
   return result.changes > 0;
@@ -151,6 +164,24 @@ export function submittedBatchWork(db: SqliteHandle, batchId: string): readonly 
     .prepare(`SELECT * FROM batch_work WHERE batch_id = ? AND state = 'submitted'`)
     .all(batchId) as Row[];
   return rows.map(toItem);
+}
+
+/**
+ * The keys this batch has already settled, whatever became of them.
+ *
+ * Each of them reached a terminal state because an answer for it came back, so each of them is a
+ * charge the remote made. That is what an accounting check reads: a row settled with no bill
+ * against its request identity is money nobody has written down, not money nobody spent.
+ */
+export function settledBatchWorkKeys(db: SqliteHandle, batchId: string): readonly string[] {
+  const rows = db
+    .prepare(
+      `SELECT work_key FROM batch_work
+       WHERE batch_id = ? AND state IN ('applied', 'discarded', 'failed')
+       ORDER BY work_key`,
+    )
+    .all(batchId) as { work_key: string }[];
+  return rows.map((row) => row.work_key);
 }
 
 /**
@@ -203,6 +234,34 @@ export function returnBatchWork(
          last_error = ?, settled_at = ?
      WHERE work_key = ?`,
   ).run(reason, now.toISOString(), workKey);
+}
+
+/**
+ * Puts a question the substrate discarded back on the queue.
+ *
+ * Discarding an answer settles the question with nothing written, and the key is derived from the
+ * inputs, so a producer that reads exactly those inputs again finds a terminal row where its work
+ * should be and leaves nothing actionable behind. The premise that moved has moved back: the
+ * caller has just read it. Only a discarded row reopens, and only for the substrate that owns it.
+ * An applied one is answered, and a failed one names a reason that reading the graph again does
+ * not change. The reason it was discarded stays on the row: it is the history of the question,
+ * not a verdict on it.
+ */
+export function reopenDiscardedBatchWork(
+  db: SqliteHandle,
+  workKey: string,
+  substrateId: string,
+  now: Date,
+): boolean {
+  const result = db
+    .prepare(
+      `UPDATE batch_work
+       SET state = 'pending', batch_id = NULL, reservation_id = NULL, submitted_at = NULL,
+           enqueued_at = ?, settled_at = NULL
+       WHERE work_key = ? AND substrate_id = ? AND state = 'discarded'`,
+    )
+    .run(now.toISOString(), workKey, substrateId);
+  return result.changes > 0;
 }
 
 /** A terminal outcome: applied, discarded as stale, or failed for good. */

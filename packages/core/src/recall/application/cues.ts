@@ -12,7 +12,7 @@ import type {
   Provider,
   StructuredRequest,
 } from '../../infrastructure/providers/types.js';
-import { LOCAL as CUE_SYSTEM_PROMPT } from '../../prompts/cue-extraction.js';
+import { CUES_PROMPT as CUE_SYSTEM_PROMPT } from '../../prompts/cue-extraction.js';
 
 /**
  * One model call produces the cues: exactly one `generate` per invocation, which is all the

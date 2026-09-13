@@ -87,6 +87,11 @@ export const ACTIVATION_WEIGHTS: Record<RelationshipType, number> = {
   CO_OCCURS: 0.5,
   ANALOGOUS_TO: 0.45,
 
+  // Two conclusions the same premises support. Held at the tension tier for the same reason
+  // CONTRADICTS is: a reader who gets one reading of the evidence and not the other has been
+  // handed a certainty the substrate does not hold.
+  ALTERNATIVE_TO: 0.7,
+
   // Tension, which is the one semantic type a query almost always wants both ends of: a
   // claim and what argues against it are read together or the pack is misleading. Held at
   // the causal tier for that reason, above every other inferred link (tuned value;

@@ -42,6 +42,16 @@ function sentBody(fetchImpl: ReturnType<typeof vi.fn>, call = 0): Body {
   return JSON.parse(init?.body as string) as Body;
 }
 
+/** The surface's own block: the second one, after the shared frame. */
+function taskBlock(body: Body): string {
+  const system = body.system as readonly { text: string }[] | undefined;
+  const block = system?.[1];
+  if (block === undefined) {
+    throw new Error('expected a task block after the frame');
+  }
+  return block.text;
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -140,10 +150,11 @@ describe('the request the provider sends', () => {
     expect(body.model).toBe('claude-haiku-4-5');
     expect(body.think).toBeUndefined();
     expect(body.output_config).toBeUndefined();
-    // A plain string, not a marked block: this prefix is far under the cache floor, and
+    // Two blocks: the shared frame, then the surface's own text with its schema after it.
+    // Neither is marked, because the frame is far under the cache floor and
     // `anthropic-cache.ts` carries the measurement behind that.
-    expect(body.system).toEqual(expect.stringContaining('you extract entities'));
-    expect(body.system as string).toContain(JSON.stringify(SCHEMA));
+    expect(taskBlock(body)).toContain('you extract entities');
+    expect(taskBlock(body)).toContain(JSON.stringify(SCHEMA));
     // The system message is lifted out; only the conversation turns stay in `messages`.
     expect(body.messages).toEqual([{ role: 'user', content: 'the episode text' }]);
   });
@@ -209,7 +220,7 @@ describe('the reply the provider reads', () => {
       format: { type: 'json_schema', schema: { ...SCHEMA, additionalProperties: false } },
     });
     // The retry constrains the answer, so it stops restating the schema as an instruction.
-    expect(sentBody(fetchImpl, 1).system).toBe('you extract entities');
+    expect(taskBlock(sentBody(fetchImpl, 1))).toBe('you extract entities');
   });
 
   it('closes every nested object on the constrained retry, and leaves one that states its own rule', async () => {
