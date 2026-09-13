@@ -18,6 +18,7 @@ while [ -L "$SELF" ]; do
 done
 REPO_DIR="$(cd -- "$(dirname -- "$SELF")/.." && pwd)"
 CLI_MAIN="$REPO_DIR/packages/cli/dist/main.js"
+MCP_MAIN="$REPO_DIR/packages/mcp/dist/main.js"
 
 if [ ! -f "$CLI_MAIN" ]; then
   echo "aion: $CLI_MAIN is not built; run \`npm ci && npm run build\` in $REPO_DIR" >&2
@@ -36,11 +37,44 @@ if [ -f "$REPO_DIR/.env" ]; then
 fi
 
 AION_GIT_USER_NAME="${AION_GIT_USER_NAME:-$(git -C "$REPO_DIR" config user.name 2>/dev/null || true)}"
-# HEAD is what `doctor` compares against the sha the running server was started with, which is
-# how a service left behind by an older checkout shows up as stale rather than as healthy.
+# HEAD travels two ways here as well: handed to every CLI run (AION_REPO_HEAD_SHA) and written
+# into the launchd job's environment by init (AION_BUILD_SHA), which is what a native install has
+# instead of a sha baked into an image. `doctor` compares the two, so a service left behind by an
+# older checkout shows up as stale rather than as healthy.
 AION_REPO_HEAD_SHA="$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || true)"
 export AION_GIT_USER_NAME AION_REPO_HEAD_SHA
 export AION_REPO_PATH="$REPO_DIR"
+
+# Epoch seconds of the newest tracked source the build consumes. `git ls-files` rather than
+# `find`, so node_modules and the build output never count; the test and fixture files the
+# package tsconfigs exclude are left out too, since editing one changes nothing under dist.
+newest_source_mtime() {
+  git -C "$REPO_DIR" ls-files -z -- \
+      'packages/*/src/*' 'package.json' 'package-lock.json' 'tsconfig*.json' \
+      ':(exclude)*.test.ts' ':(exclude)*.fixture.*' 2>/dev/null |
+    xargs -0 stat -f '%m' 2>/dev/null |
+    sort -rn |
+    head -1
+}
+
+# Whether the two built entry points are what HEAD says they are. `npm run build` is a separate
+# step on this profile, where `bin/aion` rebuilds its image on the way past, so a pull with no
+# build would stamp the job with a sha the running code does not hold and `doctor` would read a
+# stale service as fresh. Unstamped is the honest answer there, and the freshness warning names
+# the build. A machine whose `stat` cannot answer counts as not built, for the same reason.
+build_holds_head() {
+  local built source
+  built="$(stat -f '%m' "$CLI_MAIN" "$MCP_MAIN" 2>/dev/null | sort -n | head -1)"
+  [ -n "$built" ] || return 1
+  source="$(newest_source_mtime)"
+  [ -n "$source" ] || return 1
+  [ "$source" -le "$built" ]
+}
+
+if build_holds_head; then
+  AION_BUILD_SHA="$AION_REPO_HEAD_SHA"
+  export AION_BUILD_SHA
+fi
 
 hooks_installed_in() {
   [ -f "$1" ] && grep -q 'hook-main.js' "$1"

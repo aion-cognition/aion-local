@@ -172,6 +172,17 @@ full-length sha never matches and the service reads stale forever. Any `./bin/ai
 also rebuilds the image, correctly stamped, when sources are newer than it. The recreate is
 still a separate step, and doctor's freshness warning is the reminder.
 
+The native profile has no image, and the same commit reaches its launchd job this way:
+
+```
+npm run build && ./bin/aion-native init --install native
+```
+
+The sha rides in the job's environment, so a new one rewrites the plist and init reloads the
+job; an unchanged plist against a healthy server is a no-op. `bin/aion-native` stamps HEAD only
+when `packages/*/dist` is at least as new as the tracked sources, so a pull with no build reads
+`unstamped` rather than a sha the running code does not hold.
+
 ## The re-exercise gate
 
 `packages/mcp/src/gate/` holds eleven int test files. Three of them carry seven scripted

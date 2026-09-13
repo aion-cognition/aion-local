@@ -22,6 +22,7 @@ import {
   type CheckReport,
   type CheckResult,
 } from './doctor.js';
+import type { InstallProfile } from './install-profile.js';
 
 function collector(): { lines: string[]; write: (line: string) => void } {
   const lines: string[] = [];
@@ -273,15 +274,17 @@ describe('runChecks', () => {
 describe('probeServiceFreshness', () => {
   const healthWith = (buildSha: string | undefined) => async () =>
     new Response(JSON.stringify({ status: 'ok', build_sha: buildSha }), { status: 200 });
+  /** The one thing this check reads off config besides the port it asks on. */
+  const on = (profile: InstallProfile): Config => ({ ...DEFAULTS, install: { profile } });
 
   it('reports ok when the running service matches the repo head', async () => {
-    const result = await probeServiceFreshness(8765, 'abc1234', healthWith('abc1234'));
+    const result = await probeServiceFreshness(on('docker'), 'abc1234', healthWith('abc1234'));
 
     expect(result).toEqual({ ok: true, detail: 'service and repo both at abc1234' });
   });
 
   it('warns when the running service trails the repo head', async () => {
-    const result = await probeServiceFreshness(8765, 'def5678', healthWith('abc1234'));
+    const result = await probeServiceFreshness(on('docker'), 'def5678', healthWith('abc1234'));
 
     expect(result.ok).toBe(true);
     expect(result.warn).toBe(true);
@@ -289,16 +292,48 @@ describe('probeServiceFreshness', () => {
     expect(result.detail).toContain('def5678');
   });
 
-  it('warns on an unstamped image instead of guessing', async () => {
-    const result = await probeServiceFreshness(8765, 'abc1234', healthWith(undefined));
+  /**
+   * A remedy an operator on the other profile can follow is a remedy that moves their install:
+   * `init --install native` on a docker substrate is the conversion, not a no-op, so the docker
+   * branch must never name it and the native branch must never name a compose recreate.
+   */
+  it('sends a stale docker service to the image and the recreate', async () => {
+    const result = await probeServiceFreshness(on('docker'), 'def5678', healthWith('abc1234'));
+
+    expect(result.detail).toContain('rebuild through bin/aion,');
+    expect(result.detail).toContain('recreate aion-mcp');
+    expect(result.detail).not.toContain('bin/aion-native');
+  });
+
+  it('sends a stale native service to the build and the init that reloads the job', async () => {
+    const result = await probeServiceFreshness(on('native'), 'def5678', healthWith('abc1234'));
+
+    expect(result.detail).toContain('npm run build');
+    expect(result.detail).toContain('./bin/aion-native init --install native');
+    expect(result.detail).not.toContain('recreate aion-mcp');
+  });
+
+  it('warns on an unstamped docker image and names the wrapper that stamps it', async () => {
+    const result = await probeServiceFreshness(on('docker'), 'abc1234', healthWith(undefined));
 
     expect(result.ok).toBe(true);
     expect(result.warn).toBe(true);
     expect(result.detail).toContain('no build sha');
+    expect(result.detail).toContain('rebuild through bin/aion,');
+    expect(result.detail).not.toContain('bin/aion-native');
+  });
+
+  it('warns on an unstamped native job and names the init that writes the sha into it', async () => {
+    const result = await probeServiceFreshness(on('native'), 'abc1234', healthWith(undefined));
+
+    expect(result.ok).toBe(true);
+    expect(result.warn).toBe(true);
+    expect(result.detail).toContain('no build sha');
+    expect(result.detail).toContain('./bin/aion-native init --install native');
   });
 
   it('warns when the repo head is unknown to the CLI', async () => {
-    const result = await probeServiceFreshness(8765, undefined, healthWith('abc1234'));
+    const result = await probeServiceFreshness(on('native'), undefined, healthWith('abc1234'));
 
     expect(result.ok).toBe(true);
     expect(result.warn).toBe(true);

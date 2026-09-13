@@ -147,6 +147,23 @@ export function storeDropCommands(profile: InstallProfile, dataDir: string): rea
   return ['docker compose --profile mcp down', 'docker volume rm aion_aion-neo4j aion_aion-data'];
 }
 
+/**
+ * What puts a running service on the code the repo holds, which is a different pair of acts on
+ * each profile: docker bakes the sha into the image at build and the container takes it on the
+ * next recreate, and the native job runs the built tree with the sha init wrote into its plist,
+ * so a rebuild reaches it through an init that rewrites the job and reloads it.
+ *
+ * One sentence cannot answer for both, and the docker half must never name the native init:
+ * `--install native` on a docker install is the conversion to native rather than a no-op, and an
+ * operator following a remedy would be moving their substrate.
+ */
+export function serviceRefreshRemedy(profile: InstallProfile): string {
+  if (profile === 'native') {
+    return 'npm run build, then `./bin/aion-native init --install native` to restamp the job';
+  }
+  return 'rebuild through bin/aion, then recreate aion-mcp';
+}
+
 export type StorePairing = 'fresh' | 'paired' | 'graph-without-database' | 'database-without-graph';
 
 /**

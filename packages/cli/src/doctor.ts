@@ -36,6 +36,7 @@ import {
   readingHorizonCheck,
   storePairingCheck,
 } from './doctor-checks.js';
+import { serviceRefreshRemedy } from './install-profile.js';
 import { stdoutWriter, type Writer } from './output.js';
 import { withSubstrate } from './substrate.js';
 
@@ -115,26 +116,25 @@ export async function probeMcpHttp(
 }
 
 /**
- * The running service can trail the repo: a rebuilt image only reaches the container on the
- * next recreate, and nothing else surfaces the lag. Warns rather than fails, because an
+ * The running service can trail the repo, and nothing else surfaces the lag: a rebuilt image
+ * reaches the container on the next recreate, and a rebuilt tree reaches the launchd job on the
+ * next init. The whole config rather than a port, because what to do about a service that trails
+ * is the install's answer rather than this file's. Warns rather than fails, because an
  * intentionally pinned older service is a choice, not a fault.
  */
 export async function probeServiceFreshness(
-  port: number,
+  config: Config,
   repoHeadSha: string | undefined,
   fetchImpl: typeof fetch = fetch,
 ): Promise<CheckResult> {
-  const read = await readHealth(port, fetchImpl);
+  const read = await readHealth(config.operational.mcpPort, fetchImpl);
   if ('failure' in read) {
     return read.failure;
   }
+  const remedy = serviceRefreshRemedy(config.install.profile);
   const running = typeof read.body.build_sha === 'string' ? read.body.build_sha : 'unstamped';
   if (running === 'unstamped') {
-    return {
-      ok: true,
-      warn: true,
-      detail: 'service image carries no build sha; rebuild through bin/aion to stamp it',
-    };
+    return { ok: true, warn: true, detail: `service carries no build sha; ${remedy}` };
   }
   if (repoHeadSha === undefined || repoHeadSha.length === 0) {
     return { ok: true, warn: true, detail: `service at ${running}; repo HEAD unknown here` };
@@ -145,7 +145,7 @@ export async function probeServiceFreshness(
   return {
     ok: true,
     warn: true,
-    detail: `service runs ${running} but the repo is at ${repoHeadSha}; rebuild and recreate aion-mcp`,
+    detail: `service runs ${running} but the repo is at ${repoHeadSha}; ${remedy}`,
   };
 }
 
@@ -204,7 +204,7 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
     {
       name: 'service-freshness',
       dependsOn: 'mcp-http',
-      run: () => probeServiceFreshness(config.operational.mcpPort, process.env.AION_REPO_HEAD_SHA),
+      run: () => probeServiceFreshness(config, process.env.AION_REPO_HEAD_SHA),
     },
     {
       name: GRAPH_SCHEMA,
