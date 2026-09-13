@@ -69,6 +69,56 @@ describe('on a host', () => {
     expect(roots.pinned).toEqual(['AION_LOG_FILE']);
   });
 
+  it('refuses a docker-shaped environment by name, and names the way out', () => {
+    const env: NodeJS.ProcessEnv = {
+      AION_DATA_DIR: '/data',
+      AION_SQLITE_PATH: '/data/aion.sqlite',
+      AION_LOG_FILE: '/data/logs/aion.jsonl',
+    };
+
+    expect(() => prepareSubstrateRoots(env, { home, inContainer: false })).toThrow(
+      /AION_DATA_DIR=\/data.*AION_SQLITE_PATH.*AION_LOG_FILE/s,
+    );
+    expect(() => prepareSubstrateRoots(env, { home, inContainer: false })).toThrow(
+      'init --install native',
+    );
+    expect(existsSync('/data/logs')).toBe(false);
+  });
+
+  it('says what the build knows, since some hosts do keep a disk at /data', () => {
+    // The rule is the three literals, which is what makes it decidable without probing the
+    // machine. A Linux host with a real /data mount is refused by the same rule, so the refusal
+    // states the volume rather than the machine, and names the address that keeps that disk.
+    const env: NodeJS.ProcessEnv = { AION_DATA_DIR: '/data' };
+
+    expect(() => prepareSubstrateRoots(env, { home, inContainer: false })).toThrow(
+      'is the compose volume in this build',
+    );
+    expect(() => prepareSubstrateRoots(env, { home, inContainer: false })).toThrow(
+      'a directory under it',
+    );
+  });
+
+  it('converts the same environment for the run that rewrites the file', () => {
+    const env: NodeJS.ProcessEnv = {
+      AION_DATA_DIR: '/data',
+      AION_SQLITE_PATH: '/data/aion.sqlite',
+      AION_LOG_FILE: '/data/logs/aion.jsonl',
+    };
+
+    const roots = prepareSubstrateRoots(env, {
+      home,
+      inContainer: false,
+      convertContainerPaths: true,
+    });
+
+    expect(roots.dataDir).toBe(hostDataDir(home));
+    expect(roots.sqlitePath).toBe(join(hostDataDir(home), 'aion.sqlite'));
+    expect(roots.logFile).toBe(join(hostDataDir(home), 'logs', 'aion.jsonl'));
+    // Converted, so nothing downstream reads them as a pin either.
+    expect(roots.pinned).toEqual([]);
+  });
+
   it('feeds a config whose paths are the resolved ones', () => {
     // The seam: the table keeps the container defaults, so the committed config surface stays the
     // same on every machine, and the environment carries the host answer into the loader.

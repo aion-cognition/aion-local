@@ -2,6 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
+import { ConfigError } from './load-config.js';
 import { DEFAULT_LOG_FILE } from '../logging/logger.js';
 import { DEFAULT_SQLITE_PATH } from '../sqlite/database.js';
 
@@ -67,7 +68,50 @@ export type SubstrateRootOptions = {
   readonly inContainer?: boolean;
   /** Off for a caller that only wants to know where the files would go. */
   readonly create?: boolean;
+  /**
+   * On for the one run that rewrites `.env`: `aion init --install native`. It converts the
+   * container paths instead of refusing them, because the addresses it is about to record are
+   * the host ones this resolves to anyway.
+   */
+  readonly convertContainerPaths?: boolean;
 };
+
+/** The three the knob table and `.env.example` both carry, each with the volume it points at. */
+const CONTAINER_PATHS: readonly (readonly [string, string])[] = [
+  [DATA_DIR_ENV_VAR, '/data'],
+  [SQLITE_PATH_VAR, DEFAULT_SQLITE_PATH],
+  [LOG_FILE_VAR, DEFAULT_LOG_FILE],
+];
+
+function containerPathOverrides(env: NodeJS.ProcessEnv): readonly (readonly [string, string])[] {
+  return CONTAINER_PATHS.filter(([name, path]) => (env[name] ?? '').trim() === path);
+}
+
+/**
+ * A host run whose environment still carries the compose volume, refused by name.
+ *
+ * `bin/aion-native` sources `.env` into every run, and `.env.example` ships these three at
+ * `/data`, so a machine that copied the template and never converted it hands them to the CLI.
+ * They read as an operator pin, which is honoured, and on the macOS host this was found on,
+ * honouring them was `mkdir '/data/logs'` on a read-only root: the command died before it could
+ * say why. The refusal is the way it says why.
+ *
+ * The rule is the three literals rather than a probe, which is what makes it the same answer on
+ * every machine. A host that does keep a disk at `/data` is refused by it too, so the sentence
+ * says what this build knows — where its compose volume is mounted — and names the address that
+ * keeps that disk: anything under `/data` rather than the volume's own paths.
+ */
+function containerPathRefusal(found: readonly (readonly [string, string])[]): ConfigError {
+  const named = found.map(([name, path]) => `${name}=${path}`).join(', ');
+  return new ConfigError(
+    `${named} is the compose volume in this build, and this run is on a host.\n` +
+      'Those are the lines .env.example ships for the docker profile. Convert them with\n' +
+      '`./bin/aion-native init --install native`, which rewrites all three to addresses under\n' +
+      'the home directory, or take them out of .env and let each run resolve its own. A host\n' +
+      'with its own disk at /data keeps that disk by naming a directory under it, such as\n' +
+      'AION_DATA_DIR=/data/aion.',
+  );
+}
 
 /**
  * Seeds the three path variables for a host run and answers where they point.
@@ -76,7 +120,9 @@ export type SubstrateRootOptions = {
  * bootstrap. Inside a container it changes nothing at all, since the defaults the table carries
  * are already the mounted volume. On a host, a variable that is already set is left alone and
  * reported as pinned, so an operator who moved the data directory keeps it and one who moved only
- * the log file gets the directory default for the rest.
+ * the log file gets the directory default for the rest. One value is never read as a pin: the
+ * container path itself, which on a host is a `.env` nobody converted rather than a directory
+ * somebody chose.
  *
  * The log directory is created here rather than left to the logger. The logger's destination makes
  * one level of directory and fails on a missing parent, which is exactly the crash this exists to
@@ -88,6 +134,17 @@ export function prepareSubstrateRoots(
 ): SubstrateRoots {
   if (options.inContainer ?? runningInContainer()) {
     return containerRoots(out);
+  }
+  const fromContainer = containerPathOverrides(out);
+  if (fromContainer.length > 0) {
+    if (options.convertContainerPaths !== true) {
+      throw containerPathRefusal(fromContainer);
+    }
+    // Cleared rather than rewritten here: the defaults below are the same addresses init records,
+    // and one resolution answering for both is what keeps them from drifting apart.
+    for (const [name] of fromContainer) {
+      Reflect.deleteProperty(out, name);
+    }
   }
   const pinned = [DATA_DIR_ENV_VAR, SQLITE_PATH_VAR, LOG_FILE_VAR].filter(
     (name) => (out[name] ?? '').trim() !== '',

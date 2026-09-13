@@ -114,6 +114,12 @@ export type SubstrateCommand<F> = {
   readonly run: (substrate: Substrate, flags: F) => Promise<number>;
   /** Names the command in the refusal when Bolt has to answer before `run` starts. */
   readonly needsGraph?: string;
+  /**
+   * Whether this run may convert a docker-shaped `.env` rather than be refused by it. Init's
+   * alone, and only when it was asked for the native profile: it rewrites those lines itself a
+   * few steps later, and every other command would be moving the substrate without saying so.
+   */
+  readonly convertsContainerPaths?: (flags: F) => boolean;
 };
 
 /** A usage error prints what the command accepts; anything else prints only what went wrong. */
@@ -141,7 +147,9 @@ export async function withSubstrate<F>(command: SubstrateCommand<F>): Promise<nu
     // and every command's first act is to open a log file under them. Inside the container this
     // changes nothing. Inside the try, so a directory that cannot be made is reported as a refusal
     // rather than thrown as a stack trace out of a process that has not started yet.
-    prepareSubstrateRoots(process.env);
+    prepareSubstrateRoots(process.env, {
+      convertContainerPaths: command.convertsContainerPaths?.(flags) ?? false,
+    });
     config = loadConfig(process.env);
   } catch (err) {
     report(spec, err);

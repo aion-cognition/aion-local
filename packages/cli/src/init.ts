@@ -114,6 +114,17 @@ export function parseInitFlags(argv: readonly string[]): InitFlags {
   return { assumeYes: flags.has('--yes'), profile, install };
 }
 
+/**
+ * The one run allowed to convert a docker-shaped `.env` instead of being refused by it.
+ *
+ * `--install native` is the request to record the host addresses, and `prepareNativeProfile`
+ * rewrites the same three lines a few steps into the run. Without the flag this is a docker init
+ * on a host, which has no host paths to convert them to.
+ */
+export function initConvertsContainerPaths(flags: InitFlags): boolean {
+  return flags.install === 'native';
+}
+
 export type InitProfileInput = {
   readonly requested: InitProfile | undefined;
   readonly assumeYes: boolean;
@@ -429,6 +440,7 @@ export function runInit(
     argv,
     write,
     parse: parseInitFlags,
+    convertsContainerPaths: initConvertsContainerPaths,
     run: async (substrate, flags) => {
       // Provisioning opens its own store and connection against the password it just settled,
       // which the shared lifecycle cannot know before this point.

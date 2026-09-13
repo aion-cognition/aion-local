@@ -42,9 +42,18 @@ advertised.
 
 The flag chooses a profile once; it does not switch one. `--install docker` on a native install is
 refused. The two profiles keep their stores in different places, so moving between them means
-dropping both and initializing again. `--install native` on a docker-shaped config is not refused,
-since `docker` is the code default and a recorded default cannot be told from nobody having
-chosen.
+dropping both and initializing again. `--install native` on a docker-shaped config is the
+conversion rather than a switch, since `docker` is the code default and a recorded default cannot
+be told from nobody having chosen.
+
+`.env.example` ships the three storage paths at the compose volume (`AION_DATA_DIR=/data`,
+`AION_SQLITE_PATH`, `AION_LOG_FILE`), and `bin/aion-native` sources `.env` into every run, so a
+host that copied the template carries them. Only `init --install native` converts them. Every
+other command refuses by name and prints the ways through: run that init, take the three lines
+out of `.env` and let each run resolve its own paths under `~/.aion`, or, on a host that really
+does keep a disk at `/data`, name a directory under it (`AION_DATA_DIR=/data/aion`). The rule is
+those three literal values rather than a probe of the machine, which is what makes it the same
+answer everywhere.
 
 ### Bringing up the native profile
 

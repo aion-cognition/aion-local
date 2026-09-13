@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { initConvertsContainerPaths, parseInitFlags } from './init.js';
 import { withSubstrate } from './substrate.js';
 
 /**
@@ -31,8 +32,17 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  process.env = { ...saved };
+  // Restored in place rather than replaced: `os.homedir()` reads the process environment, and a
+  // fresh object assigned over `process.env` stops following it, so a later `HOME` stub would
+  // resolve against the machine's own home and the substrate that lives there.
+  for (const key of Object.keys(process.env)) {
+    if (!(key in saved)) {
+      Reflect.deleteProperty(process.env, key);
+    }
+  }
+  Object.assign(process.env, saved);
   rmSync(home, { recursive: true, force: true });
+  vi.restoreAllMocks();
 });
 
 describe('the lifecycle every command shares', () => {
@@ -57,6 +67,70 @@ describe('the lifecycle every command shares', () => {
     expect(existsSync(seen)).toBe(true);
     expect(readFileSync(seen, 'utf8')).toContain('opened');
     expect(existsSync('/data/logs')).toBe(false);
+  });
+
+  /**
+   * The docker-shaped `.env` on a host, which `bin/aion-native` sources into every run. The three
+   * paths are what `.env.example` ships, so a machine that copied the template and never ran a
+   * native init carries them, and `/data` is a directory a host cannot make.
+   */
+  function dockerShapedEnv(): void {
+    process.env.AION_DATA_DIR = '/data';
+    process.env.AION_SQLITE_PATH = '/data/aion.sqlite';
+    process.env.AION_LOG_FILE = '/data/logs/aion.jsonl';
+  }
+
+  it('refuses a docker-shaped .env by name instead of dying on mkdir /data', async () => {
+    dockerShapedEnv();
+    const said: string[] = [];
+    vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      said.push(String(chunk));
+      return true;
+    });
+    let ran = false;
+
+    const code = await withSubstrate({
+      spec: { command: 'probe', usage: 'probe' },
+      argv: [],
+      write: () => undefined,
+      parse: () => ({}),
+      run: () => {
+        ran = true;
+        return Promise.resolve(0);
+      },
+    });
+
+    expect(code).toBe(1);
+    expect(ran).toBe(false);
+    const text = said.join('');
+    expect(text).toContain('AION_DATA_DIR=/data');
+    expect(text).toContain('AION_SQLITE_PATH=/data/aion.sqlite');
+    expect(text).toContain('AION_LOG_FILE=/data/logs/aion.jsonl');
+    expect(text).toContain('init --install native');
+    expect(existsSync('/data/logs')).toBe(false);
+  });
+
+  it('converts the same file for the init that is about to rewrite it', async () => {
+    dockerShapedEnv();
+    let seen = '';
+
+    const code = await withSubstrate({
+      spec: { command: 'init', usage: 'aion init' },
+      argv: ['--install', 'native'],
+      write: () => undefined,
+      parse: parseInitFlags,
+      convertsContainerPaths: initConvertsContainerPaths,
+      run: (substrate) => {
+        // The open is what crashed on this file, so the conversion is asserted through it.
+        substrate.logger().info({ probe: true }, 'opened');
+        seen = substrate.config.operational.dataDir;
+        return Promise.resolve(0);
+      },
+    });
+
+    expect(code).toBe(0);
+    expect(seen).toBe(join(home, '.aion'));
+    expect(existsSync(join(home, '.aion', 'logs'))).toBe(true);
   });
 
   it('leaves a data root the environment pinned exactly where it was pinned', async () => {
