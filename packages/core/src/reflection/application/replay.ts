@@ -1,10 +1,4 @@
-import {
-  ReplayPass,
-  walkCohorts,
-  walkOccurrences,
-  walkUnrecorded,
-  type PassOptions,
-} from './replay-phases.js';
+import { ReplayPass, walkOccurrences, walkUnrecorded, type PassOptions } from './replay-phases.js';
 import type { ReplayDeps, ReplayOptions, ReplayReport } from './replay-types.js';
 import { unrecordedArchiveRows } from '../../infrastructure/sqlite/source-occurrence.js';
 import { PIPELINE_VERSION } from '../domain/version.js';
@@ -61,10 +55,6 @@ export async function replayExperiences(
   if (resume === undefined || resume === 'ingest') {
     await walkOccurrences(deps, options, pass, state);
   }
-  let cohortMembers = 0;
-  if (!state.aborted && resume !== 'archive') {
-    cohortMembers = await walkCohorts(deps, options, pass, state);
-  }
   const unrecorded = unrecordedArchiveRows(deps.db);
   if (!state.aborted && unrecorded > 0) {
     await walkUnrecorded(deps, options, pass, state);
@@ -75,7 +65,6 @@ export async function replayExperiences(
       ...state.counts(),
       scanned: state.scanned,
       pipelineVersion: pass.pipelineVersion,
-      cohortMembers,
       unrecorded,
       aborted: state.aborted,
     },
@@ -85,7 +74,6 @@ export async function replayExperiences(
     ...state.counts(),
     scanned: state.scanned,
     cursor: state.cursor,
-    cohortMembers,
     unrecorded,
     aborted: state.aborted,
   };

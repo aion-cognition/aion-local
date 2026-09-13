@@ -1,7 +1,7 @@
 import type { SqliteHandle } from './database.js';
 
 /** A session has one default narrative representation at each knowledge-time vantage. */
-export type SessionNarrativeFamily = 'legacy_session_overview' | 'chunk';
+export type SessionNarrativeFamily = 'chunk';
 
 export type FamilySelection = {
   readonly sessionId: string;
@@ -43,7 +43,7 @@ function selectFamily(
   if (row === undefined) {
     return undefined;
   }
-  if (row.active_family !== 'legacy_session_overview' && row.active_family !== 'chunk') {
+  if (row.active_family !== 'chunk') {
     throw new Error(`unknown narrative family ${row.active_family}`);
   }
   return {

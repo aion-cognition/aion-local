@@ -1,6 +1,5 @@
 import { z } from 'zod';
 
-import { NARRATIVE_EXTRACTION_METHOD } from './narrative-write.js';
 import { verifyEvidenceRevision } from '../../evidence/application/dependencies.js';
 import { durableRoleScope, NARRATIVE_SCOPES } from '../../evidence/domain/scopes.js';
 import {
@@ -47,7 +46,7 @@ import {
   releaseNarrativeRevision,
 } from '../../infrastructure/sqlite/narrative-revisions.js';
 import { readSourceResidency } from '../../infrastructure/sqlite/source-lifecycle.js';
-import { NARRATIVE_GROUNDING } from '../domain/narrative.js';
+import { NARRATIVE_EXTRACTION_METHOD, NARRATIVE_GROUNDING } from '../domain/narrative.js';
 
 /**
  * Publishing one revision of one sealed chunk, through the coordinator and nowhere else.

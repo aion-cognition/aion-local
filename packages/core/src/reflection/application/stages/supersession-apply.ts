@@ -6,6 +6,7 @@ import {
   type ReviewVerdict,
 } from './supersession-review.js';
 import type { RunTally } from './supersession-tally.js';
+import { advanceNodeState } from '../../../evidence/application/node-state.js';
 import { isAbortError } from '../../../infrastructure/errors.js';
 import { supersede } from '../../../infrastructure/graph/bitemporal.js';
 import type { KeyedCloseMode } from '../../../infrastructure/graph/claim-key-queries.js';
@@ -326,6 +327,14 @@ export async function applyJudgment(
       signals: ['contradiction'],
       provenance: [SUPERSESSION_METHOD],
     });
+    // The closed claim's own semantic state moved. The unanimous path reaches the same advance
+    // through `applySupersessionProposal`; this mode writes the close itself, so it says so here.
+    advanceNodeState(
+      ctx.db,
+      pair.candidate.id,
+      `supersession-auto:${pair.candidate.id}`,
+      ctx.now.toISOString(),
+    );
     tally.recordSupersession();
     return 'closed';
   }

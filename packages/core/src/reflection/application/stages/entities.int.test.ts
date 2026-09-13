@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { EntityExtractionStage } from './entities.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../../infrastructure/graph/backbone.js';
 import { findEpisodeEntities } from '../../../infrastructure/graph/entity-queries.js';
@@ -28,10 +29,10 @@ import { SessionManager } from '../../../session/session-manager.js';
 import { ENTITY_TYPES } from '../../domain/entity-extraction.js';
 import type { StageContext, StageOutcome } from '../../domain/stage.js';
 import { PIPELINE_VERSION } from '../../domain/version.js';
+import { directIntakePublisher } from '../../test-support/direct-intake.fixture.js';
+import { RecordingPublisher } from '../../test-support/recording-publisher.fixture.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../intake.js';
 import { LaneAssigner } from '../lanes.js';
-import { EntityExtractionStage } from './entities.js';
-import { directIntakePublisher } from '../../test-support/direct-intake.fixture.js';
 
 const MEMBER_NAME = 'Ryan Huber';
 const NOW = new Date('2026-08-28T12:00:00.000Z');
@@ -132,6 +133,9 @@ async function runStage(episodeId: string, stageProvider: Provider): Promise<Sta
     now: NOW,
     occurredAt: NOW,
     pipelineVersion: PIPELINE_VERSION,
+    // The stage records what it wrote and fails when it cannot; what this file is about is the
+    // graph write, so the report is captured rather than published.
+    publications: new RecordingPublisher().asCoordinator(),
   };
   return new EntityExtractionStage().run(context);
 }

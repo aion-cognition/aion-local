@@ -160,11 +160,9 @@ does not work and says so: the CLI orchestrates the repo it lives in.
 - `source`: the captured parts behind one source id, turn id, or part address
 - `forget`: bitemporal close of a node, by id or by query
 - `unforget`: take back a forget; the statement chain keeps both and the node serves again
-- `evict`: the destructive fence, what it reads, the stop an operator can put on it, and the lift
 - `unsupersede`: reopen a claim a supersession closed, whatever made the close
 - `queue`: inspect and triage the reflection queue
 - `replay`: put archived experiences back through the pipeline, and the usage stream back on top
-- `consolidate`: resume, inspect, or abandon a cohort's narrative migration
 - `proposals`: review judged contradictions and duplicate entities
 - `maintain`: the maintenance catalog, and forcing one operation to run now
 - `unmerge`: split an identity back out of the entity dedup absorbed it into
@@ -173,8 +171,7 @@ does not work and says so: the CLI orchestrates the repo it lives in.
 - `uninstall`: remove what init put on this machine, and say what it left
 
 The commands with teeth make you say so. `queue drop`, `queue reconcile --re-enqueue`,
-`forget`, `unforget`, `unsupersede`, `evict disarm` and `evict rearm` preview what they would
-do and stop without `--yes`. `proposals`, `maintain`, and `unmerge` act only through an
+`forget`, `unforget` and `unsupersede` preview what they would do and stop without `--yes`. `proposals`, `maintain`, and `unmerge` act only through an
 explicit `apply` or `run` subcommand. `replay run` guards harder: it refuses to write to the
 shipped substrate at all unless both `--live` and `--yes` are passed, since a replay
 re-entering the pipeline inflates counters a live read counts as real observations. Their full

@@ -12,7 +12,7 @@ import type { ToolBackend } from './tools.js';
 /**
  * The coverage half of `/health`, in its own file for the same reason the plasticity half is:
  * `service.test.ts` stays under the line cap. What these assert is that a probe can tell a
- * substrate serving history from one serving none, and neither from one where eviction is armed.
+ * substrate serving history from one serving none.
  */
 
 const backend: ToolBackend = {
@@ -56,7 +56,6 @@ describe('health, the coverage fields', () => {
 
     expect(read.status).toBe('ok');
     expect(read.coverage_state).toBeUndefined();
-    expect(read.eviction_gate).toBeUndefined();
   });
 
   it('reports an active contract with the horizon its answers may claim', async () => {
@@ -64,10 +63,6 @@ describe('health, the coverage fields', () => {
       coverageState: 'active',
       historySince: '2026-09-11T06:00:00.000Z',
       coverageEpoch: 'epoch-1',
-      evictionGate: 'unarmed',
-      evictionCompatibilityRevision: 0,
-      evictionDisarmedAt: null,
-      evictionStopRequestedBy: null,
     }));
 
     expect(await body(url)).toMatchObject({
@@ -83,34 +78,12 @@ describe('health, the coverage fields', () => {
       coverageState: 'preparing',
       historySince: null,
       coverageEpoch: 'epoch-1',
-      evictionGate: 'unarmed',
-      evictionCompatibilityRevision: 0,
-      evictionDisarmedAt: null,
-      evictionStopRequestedBy: null,
     }));
 
     expect(await body(url)).toMatchObject({
       status: 'ok',
       coverage_state: 'preparing',
       coverage_history_since: null,
-    });
-  });
-
-  it('carries the eviction fence as its own keys, not as a coverage state', async () => {
-    const url = await serve(() => ({
-      coverageState: 'active',
-      historySince: '2026-09-11T06:00:00.000Z',
-      coverageEpoch: 'epoch-1',
-      evictionGate: 'armed',
-      evictionCompatibilityRevision: 4,
-      evictionDisarmedAt: null,
-      evictionStopRequestedBy: null,
-    }));
-
-    expect(await body(url)).toMatchObject({
-      coverage_state: 'active',
-      eviction_gate: 'armed',
-      eviction_compatibility_revision: 4,
     });
   });
 });

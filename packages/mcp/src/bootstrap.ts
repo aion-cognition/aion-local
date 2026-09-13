@@ -1,7 +1,6 @@
 import {
   activateCoverageOnStart,
   ApiUsageRecorder,
-  armEvictionOnStart,
   bootstrapBackbone,
   checkedRecallDeps,
   CueCache,
@@ -12,7 +11,7 @@ import {
   Introspector,
   introspectionOperations,
   LaneAssigner,
-  latestAppliedGraphMigration,
+  appliedGraphSchemaVersion,
   loadConfig,
   modelAdvisor,
   narrativeOptions,
@@ -167,7 +166,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     if (!health.reachable) {
       throw new GraphUnreachableError(connection.uri, health.error ?? 'unknown error');
     }
-    if (latestAppliedGraphMigration(store.db) === undefined) {
+    if (appliedGraphSchemaVersion(store.db) === undefined) {
       throw new SchemaNotInitializedError(config.sqlite.path);
     }
 
@@ -191,10 +190,6 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     // asking for the guard at boot, and a no-op on every start after the first.
     const coverage = await activateCoverageOnStart(publications, store.db);
     logger.info({ coverage }, `coverage contract ${coverage.state}`);
-    // After activation, because arming refuses against a contract that is not active yet. A
-    // substrate an operator disarmed stays disarmed: a restart is not a retraction.
-    const arming = await armEvictionOnStart(publications, store.db);
-    logger.info({ arming }, `eviction fence ${arming.state}`);
     publicationRecovery = new PublicationRecoveryLoop(publications, logger, {
       retryBaseMs: config.operational.workerRetryBaseMs,
       retryCapMs: config.operational.workerRetryCapMs,

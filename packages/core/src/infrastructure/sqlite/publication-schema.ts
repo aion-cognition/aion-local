@@ -17,26 +17,11 @@ export const PUBLICATION_SCHEMA_STATEMENTS: readonly string[] = [
    * singleton comes from reading and inserting inside one immediate transaction, not from the
    * id being random.
    *
-   * The two revision columns are two different gates and never one. Coverage activation reads
-   * `activation_capability_revision`: it is the coverage capability the substrate has
-   * established, and the activation publication names it so a request cannot claim a capability
-   * nothing recorded. Eviction reads `eviction_compatibility_revision`: it is the destructive
-   * capability's arming fence, and one audited operation is the only thing that writes it. The
-   * service publishes that operation at each start, after coverage activation and never over a
-   * standing stop. An active coverage contract is a precondition of arming and is not the arming.
-   *
-   * `eviction_disarmed_at` is the stop, and it is its own fact rather than a lower revision. A
-   * revision that could move down would let a later reader mistake a deliberate stop for a
-   * capability nobody had established yet, and it would lose the record that this substrate was
-   * armed once. So the revision only ever goes up, the stop is a stamp beside it, and eviction
-   * refuses on the stamp before it looks at the number.
-   *
-   * `eviction_stop_requested_by` is that stop asked for and not yet recorded. The guard settles
-   * whatever is already pending before it takes a new request, so a stop that only became durable
-   * at its own acknowledgment would arrive after the removal it was run to prevent. This column is
-   * written before anything is settled, it names the operation that asked, and eviction reads it
-   * as a stop. A request whose operation ends refused stops nothing; one whose operation nobody
-   * can account for stops everything, which is the direction a stop should fail in.
+   * `activation_capability_revision` is the coverage capability the substrate has established,
+   * and the activation publication names it so a request cannot claim a capability nothing
+   * recorded. It only ever goes up: a recorded revision above this build's is a capability a
+   * later build established, and writing a lower number over it would re-enable a contract this
+   * build does not implement.
    */
   `CREATE TABLE IF NOT EXISTS publication_control (
     substrate_id TEXT PRIMARY KEY,
@@ -45,10 +30,7 @@ export const PUBLICATION_SCHEMA_STATEMENTS: readonly string[] = [
     last_ack_sequence INTEGER NOT NULL DEFAULT 0,
     pending_operation_id TEXT,
     last_known_from TEXT,
-    activation_capability_revision INTEGER NOT NULL DEFAULT 0,
-    eviction_compatibility_revision INTEGER NOT NULL DEFAULT 0,
-    eviction_disarmed_at TEXT,
-    eviction_stop_requested_by TEXT
+    activation_capability_revision INTEGER NOT NULL DEFAULT 0
   )`,
   /**
    * One immutable row per publication, holding both the prepared input and the outcome.
@@ -133,47 +115,5 @@ export const PUBLICATION_SCHEMA_STATEMENTS: readonly string[] = [
     readiness_policy_revision INTEGER NOT NULL,
     expected_outcome_json TEXT NOT NULL,
     created_at TEXT NOT NULL
-  )`,
-  /**
-   * The frozen legacy cohort. Its bounds are captured at the freeze and are separate from the
-   * live intake watermark, so the cohort is reproducible and the gap between the two streams
-   * is closed rather than assumed away. `scan_cursor` is the resumable position inside the
-   * bounds: a restart mid-cohort continues from it instead of rescanning or skipping.
-   */
-  `CREATE TABLE IF NOT EXISTS migration_cohorts (
-    cohort_id TEXT PRIMARY KEY,
-    cohort_digest TEXT NOT NULL,
-    intake_watermark INTEGER NOT NULL,
-    archive_rowid_low INTEGER NOT NULL,
-    archive_rowid_high INTEGER NOT NULL,
-    graph_census_digest TEXT NOT NULL,
-    scan_cursor INTEGER,
-    ordering_policy_version INTEGER NOT NULL,
-    partition_policy_json TEXT,
-    created_at TEXT NOT NULL
-  )`,
-  /**
-   * One row per distinct source in the cohort, written as 'accounted' at the freeze and
-   * before any verification pages. The enumeration is the durable membership and the digest
-   * only cross-checks it: a digest cannot re-list the graph-only sources after a restart.
-   *
-   * Multiple archive rows of one source are accounted through the frozen bounds and the
-   * alias list on the source record, so an alias never gets a progress row of its own.
-   * `partition_assignment` is immutable once written: a better clock proof arriving later
-   * improves the evidence and does not move a source between chunks.
-   */
-  `CREATE TABLE IF NOT EXISTS migration_progress (
-    cohort_id TEXT NOT NULL,
-    source_id TEXT NOT NULL,
-    status TEXT NOT NULL,
-    reason TEXT,
-    partition_assignment TEXT,
-    capture_order_value TEXT,
-    capture_order_basis TEXT,
-    partition_gap TEXT,
-    -- Which walk this row's status came from. The association is what tells a retry of a lost
-    -- reply from a new verification: both look identical through the caller's arguments.
-    walked_by TEXT,
-    PRIMARY KEY (cohort_id, source_id)
   )`,
 ];

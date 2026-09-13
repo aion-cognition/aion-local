@@ -4,7 +4,7 @@ import {
   describeError,
   EmbedDimensionMismatchError,
   embedQueryPrefix,
-  latestAppliedGraphMigration,
+  appliedGraphSchemaVersion,
   localChatModels,
   measureAdmissionFloor,
   OllamaProvider,
@@ -210,17 +210,14 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
       name: GRAPH_SCHEMA,
       dependsOn: NEO4J_BOLT,
       run: () => {
-        const version = latestAppliedGraphMigration(db);
+        const version = appliedGraphSchemaVersion(db);
         if (version === undefined) {
           return Promise.resolve({
             ok: false,
-            detail: 'no graph migration recorded; run `aion init`',
+            detail: 'no graph schema recorded; run `aion init`',
           });
         }
-        return Promise.resolve({
-          ok: true,
-          detail: `migration ${String(version).padStart(3, '0')} applied`,
-        });
+        return Promise.resolve({ ok: true, detail: `schema version ${String(version)} applied` });
       },
     },
     {

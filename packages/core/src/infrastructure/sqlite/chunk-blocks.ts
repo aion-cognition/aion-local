@@ -43,7 +43,6 @@ export function blockedAttempts(
   input: {
     readonly reasons: readonly string[];
     readonly limit: number;
-    readonly cohortId?: string;
     readonly sessionId?: string;
     readonly initialOnly?: boolean;
     /**
@@ -66,7 +65,6 @@ export function blockedAttempts(
               b.blocked_context_json, b.attempt_policy_json
          FROM chunk_revisions b
         WHERE b.state = 'allocated' AND b.blocked_reason IN (${placeholders})
-          AND (? IS NULL OR EXISTS (SELECT 1 FROM migration_progress m WHERE m.cohort_id = ? AND m.partition_assignment = b.chunk_id))
           AND (? IS NULL OR EXISTS (SELECT 1 FROM chunks c WHERE c.chunk_id = b.chunk_id AND c.session_id = ?))
           AND (? = 0 OR EXISTS (SELECT 1 FROM chunks c WHERE c.chunk_id = b.chunk_id AND c.published_revision_no IS NULL))
           AND (? = '' OR b.chunk_id > ? OR (b.chunk_id = ? AND b.revision_no > ?))
@@ -75,8 +73,6 @@ export function blockedAttempts(
     )
     .all(
       ...input.reasons,
-      input.cohortId ?? null,
-      input.cohortId ?? null,
       input.sessionId ?? null,
       input.sessionId ?? null,
       input.initialOnly ? 1 : 0,

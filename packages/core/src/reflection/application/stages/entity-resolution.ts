@@ -18,6 +18,7 @@ import {
 } from '../../domain/entity-extraction.js';
 import type { StageContext } from '../../domain/stage.js';
 import { entityNameVectorText, vectorInputHash } from '../../domain/vector-input.js';
+import { owesBirthEstablishment } from '../derived-node-evidence.js';
 
 /**
  * Which node an extracted name lands on, and which of that node's two vectors this run has to
@@ -53,6 +54,14 @@ export type ResolvedEntity = {
   readonly extracted: ExtractedEntity;
   readonly id: string;
   readonly created: boolean;
+  /**
+   * Whether this episode's extraction owes the node the census a drawn id is entitled to.
+   *
+   * Wider than `created` by exactly one case: an attempt of this same run drew the id, the node
+   * kept it, and the evidence that attempt owed never landed. The node records the episode that
+   * created it, so this reading stays confined to identities this episode drew.
+   */
+  readonly minted: boolean;
   readonly structural: boolean;
   /** Absent when the stored name vector was taken over exactly this text already. */
   readonly name?: VectorInput;
@@ -220,6 +229,8 @@ async function resolveStructural(
         extracted: entity,
         id,
         created: false,
+        // The backbone was minted by the bootstrap that drew it, which counted it then.
+        minted: false,
         structural: true,
         // The backbone is connectivity, not content: it carries no `text` to embed.
         ...(target.match.nameVectorHash === name.hash ? {} : { name }),
@@ -234,6 +245,7 @@ async function resolveStructural(
  * readings onto one holder's key, and a lookup by that key would answer them all with one row.
  */
 function resolveOrganic(
+  ctx: StageContext,
   pairs: readonly { extracted: ExtractedEntity; input: EntityMergeInput }[],
   merged: readonly MergedEntity[],
 ): ResolvedEntity[] {
@@ -249,6 +261,9 @@ function resolveOrganic(
       extracted: pair.extracted,
       id: row.id,
       created: row.created,
+      minted:
+        row.created ||
+        (row.sourceEpisodeId === ctx.episodeId && owesBirthEstablishment(ctx.db, row.id)),
       structural: false,
       ...(row.nameVectorHash === name.hash ? {} : { name }),
       // Only a creation's `text` is this run's. A node that matched holds whichever run's text
@@ -296,7 +311,7 @@ export async function resolveEntities(
     ctx.now,
   );
 
-  return [...(await resolveStructural(ctx, structural)), ...resolveOrganic(organic, merged)];
+  return [...(await resolveStructural(ctx, structural)), ...resolveOrganic(ctx, organic, merged)];
 }
 
 /** Where in the one embed batch each of an entity's two vectors landed. */

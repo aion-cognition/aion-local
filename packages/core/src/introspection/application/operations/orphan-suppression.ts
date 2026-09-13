@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
+import { advanceNodeState } from '../../../evidence/application/node-state.js';
 import { certifyNodeSupport } from '../../../evidence/application/node-support.js';
-import { GRAPH_NODE_SCOPE } from '../../../evidence/domain/scopes.js';
 import { upsertEdgeInTransaction } from '../../../infrastructure/graph/edges.js';
 import { NARRATIVE_LABEL } from '../../../infrastructure/graph/labels.js';
 import {
@@ -18,10 +18,6 @@ import type {
   PublicationOutcome,
 } from '../../../infrastructure/publication/types.js';
 import { readCurrentCoverageContract } from '../../../infrastructure/sqlite/coverage-contract.js';
-import {
-  readScopeMirror,
-  recordScopeMirror,
-} from '../../../infrastructure/sqlite/evidence-scope.js';
 import {
   clearOrphanQualification,
   readOrphanObservation,
@@ -317,17 +313,7 @@ export const orphanSuppressionPublication = new PublicationOperation({
       // is holding about that state stops being current here, in the operation that made the
       // change. Left alone, a judgment fenced on the reading this operation invalidated would
       // still verify as current against a node that has been forgotten.
-      const held = readScopeMirror(context.db, {
-        endpointId: data.nodeId,
-        relationClass: GRAPH_NODE_SCOPE,
-      });
-      recordScopeMirror(context.db, {
-        endpointId: data.nodeId,
-        relationClass: GRAPH_NODE_SCOPE,
-        mirroredRevision: (held?.mirroredRevision ?? 0) + 1,
-        operationId: context.operationId,
-        mirroredAt: new Date(context.knownFrom),
-      });
+      advanceNodeState(context.db, data.nodeId, context.operationId, context.knownFrom);
     }
     return undefined;
   },

@@ -1,6 +1,5 @@
 import { DUE_INITIAL_CHUNK } from './chunk-publication-read.js';
 import type { SqliteHandle } from './database.js';
-import { MIGRATION_OWNED_CHUNK, RESERVED_MIGRATION_SOURCE } from './migration-membership.js';
 
 // The blocked-attempt reading moved out at this file's ceiling and is re-exported here, because
 // what a refusal recorded is asked of nomination by every caller that asks what is due.
@@ -42,7 +41,7 @@ const VERIFIED = 'verified';
 export const SEAL_REMAINDER_POPULATION = `r.capture_order_value IS NOT NULL
        AND r.capture_order_value <= s.watermark
        AND NOT EXISTS (SELECT 1 FROM chunk_members m WHERE m.source_id = r.source_id)`;
-const REMAINDER_PREDICATE = `${SEAL_REMAINDER_POPULATION} AND NOT ${RESERVED_MIGRATION_SOURCE}`;
+const REMAINDER_PREDICATE = SEAL_REMAINDER_POPULATION;
 
 export type DueChunkGroup = {
   readonly chunkId: string;
@@ -84,7 +83,6 @@ export function dueChunkGroups(
                 WHERE m.chunk_id = c.chunk_id) AS capture_key
          FROM chunks c
         WHERE ${DUE_INITIAL_CHUNK}
-          AND NOT ${MIGRATION_OWNED_CHUNK}
         ORDER BY capture_key, c.chunk_id
         LIMIT ?`,
     )

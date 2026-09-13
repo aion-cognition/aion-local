@@ -104,13 +104,10 @@ describe('substrate pairing', () => {
     expect(readSubstratePairing(store.db)?.pendingOperationId).toBeNull();
   });
 
-  it('opens both revision gates at zero', () => {
+  it('opens the capability gate at zero', () => {
     beginSubstratePairing(store.db, 1);
 
-    expect(readSubstratePairing(store.db)).toMatchObject({
-      activationCapabilityRevision: 0,
-      evictionCompatibilityRevision: 0,
-    });
+    expect(readSubstratePairing(store.db)).toMatchObject({ activationCapabilityRevision: 0 });
   });
 
   it('establishes the coverage capability and answers with the revision in force', () => {
@@ -126,14 +123,6 @@ describe('substrate pairing', () => {
 
     expect(establishActivationCapability(store.db, 2)).toBe(4);
     expect(readSubstratePairing(store.db)?.activationCapabilityRevision).toBe(4);
-  });
-
-  it('leaves the eviction fence alone when the coverage capability is established', () => {
-    beginSubstratePairing(store.db, 1);
-
-    establishActivationCapability(store.db, 1);
-
-    expect(readSubstratePairing(store.db)?.evictionCompatibilityRevision).toBe(0);
   });
 
   it('refuses a capability revision that is not a positive integer', () => {

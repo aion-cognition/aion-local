@@ -90,8 +90,8 @@ type DuplicateReport = {
    * the guard rather than inside it.
    */
   readonly candidates: number;
-  /** Legacy session families carrying more than one standing narrative. */
-  readonly legacy: number;
+  /** Sessions carrying more than one standing narrative the manifest binds no head for. */
+  readonly unbound: number;
 };
 
 /**
@@ -289,8 +289,8 @@ function writeRepairCursor(db: SqliteHandle, chunkId: string | undefined): void 
  * The no-Episode read stays as a cheap NOMINATION and is no longer the decision: it says which
  * narratives are worth asking about, and the manifest says whether anything holds them up. A
  * chunk revision over evicted sources answers `supported` on its frozen membership and is left
- * exactly as it is; a legacy narrative the manifest never bound answers `unbound`, which is a
- * repair obligation rather than a licence, so nothing here forgets it.
+ * exactly as it is; a narrative the manifest never bound answers `unbound`, which is a repair
+ * obligation rather than a licence, so nothing here forgets it.
  */
 function certifyNominated(
   db: SqliteHandle,
@@ -345,12 +345,11 @@ export function narrativeCleanupOperation(): IntrospectionOperation {
         ctx.narratives === undefined
           ? { families: 0, examined: 0, closed: 0, closedEdges: 0, unresolved: 0, candidates: 0 }
           : await closeExtraRevisions(ctx, ctx.narratives.publications, batch);
-      // The legacy family is counted and left alone. Its keeper cannot be read from a manifest
-      // that never bound it, and the signed rule is explicit that a winner is not picked by
-      // coverage, prose or graph timestamp; reconciling the preserved coverage and citation
-      // records is the cutover's work, not a sweep's.
-      const legacy = await findDuplicateNarrativeSessions(ctx.driver, batch);
-      const duplicates: DuplicateReport = { ...chunks, legacy: legacy.length };
+      // A session the manifest binds no head for is counted and left alone. Its keeper cannot be
+      // read from a manifest that never bound it, and the rule is explicit that a winner is not
+      // picked by coverage, prose or graph timestamp.
+      const unbound = await findDuplicateNarrativeSessions(ctx.driver, batch);
+      const duplicates: DuplicateReport = { ...chunks, unbound: unbound.length };
 
       const nominated = await findOrphanedNarratives(ctx.driver, batch);
       const support = certifyNominated(
@@ -398,7 +397,7 @@ export function narrativeCleanupOperation(): IntrospectionOperation {
           `${String(duplicates.closed)} extra revision(s) superseded onto the acknowledged head ` +
           `with ${String(duplicates.closedEdges)} traversal edge(s), ` +
           `${String(duplicates.unresolved)} family/families with no acknowledged head, ` +
-          `${String(duplicates.legacy)} legacy session family/families reported, ` +
+          `${String(duplicates.unbound)} unbound session(s) reported, ` +
           `${String(support.supported)} narrative(s) the records hold up, ` +
           `${String(support.withheld)} withheld for want of proof, ` +
           `${String(edges.closed)} stale summarization edge(s) closed; ` +

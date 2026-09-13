@@ -69,10 +69,9 @@ import { memoryDecayOperation, reinforcementFlushOperation } from './plasticity-
  * - `orphan_cleanup`: it used to move the disconnection share, which now describes a
  *   different population than the one it repairs. A replacement has to be validated
  *   against the demand it is scored on before it can score the runs.
- * - `narrative_regrounding`: the same shape one family over. The count it used to declare was
- *   the legacy grounding marker, which describes the family it is leaving rather than the
- *   invalidated chunk heads it now regrounds, and a baseline over that population has to exist
- *   before a run over it can be scored.
+ * - `narrative_regrounding`: the same shape. The count it used to declare was the grounding
+ *   marker alone, which is one of the two populations it repairs, and a baseline over both has
+ *   to exist before a run over them can be scored.
  * - `confirmation_signal_completion`: an owed-signal backlog and the rate keys are completed at.
  *   Nothing counts either today, which is why it reaches the threshold on waiting time.
  *

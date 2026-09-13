@@ -35,41 +35,6 @@ function indexWorkKey(sourceId: string, indexPolicy: string): string {
  * interactive caller is told about. Both are looked up before they are written, so a recovery that reaches this step twice
  * finds the row it already wrote.
  */
-/**
- * The index work a legacy source owes once the migration has verified it.
- *
- * Only the index job. A legacy source has already been through whatever pipeline existed when it
- * arrived, and enqueuing an integrate row for the whole frozen cohort would re-run extraction
- * over the corpus and call a model for every source the migration touched. What the source
- * genuinely lacks is a search projection, which is its own bounded handler in the bulk lane.
- */
-export function enqueueLegacyIndexWork(
-  db: SqliteHandle,
-  data: QueuedAcceptance,
-  operationId: string,
-): boolean {
-  if (findPendingJobForEpisode(db, SOURCE_INDEX_JOB_TYPE, data.sourceId) !== undefined) {
-    return false;
-  }
-  enqueueReflectionJob(
-    db,
-    SOURCE_INDEX_JOB_TYPE,
-    {
-      [REFLECTION_QUEUE_EPISODE_FIELD]: data.sourceId,
-      index_policy: data.indexPolicy,
-      work_key: indexWorkKey(data.sourceId, data.indexPolicy),
-      operation_id: operationId,
-    },
-    {
-      lane: 'bulk',
-      sessionId: data.sessionId,
-      episodeId: data.sourceId,
-      now: new Date(data.acceptedAt),
-    },
-  );
-  return true;
-}
-
 export function enqueueSourceWork(
   db: SqliteHandle,
   data: QueuedAcceptance,

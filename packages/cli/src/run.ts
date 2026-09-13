@@ -1,7 +1,5 @@
-import { runConsolidate } from './consolidate.js';
 import { runCosts } from './costs.js';
 import { runDoctor } from './doctor.js';
-import { runEvict } from './evict.js';
 import { runForget } from './forget.js';
 import { runHooks } from './hooks-cmd.js';
 import { runInit } from './init.js';
@@ -31,10 +29,6 @@ type Command = {
 };
 
 const commands: Record<string, Command> = {
-  consolidate: {
-    summary: 'resume or inspect the one narrative migration cohort: status | run',
-    run: (argv) => runConsolidate(argv),
-  },
   costs: {
     summary: 'API token usage and estimated cost by day and surface',
     run: (argv) => runCosts(argv),
@@ -114,10 +108,6 @@ const commands: Record<string, Command> = {
   forget: {
     summary: 'bitemporal close of a node by id or query: nothing is deleted',
     run: (argv) => runForget(argv),
-  },
-  evict: {
-    summary: 'the destructive fence and the two acts that move it: status | disarm | rearm',
-    run: (argv) => runEvict(argv),
   },
   unforget: {
     summary: 'take back a forget: the statement chain keeps both, the node serves again',

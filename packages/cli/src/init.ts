@@ -12,6 +12,7 @@ import {
   recordLifecycleEvent,
   resolveProviderRouting,
   routingSummary,
+  GRAPH_SCHEMA_VERSION,
   runGraphMigrations,
   SqliteStore,
   validateNeo4jEndpoint,
@@ -255,11 +256,11 @@ type LifecycleSubstrate = LifecycleTarget & {
 /**
  * What the substrate remembers about the run that made it. The fresh case is the birth event,
  * and the only other thing an init changes about the substrate itself is the schema it runs on,
- * so an existing substrate records an event only when a migration actually applied.
+ * so an existing substrate records an event only when the schema was recorded for the first time.
  */
 async function recordInit(
   target: LifecycleSubstrate,
-  applied: readonly number[],
+  applied: boolean,
   memberName: string,
   profile: InitProfile,
 ): Promise<void> {
@@ -267,16 +268,14 @@ async function recordInit(
   if (target.created) {
     await recordLifecycleEvent(deps, {
       event: 'substrate_initialized',
-      text:
-        `substrate initialized: ${String(applied.length)} migrations applied, ` +
-        `backbone created for ${memberName}, profile ${profile}`,
+      text: `substrate initialized: backbone created for ${memberName}, profile ${profile}`,
     });
     return;
   }
-  if (applied.length > 0) {
+  if (applied) {
     await recordLifecycleEvent(deps, {
-      event: 'migrations_applied',
-      text: `graph schema advanced: migrations ${applied.join(', ')} applied on an existing substrate`,
+      event: 'schema_recorded',
+      text: `graph schema version ${String(GRAPH_SCHEMA_VERSION)} recorded on an existing substrate`,
     });
   }
 }

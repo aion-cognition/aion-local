@@ -261,54 +261,16 @@ export async function readingHorizonCheck(driver: Driver): Promise<CheckResult> 
 }
 
 /**
- * The fence in one line, with the three readings kept apart.
- *
- * `disarmed` is not `unarmed`. One substrate was never opened and the other was opened and then
- * stopped, and an operator looking at a stopped substrate needs to see that somebody did it and
- * when rather than read it as a capability nobody ever established.
- */
-export function evictionFence(report: CoverageStateReport): string {
-  if (report.evictionStopRequestedBy !== null) {
-    // Asked for and not recorded. It refuses evictions exactly as a recorded stop does, and the
-    // operation is named because re-running the command is what finishes it.
-    return (
-      `eviction fence DISARMED: a stop is owed by ${report.evictionStopRequestedBy} and is not ` +
-      'recorded yet. Nothing is removed. `aion evict disarm` finishes it; the service does not ' +
-      'arm over a stop that is owed'
-    );
-  }
-  if (report.evictionGate === 'disarmed') {
-    return (
-      `eviction fence DISARMED at ${report.evictionDisarmedAt ?? 'an unrecorded moment'} ` +
-      `(compatibility revision ${String(report.evictionCompatibilityRevision)} stands; nothing is removed)`
-    );
-  }
-  if (report.evictionGate === 'unarmed') {
-    // Closed and not closed by anybody: the service arms it at each start, so this is either a
-    // substrate that has not started yet or one whose preconditions do not hold.
-    return 'eviction fence closed (no compatibility revision); the service arms it at start';
-  }
-  return `eviction fence ARMED at compatibility revision ${String(report.evictionCompatibilityRevision)}`;
-}
-
-/**
- * What the substrate says it covers, and the fence it says nothing about.
+ * What the substrate says it covers.
  *
  * A preparing contract is the state a substrate is in between initialization and the activation
  * the service publishes on its next start. It serves, so this warns rather than fails, and it
  * names what the state costs: no temporal read carries a horizon while it holds. An unreadable
  * record fails, because every covered read refuses against one, present-tense reads included.
- *
- * The eviction clause is spelled out rather than left to inference. The two gates live on one
- * row and an active contract arms nothing.
  */
 export function coverageStateCheck(report: CoverageStateReport): CheckResult {
-  const fence = evictionFence(report);
   if (report.coverageState === 'failed') {
-    return {
-      ok: false,
-      detail: `no servable coverage record; every covered read refuses. ${fence}`,
-    };
+    return { ok: false, detail: 'no servable coverage record; every covered read refuses' };
   }
   if (report.coverageState === 'preparing') {
     return {
@@ -316,12 +278,12 @@ export function coverageStateCheck(report: CoverageStateReport): CheckResult {
       warn: true,
       detail:
         'contract preparing: temporal reads answer partial with coverage_contract_not_active, ' +
-        `and no read carries a history horizon. The service activates it at start. ${fence}`,
+        'and no read carries a history horizon. The service activates it at start',
     };
   }
   return {
     ok: true,
-    detail: `contract active, history since ${report.historySince ?? 'unrecorded'}. ${fence}`,
+    detail: `contract active, history since ${report.historySince ?? 'unrecorded'}`,
   };
 }
 

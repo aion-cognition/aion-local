@@ -50,7 +50,13 @@ export function claimConsolidationOperation(): IntrospectionOperation {
       }
 
       const report = await consolidateClaims(
-        { driver: ctx.driver, provider: ctx.provider, db: ctx.db, logger: ctx.logger },
+        {
+          driver: ctx.driver,
+          provider: ctx.provider,
+          db: ctx.db,
+          logger: ctx.logger,
+          ...(ctx.narratives === undefined ? {} : { publications: ctx.narratives.publications }),
+        },
         {
           model: ctx.config.models.reflect,
           timeoutMs: ctx.config.reflection.stageTimeoutMs,

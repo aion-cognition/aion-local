@@ -10,6 +10,7 @@ import {
   stopNeo4jHarness,
   type Neo4jHarness,
 } from '@aion/core/infrastructure/graph/test-support/neo4j-harness.fixture.js';
+import { listReflectionJobs } from '@aion/core/infrastructure/sqlite/reflection-queue.js';
 import { bootstrapService, MCP_PATH, type AionService } from '@aion/mcp';
 import { ReflectionOutputSchema } from '@aion/protocol';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -69,6 +70,26 @@ async function freePort(): Promise<number> {
   return port;
 }
 
+function pause(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+/** Waits out the queue the reflection call filled, so nothing publishes during the recall. */
+async function settled(): Promise<void> {
+  const deadline = Date.now() + 240_000;
+  while (Date.now() < deadline) {
+    if (listReflectionJobs(migrationDb).length === 0) {
+      // One more beat for the completion's own publication to land after the row goes.
+      await pause(2_000);
+      return;
+    }
+    await pause(500);
+  }
+  throw new Error('the reflection queue never drained');
+}
+
 beforeAll(async () => {
   harness = await startNeo4jHarness();
   dir = mkdtempSync(join(tmpdir(), 'aion-cli-last-int-'));
@@ -100,6 +121,11 @@ beforeAll(async () => {
       arguments: { observations: [OBSERVATION] },
     });
     ReflectionOutputSchema.parse(ack.structuredContent);
+
+    // Taken once the enrichment has settled. A recall's effects are fenced on the publication
+    // position it read under, so one racing a running pipeline is served and records nothing,
+    // and what this file reads back is the recorded pack.
+    await settled();
 
     const recalled = await client.callTool({ name: 'recall', arguments: { query: QUERY } });
     mcpPack = recalled.structuredContent;

@@ -1,5 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 
+import { advanceNodeState } from '../../evidence/application/node-state.js';
 import { supersede } from '../../infrastructure/graph/bitemporal.js';
 import type { KeyedCloseMode } from '../../infrastructure/graph/claim-key-queries.js';
 import {
@@ -215,6 +216,12 @@ export async function applySupersessionProposal(
     attribution: input.attribution ?? HUMAN_REVIEW,
     ...(input.keyedCloseMode === undefined ? {} : { keyedCloseMode: input.keyedCloseMode }),
   });
+  // The closed nodes' own semantic state moved, so evidence somebody is holding about that state
+  // stops being current here, in the act that moved it. A judgment fenced on the reading this
+  // close invalidated would otherwise still verify as current against a claim that is shut.
+  for (const nodeId of applied.closedIds) {
+    advanceNodeState(db, nodeId, `supersession-apply:${proposal.id}`, now.toISOString());
+  }
   // After the close, not inside it: the marker is a repair instruction rather than part of the
   // correction, and a narrative left unmarked costs a stale sentence, not a wrong close.
   const regroundedNarratives = await markNarrativesForRegrounding(driver, applied.closedIds);

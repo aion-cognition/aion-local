@@ -1,11 +1,11 @@
 import { z } from 'zod';
 
 import {
-  acknowledgeMaterialization,
-  discardMaterialization,
-  prepareMaterialization,
-  type PlannedLink,
-} from './legacy-records.js';
+  acknowledgeEvidenceRecords,
+  discardEvidenceRecords,
+  prepareEvidenceRecords,
+  type EvidenceLinkRecord,
+} from './evidence-records.js';
 import { verifyEvidenceRevision } from '../../evidence/application/dependencies.js';
 import { ownershipIncidence, ownershipSummaryFor } from '../../evidence/application/ownership.js';
 import { ownershipEvidenceVersion } from '../../evidence/domain/ownership.js';
@@ -109,7 +109,7 @@ function isCarriedRole(role: string): role is DurableRole {
   return ['extraction', 'mention', 'participation', 'source_coverage'].includes(role);
 }
 
-function carriedLinks(data: MergeData): readonly PlannedLink[] {
+function carriedLinks(data: MergeData): readonly EvidenceLinkRecord[] {
   return data.carried.map((row) => ({
     linkId: evidenceLinkId(row.role, 'retained_node', row.sourceId, data.survivorId),
     kind: row.role,
@@ -311,7 +311,7 @@ export const claimMergePublication = new PublicationOperation({
     return result;
   },
   prepareSqlite(context, data) {
-    prepareMaterialization(context.db, {
+    prepareEvidenceRecords(context.db, {
       sourceId: data.survivorId,
       operationId: context.operationId,
       links: carriedLinks(data),
@@ -346,7 +346,7 @@ export const claimMergePublication = new PublicationOperation({
     // the absorbed claim on one no repair could discharge.
     if (!result.merged) {
       releasePreparedLinkVersions(context.db, context.operationId);
-      discardMaterialization(context.db, {
+      discardEvidenceRecords(context.db, {
         sourceId: data.survivorId,
         operationId: context.operationId,
         scopes: carriedScopes(data),
@@ -354,7 +354,7 @@ export const claimMergePublication = new PublicationOperation({
       });
       return undefined;
     }
-    acknowledgeMaterialization(
+    acknowledgeEvidenceRecords(
       context.db,
       {
         sourceId: data.survivorId,
@@ -389,7 +389,7 @@ export const claimMergePublication = new PublicationOperation({
     // Same release on the rejected path. A discard is terminal for the operation, so a version it
     // prepared under its own key has no later attempt that could adopt or settle it.
     releasePreparedLinkVersions(context.db, context.operationId);
-    discardMaterialization(context.db, {
+    discardEvidenceRecords(context.db, {
       sourceId: data.survivorId,
       operationId: context.operationId,
       scopes: carriedScopes(data),

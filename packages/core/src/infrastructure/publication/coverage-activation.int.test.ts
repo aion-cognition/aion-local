@@ -7,7 +7,6 @@ import { PublicationCoordinator } from './coordinator.js';
 import { activateCoverageOnStart } from './coverage-activation.js';
 import { PUBLICATION_HANDLERS } from './handlers.js';
 import { checkCoverage } from '../../recall/application/coverage-checker.js';
-import { durableEligibility } from '../../reflection/application/eviction-eligibility.js';
 import { runGraphMigrations } from '../graph/migrations.js';
 import {
   startRehearsalSubstrate,
@@ -16,7 +15,6 @@ import {
 } from '../graph/test-support/consolidation-rehearsal.fixture.js';
 import { readCurrentCoverageContract } from '../sqlite/coverage-contract.js';
 import { SqliteStore } from '../sqlite/database.js';
-import { readSubstratePairing } from '../sqlite/publication-control.js';
 
 /**
  * A fresh substrate taken through the step an ordinary service start takes, against the real
@@ -126,16 +124,4 @@ it('adds no revision and no second operation when a later start runs the same st
       )
       .get(),
   ).toEqual(operations);
-});
-
-it('leaves eviction refusing every source with the contract active', () => {
-  expect(readSubstratePairing(store.db)).toMatchObject({
-    activationCapabilityRevision: 1,
-    evictionCompatibilityRevision: 0,
-  });
-
-  expect(durableEligibility(store.db, 'any-source', { now: NOW, minAgeMs: 0 })).toEqual({
-    status: 'pinned',
-    reason: 'compatibility_not_established',
-  });
 });

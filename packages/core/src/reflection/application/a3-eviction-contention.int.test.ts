@@ -3,11 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeAll, expect, it } from 'vitest';
 
-import { durableEligibility } from './eviction-eligibility.js';
 import {
   activateCoverage,
-  armEviction,
-  disarmEviction,
   driver,
   eligibleSource,
   evictionPayload,
@@ -19,16 +16,6 @@ import {
   type EvictionNomination,
 } from './test-support/a3-eviction.fixture.js';
 import { nodeExists } from '../../infrastructure/graph/test-support/a3-eviction-graph.fixture.js';
-import {
-  claimEvictionStop,
-  evictionStopStands,
-  readSubstratePairing,
-} from '../../infrastructure/sqlite/publication-control.js';
-import { publicationRecord } from '../../infrastructure/sqlite/publication-coordinator-store.js';
-import {
-  preparePublicationIntent,
-  settleUnacknowledgedIntent,
-} from '../../infrastructure/sqlite/publication-intents.js';
 import { readSourceResidency } from '../../infrastructure/sqlite/source-lifecycle.js';
 
 /**
@@ -149,7 +136,6 @@ function actor(mode: Mode, operationId: string, payload: Record<string, unknown>
 
 beforeAll(async () => {
   await activateCoverage();
-  await armEviction();
 }, 180_000);
 
 afterEach(async () => {
@@ -244,75 +230,4 @@ it('refuses loudly in a process that composed a handler set without the eviction
   expect(await nodeExists(driver, sourceId)).toBe(true);
   expect((await publications.recover())?.status).toBe('acknowledged');
   expect(await nodeExists(driver, sourceId)).toBe(false);
-});
-
-it('stops a killed writer from finishing its removal when the operator disarms', async () => {
-  const { sourceId, nomination } = await attempt('contend-disarm');
-  const operationId = randomUUID();
-
-  await killAt('hold_prepared', operationId, evictionPayload(nomination));
-  // Nothing removed, and a durable pending eviction occupying the receipt. This is the state the
-  // operator is trying to act on: the projection is still there and a recovery would take it.
-  expect(await nodeExists(driver, sourceId)).toBe(true);
-
-  // The stop, published exactly as `aion evict disarm` publishes it. The guard settles what is
-  // pending before it takes this request, so the claim goes down first and the pending eviction
-  // meets it at its own recovery re-check.
-  await disarmEviction();
-
-  expect(await nodeExists(driver, sourceId)).toBe(true);
-  expect(readSourceResidency(store.db, sourceId)?.state).toBe('resident');
-  // The pending operation ended, with a receipt that says why rather than being left behind.
-  expect(publicationRecord(store.db, operationId)).toMatchObject({
-    state: 'deferred',
-    error: 'compatibility_disarmed',
-  });
-  expect(await publications.checkpoint()).toMatchObject({ status: 'ready' });
-  expect(durableEligibility(store.db, sourceId, POLICY)).toMatchObject({
-    status: 'pinned',
-    reason: 'compatibility_disarmed',
-  });
-
-  await armEviction();
-});
-
-it('claims the stop over a spent claim, so a killed writer still cannot finish', async () => {
-  // The reviewer's probe. A disarm that ended refused used to strand its name on the row. The
-  // resolver reads a spent claim as no stop, so the substrate is armed again, and every later
-  // claim was a first-claim-wins no-op beside it: the next stop published with nothing between it
-  // and a pending removal. M1 verbatim, one attempt later.
-  const spent = 'eviction-disarm:spent';
-  claimEvictionStop(store.db, spent);
-  preparePublicationIntent(store.db, {
-    operationId: spent,
-    kind: 'eviction_arming',
-    payloadDigest: `digest:${spent}`,
-    payloadJson: '{}',
-    affectedScopesJson: '[]',
-    expectedJson: '{}',
-    preparedActionsJson: '[]',
-    createdAt: NOW,
-  });
-  settleUnacknowledgedIntent(store.db, spent, 'deferred', 'already_disarmed');
-  // Spent: the name stands on the row and stops nothing.
-  expect(readSubstratePairing(store.db)?.evictionStopRequestedBy).toBe(spent);
-  expect(evictionStopStands(store.db, readSubstratePairing(store.db))).toBe(false);
-
-  const { sourceId, nomination } = await attempt('contend-spent-claim');
-  const operationId = randomUUID();
-  await killAt('hold_prepared', operationId, evictionPayload(nomination));
-  expect(await nodeExists(driver, sourceId)).toBe(true);
-
-  await disarmEviction();
-
-  expect(await nodeExists(driver, sourceId)).toBe(true);
-  expect(readSourceResidency(store.db, sourceId)?.state).toBe('resident');
-  expect(publicationRecord(store.db, operationId)).toMatchObject({
-    state: 'deferred',
-    error: 'compatibility_disarmed',
-  });
-  // The stop is recorded and the row is clear, so the spent name is gone with it.
-  expect(readSubstratePairing(store.db)?.evictionStopRequestedBy).toBeNull();
-
-  await armEviction();
 });

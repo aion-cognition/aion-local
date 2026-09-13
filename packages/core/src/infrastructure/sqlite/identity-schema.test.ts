@@ -1,4 +1,3 @@
-import Database from 'better-sqlite3';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,66 +11,8 @@ import { SqliteStore } from './database.js';
  * the column additions have to reach, and the pragma comparison below is what says they reach
  * the same table a fresh file gets.
  */
-const LEGACY_STATEMENTS = [
-  `CREATE TABLE chunk_revisions (
-    chunk_id TEXT NOT NULL,
-    revision_no INTEGER NOT NULL CHECK (revision_no > 0),
-    node_id TEXT NOT NULL UNIQUE,
-    state TEXT NOT NULL,
-    operation_id TEXT,
-    evidence_revision_json TEXT,
-    allocated_at TEXT NOT NULL,
-    known_from TEXT,
-    observed_ack_at TEXT,
-    published_at TEXT,
-    closed_at TEXT,
-    PRIMARY KEY (chunk_id, revision_no)
-  )`,
-  `CREATE TABLE overview_revisions (
-    family_key TEXT NOT NULL,
-    revision_no INTEGER NOT NULL CHECK (revision_no > 0),
-    node_id TEXT NOT NULL UNIQUE,
-    state TEXT NOT NULL,
-    operation_id TEXT,
-    evidence_revision_json TEXT,
-    allocated_at TEXT NOT NULL,
-    known_from TEXT,
-    observed_ack_at TEXT,
-    published_at TEXT,
-    closed_at TEXT,
-    coverage_gaps_json TEXT,
-    PRIMARY KEY (family_key, revision_no)
-  )`,
-  `CREATE TABLE source_processing_generations (
-    source_id TEXT NOT NULL,
-    processing_generation INTEGER NOT NULL CHECK (processing_generation > 0),
-    policy_revision INTEGER NOT NULL,
-    input_digest TEXT,
-    state TEXT NOT NULL CHECK (state IN ('allocated','active','replaced')),
-    inventory_complete INTEGER NOT NULL DEFAULT 0 CHECK (inventory_complete IN (0,1)),
-    inventory_revision INTEGER,
-    adoption_proof_json TEXT,
-    created_at TEXT NOT NULL,
-    PRIMARY KEY (source_id, processing_generation)
-  )`,
-  `CREATE TABLE reflection_queue (
-    id TEXT PRIMARY KEY,
-    job_type TEXT NOT NULL,
-    payload_json TEXT NOT NULL,
-    enqueued_at TEXT NOT NULL,
-    attempts INTEGER NOT NULL DEFAULT 0,
-    claimed_at TEXT,
-    claimed_by TEXT,
-    last_error TEXT,
-    lane TEXT NOT NULL DEFAULT 'interactive',
-    session_id TEXT,
-    lane_seq INTEGER NOT NULL DEFAULT 0
-  )`,
-];
 
 type TableRow = { name: string };
-type ColumnRow = { cid: number; name: string; type: string; notnull: number; dflt_value: unknown };
-type IndexRow = { name: string; unique: number; partial: number };
 
 function tableNames(store: SqliteStore): string[] {
   return store.db
@@ -82,19 +23,6 @@ function tableNames(store: SqliteStore): string[] {
 }
 
 /** Every table's columns and indexes as the pragmas report them, which is the shape comparison. */
-function schemaShape(
-  store: SqliteStore,
-): Record<string, { columns: ColumnRow[]; indexes: IndexRow[] }> {
-  const shape: Record<string, { columns: ColumnRow[]; indexes: IndexRow[] }> = {};
-  for (const table of tableNames(store)) {
-    const columns = store.db.pragma(`table_info(${table})`) as ColumnRow[];
-    const indexes = (store.db.pragma(`index_list(${table})`) as IndexRow[])
-      .map(({ name, unique, partial }) => ({ name, unique, partial }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-    shape[table] = { columns, indexes };
-  }
-  return shape;
-}
 
 describe('the identity schema bootstrap', () => {
   let dir: string;
@@ -128,9 +56,6 @@ describe('the identity schema bootstrap', () => {
           'evidence_scope_versions',
           'family_selection_log',
           'ingest_log',
-          'legacy_narratives',
-          'migration_cohorts',
-          'migration_progress',
           'orphan_observations',
           'overview_registry',
           'overview_revisions',
@@ -154,51 +79,6 @@ describe('the identity schema bootstrap', () => {
     } finally {
       store.close();
     }
-  });
-
-  it('reaches the same shape on a substrate that predates the added columns, keeping its rows', () => {
-    const legacyPath = join(dir, 'legacy.sqlite');
-    const legacy = new Database(legacyPath);
-    for (const statement of LEGACY_STATEMENTS) {
-      legacy.exec(statement);
-    }
-    legacy
-      .prepare(
-        `INSERT INTO chunk_revisions (chunk_id, revision_no, node_id, state, allocated_at)
-         VALUES ('chunk-1', 1, 'node-1', 'published', '2026-09-01T00:00:00.000Z')`,
-      )
-      .run();
-    legacy
-      .prepare(
-        `INSERT INTO source_processing_generations
-           (source_id, processing_generation, policy_revision, state, created_at)
-         VALUES ('source-1', 1, 1, 'active', '2026-09-01T00:00:00.000Z')`,
-      )
-      .run();
-    legacy.close();
-
-    const retrofit = open('legacy.sqlite');
-    const fresh = open('fresh.sqlite');
-    try {
-      expect(schemaShape(retrofit)).toEqual(schemaShape(fresh));
-
-      // The defaults land on the rows that were already there rather than on new ones.
-      expect(
-        retrofit.db
-          .prepare('SELECT attempts, next_attempt_at, coverage_gaps_json FROM chunk_revisions')
-          .all(),
-      ).toEqual([{ attempts: 0, next_attempt_at: null, coverage_gaps_json: null }]);
-      expect(
-        retrofit.db.prepare('SELECT operational_revision FROM source_processing_generations').all(),
-      ).toEqual([{ operational_revision: 0 }]);
-    } finally {
-      fresh.close();
-      retrofit.close();
-    }
-
-    // A second open is where a repeated ALTER would raise "duplicate column name".
-    const reopened = open('legacy.sqlite');
-    reopened.close();
   });
 
   it('refuses a negative attempt count and a negative operational revision', () => {

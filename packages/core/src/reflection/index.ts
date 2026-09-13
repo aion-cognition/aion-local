@@ -14,15 +14,8 @@ export type { ReflectionIntakeDeps } from './application/intake.js';
  */
 export { SOURCE_INDEX_JOB_TYPE } from './application/intake-queue.js';
 
-/**
- * The one installed handler set. The legacy materialization producer joins it here; its migration
- * DRIVER is a separate owner's, so the freeze/walk/seal entry points stay inside core until that
- * driver exists to import them.
- */
-export {
-  INSTALLED_PUBLICATION_HANDLERS,
-  INSTALLED_PUBLICATION_KINDS,
-} from './application/installed-publications.js';
+/** The one installed handler set, shared by every process that publishes. */
+export { INSTALLED_PUBLICATION_HANDLERS } from './application/installed-publications.js';
 
 /**
  * The suppression writer's identity, exported because `aion forget` and `aion unforget` are the
@@ -32,27 +25,6 @@ export {
   sourceSuppressionOperationId,
   sourceSuppressionPublication,
 } from './application/source-suppression.js';
-
-/**
- * The three acts on the fence, reached from different places on purpose. The first arming is the
- * service start's, through `armEvictionOnStart` below; the stop and the lift of a stop are an
- * operator's, through `aion evict disarm` and `aion evict rearm`. Nothing in initialization or the
- * maintenance catalog reaches any of them. The precondition tables and the unverified list are
- * exported for the two surfaces that print them, `status` and `rearm`.
- */
-export {
-  ARMING_NOT_VERIFIED,
-  armingPreconditions,
-  disarmPreconditions,
-  EVICTION_COMPATIBILITY_REVISION,
-  evictionArmingOperationId,
-  evictionArmingPublication,
-  rearmPreconditions,
-} from './application/eviction-arming.js';
-export type { ArmingPrecondition } from './application/eviction-arming.js';
-
-/** The start-time arm, published once per substrate and never over a standing stop. */
-export { armEvictionOnStart } from './application/eviction-arming-start.js';
 
 export { LaneAssigner } from './application/lanes.js';
 
@@ -142,8 +114,4 @@ export {
   UNANIMOUS_APPLY_METHOD,
 } from './application/proposals.js';
 export type { ApplyScope } from './application/proposals.js';
-export {
-  runNarrativeMigrationBatch,
-  NARRATIVE_MIGRATION_LIMITS,
-} from './application/narrative-migration.js';
 export { CHUNK_BOUNDARY_POLICY } from './domain/chunk-boundary.js';

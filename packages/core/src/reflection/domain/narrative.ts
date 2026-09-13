@@ -4,6 +4,9 @@ import { hashContent } from './content.js';
 import type { ChatMessage, JsonSchema } from '../../infrastructure/providers/types.js';
 import { LOCAL as sessionNarrativePrompt } from '../../prompts/narrative-synthesis.js';
 
+/** Provenance: what produced a narrative node, as distinct from what later reads it. */
+export const NARRATIVE_EXTRACTION_METHOD = 'reflection_narrative';
+
 /**
  * Three boundaries warrant a session narrative: the close (the MCP transport ending), silence
  * past the idle window, and a mid-session boundary, whose rule lives in `mid-session.ts` and

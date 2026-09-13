@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { GRAPH_NODE_SCOPE } from '../../evidence/domain/scopes.js';
+import { advanceNodeState } from '../../evidence/application/node-state.js';
 import { supersedeInTransaction } from '../../infrastructure/graph/bitemporal.js';
 import type { GraphTransaction } from '../../infrastructure/graph/connection.js';
 import {
@@ -13,7 +13,6 @@ import { buildEvidenceRevision } from '../../infrastructure/publication/precondi
 import { narrativeRevisionBinding } from '../../infrastructure/sqlite/chunk-manifest.js';
 import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { readScopeMirror, recordScopeMirror } from '../../infrastructure/sqlite/evidence-scope.js';
 import { listAcknowledgedRevisions } from '../../infrastructure/sqlite/narrative-allocations.js';
 import {
   CHUNK_REVISION_FAMILY,
@@ -296,17 +295,7 @@ export const narrativeFamilyRepairPublication = new PublicationOperation({
     // revisions closed, which is the disagreement being repaired — so the mirrors and the
     // receipt are the whole durable record of the repair.
     for (const nodeId of data.targets) {
-      const held = readScopeMirror(context.db, {
-        endpointId: nodeId,
-        relationClass: GRAPH_NODE_SCOPE,
-      });
-      recordScopeMirror(context.db, {
-        endpointId: nodeId,
-        relationClass: GRAPH_NODE_SCOPE,
-        mirroredRevision: (held?.mirroredRevision ?? 0) + 1,
-        operationId: context.operationId,
-        mirroredAt: new Date(context.knownFrom),
-      });
+      advanceNodeState(context.db, nodeId, context.operationId, context.knownFrom);
     }
     return undefined;
   },

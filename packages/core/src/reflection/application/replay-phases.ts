@@ -31,11 +31,7 @@ import {
   type ExperienceArchiveFilter,
   type ExperienceArchiveRow,
 } from '../../infrastructure/sqlite/experience-archive.js';
-import {
-  listCohortSourcesAfter,
-  listMigrationCohorts,
-  type CohortSourceFilter,
-} from '../../infrastructure/sqlite/migration-cohorts.js';
+import {} from '../../infrastructure/sqlite/ingest-log.js';
 import {
   readSourcePartTurnIds,
   readSourceRecord,
@@ -138,10 +134,10 @@ async function replayRow(
  * so a source that reads only its archive block loses the references it actually holds and a
  * rebuilt projection comes back without them.
  *
- * The block survives as a compatibility fallback for statements no acceptance has materialized
- * yet, and only for the source whose own row it is. A replacement never reads it: those
- * statements belong to the predecessor, and re-stating them here would assert them under an
- * occurrence that never made them.
+ * The block is the fallback for statements no acceptance has recorded as a batch, and it is read
+ * only for the source whose own row it is. A replacement never reads it: those statements belong
+ * to the predecessor, and re-stating them here would assert them under an occurrence that never
+ * made them.
  *
  * Statements still awaiting their acknowledgment are absent on purpose. They are owed to the
  * publication that prepared them, and replaying one would publish a decision that publication
@@ -158,25 +154,25 @@ function statementsOf(
   sourceId: string,
   archived: ReflectionProvenance | undefined,
 ): ReferenceStatements | undefined {
-  const legacy =
+  const block =
     row.episodeId === sourceId && archived !== undefined
       ? referenceStatementsOf(archived)
       : undefined;
   const accepted = acceptedReferencesOf(deps.db, sourceId);
   if (accepted === undefined) {
-    return legacy;
+    return block;
   }
   const confirmations = new Map<string, ConfirmationStatement>(
     accepted.confirmations.map((entry) => [entry.target, entry] as const),
   );
-  for (const entry of legacy?.confirmations ?? []) {
+  for (const entry of block?.confirmations ?? []) {
     if (!confirmations.has(entry.target)) {
       confirmations.set(entry.target, entry);
     }
   }
   return {
-    supersedes: [...new Set([...accepted.supersedes, ...(legacy?.supersedes ?? [])])],
-    derivedFrom: [...new Set([...accepted.derivedFrom, ...(legacy?.derivedFrom ?? [])])],
+    supersedes: [...new Set([...accepted.supersedes, ...(block?.supersedes ?? [])])],
+    derivedFrom: [...new Set([...accepted.derivedFrom, ...(block?.derivedFrom ?? [])])],
     confirmations: [...confirmations.values()],
   };
 }
@@ -186,8 +182,9 @@ function statementsOf(
  *
  * Identity comes from the occurrence record rather than from a content-hash lookup in the
  * graph: the lookup answers only while the projection is there, and a replay is exactly the
- * pass that runs after it may not be. A row the records do not know yet is a legacy one, and it
- * takes the old path so the first replay of an unbackfilled substrate still works.
+ * pass that runs after it may not be. A row the records do not name at all is one whose
+ * acceptance never acknowledged, so it goes back through the ordinary store path and takes a
+ * fresh identity there.
  */
 async function projectRow(
   deps: ReplayDeps,
@@ -333,69 +330,6 @@ async function occurrenceOutcome(
     return 'unavailable';
   }
   return rowOutcome(deps, row, occurrence.sourceId, pass.pipelineVersion, pass.clock());
-}
-
-/**
- * The frozen cohorts, which the live order cannot reach.
- *
- * A legacy source was already in the substrate when its cohort was taken, so it has no ingest
- * position and the live walk skips it; the raw fallback skips it too, because its occurrence IS
- * recorded. The frozen membership is its own cursor, and the migration job producing that
- * membership does not discharge a consumer's obligation to walk it.
- *
- * Returns how many members this pass visited.
- */
-export async function walkCohorts(
-  deps: ReplayDeps,
-  options: ReplayOptions,
-  pass: PassOptions,
-  state: ReplayPass,
-): Promise<number> {
-  const resume = options.cursor?.kind === 'cohort' ? options.cursor : undefined;
-  const filter: CohortSourceFilter = {
-    ...(pass.selection.stale === true ? { excludePipelineVersion: pass.pipelineVersion } : {}),
-    ...(pass.selection.episodeId === undefined ? {} : { sourceId: pass.selection.episodeId }),
-    ...(pass.selection.sessionId === undefined ? {} : { sessionId: pass.selection.sessionId }),
-  };
-  const cohorts = listMigrationCohorts(deps.db);
-  const start = resume === undefined ? 0 : Math.max(0, cohorts.indexOf(resume.cohortId));
-  let visited = 0;
-  for (const cohortId of cohorts.slice(start)) {
-    let after = cohortId === resume?.cohortId ? resume.sourceId : '';
-    for (;;) {
-      const size = state.batchSize(options);
-      if (state.stopped(options.signal) || size <= 0) {
-        return visited;
-      }
-      const page = listCohortSourcesAfter(deps.db, cohortId, after, size, filter);
-      if (page.length === 0) {
-        break;
-      }
-      for (const member of page) {
-        if (state.stopped(options.signal)) {
-          break;
-        }
-        const row =
-          member.canonicalArchiveId === null
-            ? undefined
-            : getExperienceById(deps.db, member.canonicalArchiveId);
-        const outcome = await occurrenceOutcome(
-          deps,
-          { sourceId: member.sourceId, canonicalArchiveId: member.canonicalArchiveId },
-          row,
-          pass,
-        );
-        after = member.sourceId;
-        visited += 1;
-        state.record(outcome, { kind: 'cohort', cohortId, sourceId: after });
-      }
-      report(state, options);
-      if (state.aborted) {
-        return visited;
-      }
-    }
-  }
-  return visited;
 }
 
 /** The pre-backfill tail: archive rows no occurrence record names, by the old archive keyset. */

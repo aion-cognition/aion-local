@@ -34,11 +34,6 @@ import { SessionManager } from '../../../session/session-manager.js';
 import type { ChunkBoundaryPolicy } from '../../domain/chunk-boundary.js';
 import { publishChunkNarrative, sealSessionChunk } from '../chunk-narrative.js';
 import type { ChunkNarrativeDeps } from '../chunk-seal.js';
-import {
-  EVICTION_COMPATIBILITY_REVISION,
-  evictionArmingOperationId,
-  evictionArmingPublication,
-} from '../eviction-arming.js';
 import { durableEligibility, type EvictionCandidate } from '../eviction-eligibility.js';
 import { planRemoval, type PlannedRemoval } from '../eviction-plan.js';
 import { INSTALLED_PUBLICATION_HANDLERS } from '../installed-publications.js';
@@ -73,7 +68,6 @@ export let chunks: ChunkNarrativeDeps;
 let intake: ReflectionIntakeDeps;
 let substrate: RehearsalSubstrate;
 let dir: string;
-let armAttempt = 0;
 let failAt: { boundary: PublicationBoundary; match: string } | undefined;
 let hookAt: { boundary: PublicationBoundary; match: string; run: () => Promise<void> } | undefined;
 
@@ -315,57 +309,12 @@ export async function activateCoverage(): Promise<void> {
   expect(outcome.status).toBe('acknowledged');
 }
 
-/**
- * The operator's arming act, taken here so the battery can exercise the paths behind the fence.
- *
- * Through the real operation rather than a direct write, so what this battery runs against is
- * what an armed substrate actually is. It is deliberately a second call: activating coverage arms
- * nothing, and a battery that got eviction for free from `activateCoverage` would not notice if
- * the two gates merged.
- */
-export async function armEviction(): Promise<void> {
-  const epoch = readCurrentCoverageContract(store.db)?.epoch ?? '';
-  armAttempt += 1;
-  const outcome = await publications.publish({
-    kind: evictionArmingPublication.kind,
-    // One identity per call rather than the command's, which is derived from the revision and the
-    // epoch alone. The battery clears the fence to show a source pinned without it and arms again
-    // to show it is not, and a replay of the first act's identity would hand back that act's
-    // recorded result without writing anything.
-    operationId: `${evictionArmingOperationId('arm', EVICTION_COMPATIBILITY_REVISION, epoch, NOW)}:${String(armAttempt)}`,
-    payload: {
-      act: 'arm',
-      revision: EVICTION_COMPATIBILITY_REVISION,
-      coverageEpoch: epoch,
-      observedAt: NOW.toISOString(),
-    },
-  });
-  expect(outcome.status).toBe('acknowledged');
-}
-
 /** The withdrawal, through the same writer, so what it re-owes is what production re-owes. */
 export async function unforgetSource(sourceId: string): Promise<void> {
   const outcome = await publications.publish({
     kind: sourceSuppressionPublication.kind,
     operationId: sourceSuppressionOperationId('unforget', sourceId, NOW),
     payload: { act: 'unforget', nodeId: sourceId, observedAt: NOW.toISOString() },
-  });
-  expect(outcome.status).toBe('acknowledged');
-}
-
-/** The operator's stop, through the same operation, so the battery can hold the fence shut. */
-export async function disarmEviction(): Promise<void> {
-  const epoch = readCurrentCoverageContract(store.db)?.epoch ?? '';
-  armAttempt += 1;
-  const outcome = await publications.publish({
-    kind: evictionArmingPublication.kind,
-    operationId: `${evictionArmingOperationId('disarm', EVICTION_COMPATIBILITY_REVISION, epoch, NOW)}:${String(armAttempt)}`,
-    payload: {
-      act: 'disarm',
-      revision: EVICTION_COMPATIBILITY_REVISION,
-      coverageEpoch: epoch,
-      observedAt: NOW.toISOString(),
-    },
   });
   expect(outcome.status).toBe('acknowledged');
 }

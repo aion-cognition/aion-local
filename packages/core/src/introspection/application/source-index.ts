@@ -51,7 +51,7 @@ export type SourceIndexDeps = SourceSearchDeps & {
 
 export type SourceIndexRequest = {
   readonly sourceId: string;
-  /** Which cursor this run advances. The cohort migration keeps one of its own. */
+  /** Which cursor this run advances. A caller with its own pass keeps a stream of its own. */
   readonly stream?: string;
 };
 
@@ -134,8 +134,8 @@ function recordedHashes(db: SqliteHandle, sourceId: string): ReadonlyMap<string,
  *
  * Per source, not per stream. One shared cursor is a cursor every job overwrites: indexing a
  * long source, running a short one, and coming back to the first would restart the first from
- * wherever the second happened to stop. The stream name stays in the key so the live pass and
- * the cohort migration keep their own positions for the same source.
+ * wherever the second happened to stop. The stream name stays in the key so two passes over one
+ * source keep their own positions.
  */
 function sourceStream(stream: string, sourceId: string): string {
   return `${stream}:${sourceId}`;

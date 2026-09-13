@@ -1,4 +1,10 @@
 import { INCOMING_STATEMENT_SCOPES } from './chunk-evidence.js';
+import {
+  acknowledgeMintedNodeState,
+  discardMintedNodeState,
+  nodeStateScope,
+  prepareMintedNodeState,
+} from '../../evidence/application/node-state.js';
 import { OWNERSHIP_SCOPES } from '../../evidence/domain/ownership.js';
 import { durableRoleScope } from '../../evidence/domain/scopes.js';
 import type { EvidenceScope } from '../../infrastructure/publication/preconditions.js';
@@ -36,25 +42,12 @@ import {
  * behind a counter is whole, which is a statement about the records that has to hold of the graph
  * too: what makes it true of the graph is every relationship the graph currently shows having a
  * record. For a minted episode or turn id nothing shows. The id was drawn here, so no record and
- * no edge can name it yet, and the classification table in `legacy-materialization.ts` is what
- * keeps it that way: every rule that lands a relationship in one of the three ownership scopes
- * refuses an Episode or a Turn at the far end, so a mention, an extraction or a participation can
- * never reach one of these endpoints at all. The emptiness is a property of the shape rather than
- * of what the fresh path happens to record, which is why this is not archaeology about missing
- * machinery.
+ * no edge can name it yet. The emptiness is a property of the id being new rather than of what the
+ * write path happens to record, which is why this is a count rather than a guess.
  *
  * It stays true the same way the source side does: every existing writer of these counters
  * advances both endpoints in the transaction that records the incidence, and passes no census
  * status while doing it, so the number moves without the count being re-claimed.
- *
- * The cohort seal cannot collide with either census while one cohort exists: a freshly minted uuid
- * sits in no frozen membership and carries no link row, so the seal never nominates it. A SECOND
- * cohort id is a different matter and it is a standing footgun rather than a case this writer
- * handles. `aion consolidate` takes any cohort id, and a new one freezes at the CURRENT intake
- * watermark, which sweeps every source accepted since the first freeze into the walk. Once that
- * happens the seal considers all seven support roles on the turns it materialized, and a turn whose
- * only classified edge is its own ordering answers `unsupported` instead of `unknown`. Retiring the
- * seal is what closes it.
  */
 
 /**
@@ -167,6 +160,15 @@ function mintedEndpoints(sourceId: string, turnIds: readonly string[]): readonly
 }
 
 /**
+ * The node's own state counter, established here for the same reason the three above are.
+ *
+ * An episode and a turn are retained nodes, and the reading a judgment binds is the one that says
+ * the statement it was shown is still the current reading of the node. The write that draws the id
+ * is the only one that can say the node has never been re-stated, so it is the one that counts it.
+ * Every later writer that changes the node's state advances the same counter.
+ */
+
+/**
  * What the acknowledgment publishes on the node side, for the affected-scope list its intent
  * records. Declared by the plan that mints the ids and by no other.
  */
@@ -175,7 +177,7 @@ export function mintedNodeCensusScopes(
   turnIds: readonly string[],
 ): readonly EvidenceScope[] {
   return mintedEndpoints(sourceId, turnIds).flatMap((endpointId) =>
-    MINTED_NODE_SCOPES.map((scope) => ({
+    [...MINTED_NODE_SCOPES, nodeStateScope(endpointId).relationClass].map((scope) => ({
       kind: 'relation_scope' as const,
       id: endpointId,
       scope,
@@ -213,6 +215,7 @@ export function prepareMintedNodeCensus(
         updatedAt: new Date(acceptedAt),
       });
     }
+    prepareMintedNodeState(db, endpointId, operationId, new Date(acceptedAt));
   }
 }
 
@@ -251,6 +254,9 @@ export function acknowledgeMintedNodeCensus(
         established += 1;
       }
     }
+    if (acknowledgeMintedNodeState(db, endpointId, operationId, knownFrom)) {
+      established += 1;
+    }
   }
   return established;
 }
@@ -272,5 +278,6 @@ export function discardMintedNodeCensus(
         updatedAt: new Date(acceptedAt),
       });
     }
+    discardMintedNodeState(db, endpointId, operationId, new Date(acceptedAt));
   }
 }

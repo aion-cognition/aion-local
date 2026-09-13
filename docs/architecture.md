@@ -100,8 +100,22 @@ no notion of episodes, cues, or memory packs beyond those primitives.
 - **`evidence/`**: `domain/` (the scope vocabulary, the read budget, and the shape of a
   resolved answer); `application/` (`resolver.ts`, the read that answers what a node's
   provenance supports, plus `judgment.ts`, `lineage-walk.ts`, `node-support.ts`,
-  `narrative-support.ts`, `ownership.ts` and `merge-recovery.ts`). Recall's serving view and
-  the maintenance loop's provenance questions both read through it.
+  `narrative-support.ts`, `node-state.ts`, `ownership.ts` and `merge-recovery.ts`). Recall's
+  serving view and the maintenance loop's provenance questions both read through it.
+
+  A judged pair is entitled to two things about each side: the source occurrences the node's own
+  family reaches, and the reading of the node the statement belongs to. Both are counted from
+  birth. The write that mints a node establishes the censuses on it and records the relationship
+  it made (`reflection/application/derived-node-evidence.ts`), which is honest because the id was
+  drawn by that write and nothing else can have recorded anything about it. Five producers reach
+  it: intake for an episode and its turns, the entity and cognitive stages for what they extract,
+  `curiosity` for the question it files, and claim consolidation for the claim it derives, which
+  names every source its members already carry rather than a capture of its own. `node-state.ts`
+  owns the second half: the same write establishes `graph.node_state` and its mirror, and every
+  later writer that changes the node's semantic state advances the same counter in the
+  acknowledgment that made the change — a forget, an orphan suppression, a family repair, and an
+  applied or auto-closed supersession. A pair whose sides carry neither is not judged; the judge
+  is not asked at all, and the work is reported as withheld with the scope that blocked it.
 - **`session/`**: `session-manager.ts`, identity-to-session-id resolution, cached per
   process, backed by `infrastructure/graph/sessions.ts`.
 
@@ -388,14 +402,9 @@ intention pass, assembly, and the three subtractions below it carry no timing.
     That answer stays `unknown` until all three ownership scopes on the node carry a census, and
     `unknown` serves. The acceptance counts those three for every episode and turn id it mints, so
     a raw capture is withheld from the session that wrote it on either branch. A claim, an insight
-    or an entity is not. Nothing on the fresh path records extraction, mention or participation
-    incidence, so their session set comes back empty, their verdict stays `unknown`, and the
-    covered read serves them to the session that produced them. The count runs forward only: a
-    capture the records held before this landed carries no census of its own, answers `unknown`,
-    and goes on being served back to the session that wrote it, while a migrated endpoint carries
-    its cohort seal's census and already answered the new way. Each item also carries a second
-    coverage gap that no census closes: nothing anywhere counts `graph.node_state`, so every item
-    reports `interpretation_text / unverified_scope` whatever its ownership says.
+    or an entity is counted by the write that derived it: the extraction stages record the
+    relationship they made and the censuses a minted id is entitled to, so their session set is
+    the one their own sources carry.
 
 11. **Near-duplicate fold.** The third subtraction, decided inside pack assembly itself rather
     than against a served-items record, and the only place two different node ids are ever read as
@@ -685,16 +694,14 @@ provenance the episode carries. It is also what one session links `INITIATED_BY`
 Session points at the Member, and the standing `aion-system` session the lifecycle events chain
 in points here instead, because nobody typed them.
 
-**Indexes and constraints** (migrations 001 through 006,
-`infrastructure/graph/migrations.ts`):
+**Indexes and constraints** (`infrastructure/graph/migrations.ts`, one declaration replayed on
+every `aion init`):
 
 - Uniqueness constraints on `AionNode.id`, and on `.id` for every primary label except
-  `Entity`, which takes `entity_name_unique` on `name_norm` alone instead. Migration 001
-  covers `Session`, `Episode`, `Turn`, `Member`, `Workspace`; 002 adds `Narrative`,
-  `Bridge`, and the nine cognitive types; 005 adds `Substrate`; 003 drops the composite
-  `(name_norm, type)` constraint the entity key used to carry. One name is one identity
-  whatever type the extractor picked for it, and `type` follows counted readings as an
-  ordinary property.
+  `Entity`, which takes `entity_name_unique` on `name_norm` alone instead: `Session`,
+  `Episode`, `Turn`, `Member`, `Workspace`, `Substrate`, `Narrative`, `Bridge`, and the nine
+  cognitive types. One name is one identity whatever type the extractor picked for it, and
+  `type` follows counted readings as an ordinary property.
 - One range index, `entity_name_squash_idx` on `Entity.name_squash`, the separator-stripped
   second lookup key. Never a uniqueness rule and never a write-time route: `re-mark` and
   `remark` squash together and are two words, so squash equality is evidence the dedup
@@ -706,19 +713,16 @@ in points here instead, because nobody typed them.
   `FOR (n:Memory)`. They serve the bounded half of a time-travel filter
   (`valid_until > t`); the open-interval half (`IS NULL`) has no index to seek and is a
   scan by construction.
-- One range index, `claim_subject_aspect_idx` on `Memory(subject_entity_id, aspect_norm)`
-  (migration 004): the seek behind the subject-keyed claim lookup, which asks on every
-  fact-bearing write which open claim already asserts the same attribute of the same subject.
+- One range index, `claim_subject_aspect_idx` on `Memory(subject_entity_id, aspect_norm)`: the
+  seek behind the subject-keyed claim lookup, which asks on every fact-bearing write which open
+  claim already asserts the same attribute of the same subject.
 - One fulltext index, `memory_content_fts`, over `Episode|Turn|Entity|Narrative` plus the
   nine cognitive labels, `ON EACH [summary, text, name]`, the target of the `bm25` seed
-  strategy. `Bridge` is the one `Memory` label it leaves out. It replaced migration 001's
-  narrower `content_fts` under a new name rather than by a drop-and-recreate:
-  `runGraphMigrations` replays every statement on every `aion init`, so a rename keeps a
-  re-init from destroying and repopulating a healthy index.
-- One more uniqueness constraint, on the publication guard's id (migration 006,
-  `publication-guard.ts`). Only the constraint is declared here; the guard node itself is
-  created under the substrate's bootstrap marker, so a guard that goes missing after init is
-  reported rather than silently replaced.
+  strategy. `Bridge` is the one `Memory` label it leaves out.
+- One more uniqueness constraint, on the publication guard's id (`publication-guard.ts`). Only
+  the constraint is declared here; the guard node itself is created under the substrate's
+  bootstrap marker, so a guard that goes missing after init is reported rather than silently
+  replaced.
 
 **Edge merge policy** (`infrastructure/graph/edges.ts`). Every relationship write goes
 through one `MERGE`, matched on endpoint ids resolved through `AionNode`: on create it

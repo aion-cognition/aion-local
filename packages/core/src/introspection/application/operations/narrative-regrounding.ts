@@ -24,20 +24,18 @@ import type {
  * correction's own subject with the old value. Two contradictory sentences, both current, is the
  * worst answer the substrate can give.
  *
- * TWO FAMILIES, TWO WAYS OF KNOWING. The legacy whole-session narrative carries a grounding marker
- * an apply stamps, and `findStaleNarratives` selects on it. A chunk revision carries something
- * better: the dependency set it was published on, stored with it, so what invalidated it is a
- * question the records answer exactly rather than a marker somebody had to remember to stamp. The
- * chunk pass reads that set through the same verifier the publication uses, and regrounds the
- * exact heads it finds stale through the same publication path — no whole-session rewrite for a
- * chunk, and no second synthesis path.
+ * TWO READINGS, ONE FAMILY. A narrative carries a grounding marker an applied supersession
+ * stamps, and `findStaleNarratives` selects on it. A published revision carries something better:
+ * the dependency set it was published on, stored with it, so what invalidated it is a question the
+ * records answer exactly rather than a marker somebody had to remember to stamp. The dependency
+ * pass reads that set through the same verifier the publication uses, and regrounds the exact
+ * heads it finds stale through the same publication path. The marker pass catches what a stamp
+ * reaches and no stored dependency names.
  *
- * It declares no metric. The one it used to declare counted the legacy graph marker, which is a
- * number about the family this operation is leaving rather than the population it now repairs; a
- * new baseline has to exist before runs over the new population can be scored, and the old count
- * is not that baseline. Recorded runs stay exactly as they were — they were true under the
- * interpretation that made them — and the parked sample is dropped by the scoring pass that
- * notices the metric is gone.
+ * It declares no metric. The one it used to declare counted the graph marker alone, which is one
+ * of the two populations it now repairs; a new baseline has to exist before runs over both can be
+ * scored, and the old count is not that baseline. Recorded runs stay exactly as they were, and
+ * the parked sample is dropped by the scoring pass that notices the metric is gone.
  */
 
 export const NARRATIVE_REGROUNDING_OPERATION = 'narrative_regrounding';
@@ -52,11 +50,11 @@ export function narrativeRegroundingRelevance(health: HealthSnapshot, batch: num
   if (batch <= 0) {
     return 0;
   }
-  // Two families, two readings, and either one alone is demand. The legacy count comes off the
-  // graph and the invalidated-head count off the manifest, so a degraded collector suppresses its
-  // own term and not the other's: a substrate whose graph reading failed still owes the rewrites
-  // its own stored dependency sets prove.
-  const legacy = health.degraded.includes(HEALTH_COLLECTORS.graph)
+  // Two readings, and either one alone is demand. The marker count comes off the graph and the
+  // invalidated-head count off the manifest, so a degraded collector suppresses its own term and
+  // not the other's: a substrate whose graph reading failed still owes the rewrites its own
+  // stored dependency sets prove.
+  const marked = health.degraded.includes(HEALTH_COLLECTORS.graph)
     ? 0
     : health.graph.staleNarratives;
   const seal = health.narrativeSeal;
@@ -64,7 +62,7 @@ export function narrativeRegroundingRelevance(health: HealthSnapshot, batch: num
     health.degraded.includes(HEALTH_COLLECTORS.narrativeSeal) || seal.availability !== 'measured'
       ? 0
       : (seal.invalidatedHeads ?? 0);
-  return Math.min(1, (legacy + invalidated) / batch);
+  return Math.min(1, (marked + invalidated) / batch);
 }
 
 function storedRevision(json: string | null): EvidenceRevision | undefined {
@@ -224,7 +222,7 @@ export function narrativeRegroundingOperation(batch: number): IntrospectionOpera
         detail:
           `${String(chunks.republished)} of ${String(chunks.stale)} invalidated chunk head(s) ` +
           `regrounded from their stored dependencies across ${String(chunks.examined)} examined; ` +
-          `${String(report.regenerated)} legacy narrative(s) rewritten from the claims that are ` +
+          `${String(report.regenerated)} marked narrative(s) rewritten from the claims that are ` +
           `open now, ${String(report.held)} left standing on proved durable support, ` +
           `${String(report.withheld)} withheld for want of proof, ` +
           `${String(report.failed)} generation failure(s)`,

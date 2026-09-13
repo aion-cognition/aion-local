@@ -59,7 +59,7 @@ Interpretation is never deleted, and a repo-wide test fails the build on any Cyp
 outside the three files it pins by name. One of those three is the exception, bounded to the raw
 layer. `episode_evict` removes an Episode or Turn projection once a published narrative covers it
 and the experience archive still holds the captured parts, so the record outlives the projection.
-`aion evict status | disarm | rearm` is the operator's fence over it.
+Twelve conditions decide each source, every one positively verified against the durable records.
 
 That is also why every node carries two time intervals rather than one. World time
 (`valid_from` / `valid_until`) is when the fact was true. System time (`tx_from` / `tx_until`)

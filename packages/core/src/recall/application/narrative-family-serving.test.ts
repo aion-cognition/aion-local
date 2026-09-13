@@ -51,7 +51,7 @@ const view: ResolvedEvidenceView = {
       [
         'legacy',
         {
-          family: 'legacy_session_overview',
+          family: 'overview',
           sessions: ['session'],
           selection: 'selected',
           publication: 'established',
@@ -124,7 +124,7 @@ it('withholds unknown family and unpublished narratives with different named gap
         [
           'legacy',
           {
-            family: 'legacy_session_overview',
+            family: 'overview',
             sessions: ['session'],
             selection: 'unknown',
             publication: 'established',
@@ -181,7 +181,7 @@ it('replaces reread policy issues while preserving an independent citation issue
   const independent: EvidenceIssue = { ...old };
   const values = new Map(view.narrativeFamilies!.values);
   values.set('legacy', {
-    family: 'legacy_session_overview',
+    family: 'overview',
     sessions: ['session'],
     selection: 'selected',
     publication: 'unknown',

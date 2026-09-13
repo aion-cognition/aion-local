@@ -77,15 +77,15 @@ That one command does all of it, in order:
    `neo4j.conf` (the two `gds.*` procedure lines, heap 512m/1G, pagecache 512m, transaction-log
    retention `1 days 256M`, Bolt on loopback), the initial password set, and the service started.
 4. Pulls and verifies the Ollama models the routing needs.
-5. Applies the graph schema and the migrations, creates the Member, Workspace and Substrate
+5. Applies the graph schema, creates the Member, Workspace and Substrate
    backbone nodes, and records the substrate's birth.
 6. Writes `~/Library/LaunchAgents/com.aion.mcp.plist`, loads it with `launchctl bootstrap`, and
    waits for `/health`. The job carries `KeepAlive`, `RunAtLoad`, and `ExitTimeOut` 20 seconds,
    which is the drain the compose service had as `stop_grace_period`.
 7. Records what it installed in `install-manifest.json` under the data root, which is what
    `aion uninstall` reads to tell what it put there from what was already there.
-8. Prints the `aion doctor` report, which is where the coverage contract, the eviction fence and
-   the Ollama tuning flags are reported.
+8. Prints the `aion doctor` report, which is where the coverage contract and the Ollama tuning
+   flags are reported.
 
 Then register the server with your harness, which `init` prints at the end, and the install is
 done.
@@ -296,7 +296,7 @@ resolution keeps failing on.
 ```
 AION_SUPERSEDE_MODE=unanimous    # the default: close on two agreeing judgments, queue the rest
 AION_SUPERSEDE_MODE=propose      # the kill switch: queue everything, close nothing
-AION_SUPERSEDE_MODE=auto         # the legacy confidence gate, superseded by unanimous
+AION_SUPERSEDE_MODE=auto         # the confidence gate the unanimous judge replaced
 ```
 
 `unanimous` puts every affirmative contradiction judgment through a second model call that
@@ -400,36 +400,6 @@ ticks (`merge_auto`, `entity_dedup`, `supersession`, `keyed_close`, `proposal_re
 knobs. Two states only, so the line answers "would this touch anything right now" without a
 third reading to interpret.
 
-## Resuming a narrative migration
-
-```
-aion consolidate status --cohort <id>                       # phase, cursor, blocks, retry time
-aion consolidate run --cohort <id> [--steps <n>]            # advance one bounded batch
-aion consolidate run --cohort <id> --refresh | --reverify   # re-prove the frozen sources
-aion consolidate abandon --cohort <id>                      # release the job and its reservation
-```
-
-`consolidate` drives one fixed cohort of historical sessions from raw capture through to a chunk
-family. `status` opens a read-only handle and prints where the job stopped. `run` advances at most
-`--steps` batches (default 16, maximum 256) under the coordinator the service already uses, so a
-run interrupted anywhere resumes from durable state.
-
-`--refresh` re-proves the frozen sources, and `--reverify` re-proves every frozen member even where
-its recorded proof still says verified. Both restart a job the ordinary run would leave alone;
-neither moves an assignment or the first saved capture order, which are immutable once frozen.
-
-One cohort id per substrate. A new id freezes its membership at the CURRENT intake watermark, so a
-second one sweeps in every source accepted since the first freeze, walks those captures as if they
-were historical, and seals all seven support scopes over turns whose only classified edge is their
-own ordering. Those turns stop reading as unknown and start maturing toward orphan suppression.
-Resume the cohort you have (`consolidate status --cohort <id>` names it) and freeze a second one
-only where a substrate has never been consolidated.
-
-`abandon` is the only exit from a `capture_member_bound` block. That block means the cohort's
-capture exceeds a bound fixed at freeze time, and `--refresh` cannot raise it: abandoning releases
-the reservation so a smaller cohort can be frozen in its place. `status` prints the exact command
-when it reports that block.
-
 ## Replaying the archive
 
 ```
@@ -454,7 +424,13 @@ why the target is a scratch substrate by default.
 
 `--stale` is the default selection, everything archived under some other pipeline version;
 `--all` replays every experience regardless of version, and `--episode`/`--session` narrow
-further. `--limit` and `--batch` bound one run the way `--steps` bounds a `consolidate` run.
+further. `--limit` and `--batch` bound one run.
+
+A replay is an import through the current producers. Every experience re-enters the same stages a
+live capture does, so a claim it re-derives is written by the writer that writes one today and is
+recorded with the same evidence. What it preserves is the occurrence: the archive row carries the
+episode's own `occurred_at` and the provenance it arrived with, and the re-entered pipeline stamps
+world time from those rather than from the replay's clock.
 
 ## Reading a captured source
 
@@ -544,11 +520,11 @@ model-calling batches because this operation asks nothing.
 ## Lifecycle events
 
 The substrate records its own life events as memory. Five of them exist: an init that created
-the backbone, an init that applied new migrations to a substrate that already existed, a replay
-that re-derived something, a boot that unloaded a model routing no longer needs, and a question
-`curiosity` filed (below). Each goes through intake as an observation on the bulk lane, carrying
-the numbers that describe it (migration count, member name, profile; replay counts and pipeline
-version; which model left memory).
+the backbone, an init that recorded the graph schema version on a substrate that already existed,
+a replay that re-derived something, a boot that unloaded a model routing no longer needs, and a
+question `curiosity` filed (below). Each goes through intake as an observation on the bulk lane,
+carrying the numbers that describe it (member name, profile; replay counts and pipeline version;
+which model left memory).
 
 They are ordinary episodes, so recall serves them, `aion search` finds them, and `aion forget`
 removes one. All of them chain in one standing session, `aion-system`, which hangs off the
@@ -700,119 +676,14 @@ Activation writes the horizon at the moment it happens and never earlier. A subs
 for a while before activating gets a horizon at the activation, so reads into the time before it
 are refused as `before_horizon` rather than answered from history nobody promised.
 
-Both surfaces also carry `eviction_gate` (`unarmed`, `armed` or `disarmed`),
-`eviction_compatibility_revision` and `eviction_disarmed_at`. That is a different gate. Eviction
-stays closed until an operator arms it, an active coverage contract does not arm it, and a
-substrate somebody stopped reads apart from one nobody ever opened.
-
 `GET /health` also carries the queue and plasticity counters `aion status` reads: `queue_depth`,
 `queue_oldest_unclaimed_ms`, `queue_exhausted`, `queue_index_depth`, `reinforcement_dropped`,
 `enrichment_lag_p95_ms`, `cue_degraded_rate`, `supersession_proposals_open` and
 `entity_merge_proposals_open`, then `reinforcement_signals_applied`,
 `reinforcement_pairs_applied`, `reinforcement_edges_updated`, `reinforcement_last_run_at`,
 `reinforcement_queue_depth`, `decay_edges_scanned`, `decay_edges_decayed` and
-`decay_last_run_at`. `eviction_stop_requested_by` joins the eviction keys above: it names the
-operation that owes an unrecorded stop (below). The rest is base liveness: `status`, `sessions`,
-`descriptions_version` and `build_sha`.
-
-## The eviction fence
-
-```
-aion evict [status | disarm | rearm] [--yes]
-```
-
-Eviction is built and fenced on every substrate. While the fence is closed, eligibility answers
-`compatibility_not_established` for every source and the `episode_evict` operation removes
-nothing.
-
-**The service arms it at start**, after it activates the coverage contract, through the same
-audited operation and against the same precondition table a person used to run by hand. The
-manual step was removed on 2026-09-12. A fresh substrate therefore comes up armed on its first
-start once the checks below pass. A substrate where one of them fails comes up unarmed, with that
-refusal readable in `aion evict status` and `aion doctor`, and the next start asks again. Nothing
-else reaches the act: not `aion init`, not the maintenance catalog, and no command.
-
-`aion evict status` prints the fence, the coverage contract behind it, each precondition the
-arming checks, and each thing arming does not check. It is the only surface that prints the
-second list.
-
-What it checks:
-
-- every declared publication kind has an installed handler
-- the substrate finished its bootstrap
-- the coverage capability is established
-- the coverage contract is active
-- the requested revision is the one this build implements
-- the fence is not already at that revision
-
-What it does not check, and no check can:
-
-- the writer audit itself. The reflection stage writers, plasticity, entity merge and unmerge,
-  proposals, claim consolidation, supersession apply, backbone repair, structural discovery and
-  the registered introspection operations all still write the graph outside the publication
-  protocol, and nothing here can tell whether that has been converted
-- the context-vector runner, which recomputes a served property outside the guard
-- the deletion, reclassification and counter-reset constraints, which only a person can say a new
-  writer respects
-- whether anything on this substrate is worth keeping that eviction would be allowed to remove
-
-The second list did not shrink when the manual step went away, and none of it became checkable.
-What changed is who reads it: it is a standing disclosure on `aion evict status` rather than a
-question somebody answered once. The act itself still goes through the coordinator, so an arming
-leaves a receipt like any other decision, and the receipt is what makes it recoverable if the
-process dies mid-act.
-
-### Stopping it again
-
-`disarm` stamps a stop that eviction reads before it reads the revision. Every source answers
-`compatibility_disarmed` from there.
-
-It also stops an eviction that is halfway. The guard settles whatever is already pending before it
-takes a new request, so the stop is claimed durably before anything is settled and the pending
-attempt meets it at its own recovery re-check. A writer killed at `prepared`, with a durable
-pending eviction and nothing removed, ends refused with `compatibility_disarmed` on its receipt and
-its source still resident.
-
-It is not the inverse of arming. The compatibility revision is left where it is, so the
-capability this substrate established stays on the record and a later arming cannot be mistaken
-for a first one.
-
-**A stop holds through a restart.** The service does not arm over a standing stamp: a disarm is a
-statement an operator made, and a restart is not a retraction of it. The start reports the
-substrate as disarmed and leaves it alone.
-
-**`aion evict rearm` is the way back**, because a stop must not be a one-way door. It publishes the
-arming act through the same operation the service start uses, prints which stop it is lifting and
-when the substrate recorded it, prints the unverified list the way the old `arm` did, and asks. The
-lift takes its own receipt, so the stop and the lift read in sequence in the ledger. After it, the
-fence is armed and stays armed across restarts, and `disarm` stops it again.
-
-It is also the one act allowed to lift a stop that was asked for and never recorded (below). The
-service start refuses that case on purpose; a person naming the owed stop out loud is when clearing
-it is right. Run on a substrate nobody stopped, `rearm` reports that there is nothing to lift and
-publishes nothing.
-
-A stop that was asked for and never recorded is different. `aion evict disarm` claims it durably
-before the guard settles anything, so an attempt that dies after the claim and before its
-acknowledgment leaves the substrate stopped with a claim nobody finished. `aion doctor` and
-`/health` name the operation that owes it. **Running `aion evict disarm` again is what resolves
-it**: the next stop adopts the standing claim and its own acknowledgment records it. The service's
-own arm refuses with `eviction_stop_owed` and reports it, because clearing an unrecorded stop is
-not a decision a restart should take. `aion evict rearm` will clear it, since that is a person
-saying so; the operation that asked keeps its own intent row either way.
-
-**It stops future evictions and cannot undo one that already happened.** An eviction that reached
-its acknowledgment removed a projection under a receipt, and nothing puts it back.
-
-The line runs through the graph write, not through the guard:
-
-- an attempt that had not written yet is refused and discarded, whether the stop finds it pending
-  or a later one arrives to it
-- an attempt whose graph write already committed finishes. The removal happened, and the
-  acknowledgment is what records that it did
-
-`aion doctor` and `GET /health` report the three readings apart: `unarmed` is a substrate nobody
-ever opened, `disarmed` is one somebody opened and then stopped, and both remove nothing.
+`decay_last_run_at`. The rest is base liveness: `status`, `sessions`, `descriptions_version` and
+`build_sha`.
 
 ## Logs
 

@@ -2,26 +2,10 @@ import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import type { ColumnAddition } from './column-additions.js';
 import { IDENTITY_INDEX_STATEMENTS, IDENTITY_SCHEMA_STATEMENTS } from './identity-schema.js';
-import { migrateUnversionedLedgerKeys } from './ledger-version-migration.js';
-import {
-  NARRATIVE_MIGRATION_SCHEMA_STATEMENTS,
-  NARRATIVE_MIGRATION_COLUMN_ADDITIONS,
-  NARRATIVE_MIGRATION_INDEX_STATEMENTS,
-} from './narrative-migration-schema.js';
-import {
-  NARRATIVE_COLUMN_ADDITIONS,
-  NARRATIVE_INDEX_STATEMENTS,
-  NARRATIVE_SCHEMA_STATEMENTS,
-} from './narrative-schema.js';
+import { NARRATIVE_INDEX_STATEMENTS, NARRATIVE_SCHEMA_STATEMENTS } from './narrative-schema.js';
 import { PUBLICATION_SCHEMA_STATEMENTS } from './publication-schema.js';
-import {
-  READINESS_COLUMN_ADDITIONS,
-  READINESS_INDEX_STATEMENTS,
-  READINESS_SCHEMA_STATEMENTS,
-} from './readiness-schema.js';
-import { backfillReflectionQueueEpisodeIds } from './reflection-queue.js';
+import { READINESS_INDEX_STATEMENTS, READINESS_SCHEMA_STATEMENTS } from './readiness-schema.js';
 import {
   SOURCE_SEARCH_INDEX_STATEMENTS,
   SOURCE_SEARCH_SCHEMA_STATEMENTS,
@@ -268,18 +252,13 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   ...IDENTITY_SCHEMA_STATEMENTS,
   ...NARRATIVE_SCHEMA_STATEMENTS,
   ...PUBLICATION_SCHEMA_STATEMENTS,
-  ...NARRATIVE_MIGRATION_SCHEMA_STATEMENTS,
   ...READINESS_SCHEMA_STATEMENTS,
   // The search projection's ordinary tables only. Its virtual table needs a capability this
   // binary may not have, and a failure creating it here would close every other door too.
   ...SOURCE_SEARCH_SCHEMA_STATEMENTS,
 ];
 
-/**
- * Indexes, declared after the tables and applied after `COLUMN_ADDITIONS`. A retrofitted
- * substrate does not have the added columns until that pass runs, and an index over one of them
- * fails outright on a table that predates it.
- */
+/** Indexes, declared after the tables they cover. */
 const INDEX_STATEMENTS: readonly string[] = [
   `CREATE INDEX IF NOT EXISTS api_calls_occurred_at_idx ON api_calls (occurred_at)`,
   // The claim's whole ORDER BY, so a claim seeks the first unclaimed row instead of sorting
@@ -316,76 +295,9 @@ const INDEX_STATEMENTS: readonly string[] = [
      ON reflection_queue (episode_id, job_type) WHERE episode_id IS NOT NULL`,
   ...IDENTITY_INDEX_STATEMENTS,
   ...NARRATIVE_INDEX_STATEMENTS,
-  ...NARRATIVE_MIGRATION_INDEX_STATEMENTS,
   ...READINESS_INDEX_STATEMENTS,
   ...SOURCE_SEARCH_INDEX_STATEMENTS,
 ];
-
-/** Applied in order on every open of every existing substrate. */
-const COLUMN_ADDITIONS: readonly ColumnAddition[] = [
-  { table: 'api_calls', column: 'usage_error', definition: 'TEXT' },
-  { table: 'reflection_queue', column: 'lane', definition: "TEXT NOT NULL DEFAULT 'interactive'" },
-  { table: 'reflection_queue', column: 'session_id', definition: 'TEXT' },
-  { table: 'reflection_queue', column: 'lane_seq', definition: 'INTEGER NOT NULL DEFAULT 0' },
-  { table: 'reinforcement_queue', column: 'burst_id', definition: 'TEXT' },
-  { table: 'last_pack', column: 'as_of', definition: 'TEXT' },
-  { table: 'last_pack', column: 'knew_at', definition: 'TEXT' },
-  {
-    table: 'entity_merge_proposals',
-    column: 'similarity_source',
-    definition: "TEXT NOT NULL DEFAULT 'name_cosine'",
-  },
-  { table: 'reflection_queue', column: 'episode_id', definition: 'TEXT' },
-  { table: 'migration_progress', column: 'walked_by', definition: 'TEXT' },
-  // Zero on a substrate that predates the column, which is the fence closed. Eviction arms on a
-  // positive value, and one audited operation an operator publishes is what writes one.
-  {
-    table: 'publication_control',
-    column: 'eviction_compatibility_revision',
-    definition: 'INTEGER NOT NULL DEFAULT 0',
-  },
-  // Null on a substrate that predates the column, which is never-disarmed. A stamp here refuses
-  // eviction whatever the revision says, so the absent value is the permissive one and the
-  // column cannot make an older substrate stricter than it was.
-  { table: 'publication_control', column: 'eviction_disarmed_at', definition: 'TEXT' },
-  // The stop asked for and not yet recorded. Null on a substrate that predates it, which is the
-  // permissive reading: a column added later cannot stop a substrate nobody asked to stop.
-  { table: 'publication_control', column: 'eviction_stop_requested_by', definition: 'TEXT' },
-  { table: 'migration_cohorts', column: 'partition_policy_json', definition: 'TEXT' },
-  { table: 'migration_progress', column: 'capture_order_value', definition: 'TEXT' },
-  { table: 'migration_progress', column: 'capture_order_basis', definition: 'TEXT' },
-  { table: 'migration_progress', column: 'partition_gap', definition: 'TEXT' },
-  // A row that predates the counter reads as zero and takes its first number on its next
-  // transition. That number is a change from what a window recorded, which is the honest answer:
-  // nobody can say what the row's lifecycle did before anything counted it.
-  {
-    table: 'supersession_proposals',
-    column: 'lifecycle_rev',
-    definition: 'INTEGER NOT NULL DEFAULT 0',
-  },
-  {
-    table: 'entity_merge_proposals',
-    column: 'lifecycle_rev',
-    definition: 'INTEGER NOT NULL DEFAULT 0',
-  },
-  ...NARRATIVE_COLUMN_ADDITIONS,
-  ...NARRATIVE_MIGRATION_COLUMN_ADDITIONS,
-  ...READINESS_COLUMN_ADDITIONS,
-];
-
-function tableColumns(db: SqliteHandle, table: string): ReadonlySet<string> {
-  const rows = db.pragma(`table_info(${table})`) as { name: string }[];
-  return new Set(rows.map((row) => row.name));
-}
-
-function applyColumnAdditions(db: SqliteHandle): void {
-  for (const addition of COLUMN_ADDITIONS) {
-    if (tableColumns(db, addition.table).has(addition.column)) {
-      continue;
-    }
-    db.exec(`ALTER TABLE ${addition.table} ADD COLUMN ${addition.column} ${addition.definition}`);
-  }
-}
 
 function ensureDirectoryExists(filePath: string): void {
   if (filePath === ':memory:') {
@@ -423,14 +335,9 @@ export function openSqliteHandle(target: SqliteTarget): SqliteHandle {
       for (const statement of SCHEMA_STATEMENTS) {
         db.exec(statement);
       }
-      applyColumnAdditions(db);
       for (const statement of INDEX_STATEMENTS) {
         db.exec(statement);
       }
-      // Runs on every open so every entrypoint gets it, and does nothing once a substrate has
-      // been through it.
-      migrateUnversionedLedgerKeys(db);
-      backfillReflectionQueueEpisodeIds(db);
       return db;
     } catch (err) {
       db.close();

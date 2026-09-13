@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { validateRestatements, type RestatementCandidate } from './cognitive-restatement.js';
 import { episodeTriggerVector, narrowTriggerAfter } from './cognitive-triggers.js';
+import { recordDerivedEvidence } from './derived-evidence.js';
 import {
   narrowClaimKey,
   resolveClaimSubjects,
@@ -25,6 +26,7 @@ import { LOCAL as SYSTEM_PROMPT } from '../../../prompts/cognitive-extraction.js
 import { generationSkipReason } from '../../domain/capture-class.js';
 import { TEMPORAL_CLASSES } from '../../domain/claim-key.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
+import { derivedNode, owesBirthEstablishment, type DerivedNode } from '../derived-node-evidence.js';
 
 /**
  * One structured-output call per episode extracting the nine cognitive types, each persisted
@@ -354,6 +356,7 @@ export class CognitiveExtractionStage implements ReflectionStage {
     let created = 0;
     let closed = 0;
     let writeError: unknown;
+    const derived: DerivedNode[] = [];
     for (const [index, node] of nodes.entries()) {
       try {
         const result = await writeCognitiveNode(ctx.driver, {
@@ -378,12 +381,30 @@ export class CognitiveExtractionStage implements ReflectionStage {
         if (result.created) {
           created += 1;
         }
+        derived.push(
+          derivedNode({
+            nodeId: result.node.id,
+            role: 'extraction',
+            relationType: result.edge.type,
+            relationId: result.edge.id,
+            sourceId: ctx.episodeId,
+            // Every id this write answers with is folded from this episode, so an id nothing has
+            // ever counted is a node an earlier attempt of this run wrote and failed to record.
+            minted: result.created || owesBirthEstablishment(ctx.db, result.node.id),
+          }),
+        );
       } catch (error) {
         writeError = error;
         break;
       }
     }
 
+    // Whatever the loop reached, before any failure is reported. A claim whose extraction went
+    // unrecorded names no source, and every judge asked about it abstains for good.
+    const recorded = await recordDerivedEvidence(ctx, 'cognitive extraction', derived);
+    if (recorded !== undefined) {
+      return recorded;
+    }
     if (writeError !== undefined) {
       return {
         status: 'failed',

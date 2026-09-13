@@ -1,7 +1,6 @@
-import Database from 'better-sqlite3';
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { DEFAULT_BUSY_TIMEOUT_MS, SqliteStore } from './database.js';
@@ -9,12 +8,6 @@ import { DEFAULT_BUSY_TIMEOUT_MS, SqliteStore } from './database.js';
 describe('SqliteStore', () => {
   let dir: string;
   let dbPath: string;
-
-  /** The store creates the nested directory itself; a raw connection has to be given one. */
-  function dbPathWithDirectory(): string {
-    mkdirSync(dirname(dbPath), { recursive: true });
-    return dbPath;
-  }
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'aion-sqlite-'));
@@ -72,89 +65,6 @@ describe('SqliteStore', () => {
    * EXISTS`, and a second ALTER raises "duplicate column name" and takes the whole open with
    * it, so the third open below is the assertion that matters.
    */
-  it('retrofits the lane columns onto a queue table that predates them, keeping its rows', () => {
-    const legacy = new Database(dbPathWithDirectory());
-    legacy.exec(`CREATE TABLE reflection_queue (
-      id TEXT PRIMARY KEY,
-      job_type TEXT NOT NULL,
-      payload_json TEXT NOT NULL,
-      enqueued_at TEXT NOT NULL,
-      attempts INTEGER NOT NULL DEFAULT 0,
-      claimed_at TEXT,
-      claimed_by TEXT,
-      last_error TEXT
-    )`);
-    legacy
-      .prepare(
-        `INSERT INTO reflection_queue (id, job_type, payload_json, enqueued_at)
-         VALUES ('job-1', 'integrate', '{"episode_id":"ep-1"}', '2026-08-01T00:00:00.000Z')`,
-      )
-      .run();
-    legacy.close();
-
-    const store = new SqliteStore({ filePath: dbPath });
-    try {
-      const row = store.db.prepare('SELECT * FROM reflection_queue WHERE id = ?').get('job-1') as {
-        lane: string;
-        session_id: string | null;
-        lane_seq: number;
-      };
-      expect(row).toMatchObject({ lane: 'interactive', session_id: null, lane_seq: 0 });
-    } finally {
-      store.close();
-    }
-
-    const reopened = new SqliteStore({ filePath: dbPath });
-    reopened.close();
-  });
-
-  it('adds usage error tracking to an existing API ledger without losing its rows', () => {
-    const legacy = new Database(dbPathWithDirectory());
-    legacy.exec(`CREATE TABLE api_calls (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      occurred_at TEXT NOT NULL,
-      model TEXT NOT NULL,
-      surface TEXT NOT NULL,
-      input_tokens INTEGER NOT NULL,
-      output_tokens INTEGER NOT NULL,
-      cache_creation_tokens INTEGER NOT NULL,
-      cache_read_tokens INTEGER NOT NULL,
-      duration_ms REAL NOT NULL,
-      attempts INTEGER NOT NULL
-    )`);
-    legacy
-      .prepare(
-        `INSERT INTO api_calls VALUES (
-      1, '2026-09-06T00:00:00.000Z', 'claude-haiku-4-5', 'cues', 123, 45, 0, 0, 500, 1
-    )`,
-      )
-      .run();
-    legacy.close();
-
-    for (let open = 0; open < 2; open += 1) {
-      const store = new SqliteStore({ filePath: dbPath });
-      try {
-        expect(store.db.prepare('SELECT * FROM api_calls').all()).toEqual([
-          {
-            id: 1,
-            occurred_at: '2026-09-06T00:00:00.000Z',
-            model: 'claude-haiku-4-5',
-            surface: 'cues',
-            input_tokens: 123,
-            output_tokens: 45,
-            cache_creation_tokens: 0,
-            cache_read_tokens: 0,
-            duration_ms: 500,
-            attempts: 1,
-            usage_error: null,
-          },
-        ]);
-      } finally {
-        store.close();
-      }
-    }
-  });
-
   it('re-opening the same file is idempotent: no errors, schema unchanged, data preserved', () => {
     const first = new SqliteStore({ filePath: dbPath });
     first.db.prepare("INSERT INTO meta (key, value) VALUES ('probe', 'one')").run();

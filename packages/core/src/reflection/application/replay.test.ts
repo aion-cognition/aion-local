@@ -142,7 +142,6 @@ describe('replaying the whole archive', () => {
       skipped: 0,
       unavailable: 0,
       skippedEvicted: 0,
-      cohortMembers: 0,
       unrecorded: 0,
       failed: 0,
       cursor: undefined,

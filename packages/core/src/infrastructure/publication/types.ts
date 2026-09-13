@@ -8,10 +8,10 @@ export type JsonObject = { readonly [key: string]: JsonValue };
 export const PUBLICATION_PROTOCOL_VERSION = 1;
 export const GRAPH_COMPLETION_EFFECT = 'publication:graph_completion';
 /**
- * The closed set of operation kinds the coordinator admits. Nineteen: the twelve the design
- * signed off, and seven the implementation added, each with its reason stated at the entry. A
- * kind outside this list is refused at construction, and a kind here with no installed handler
- * is refused at publish. Count them from this list rather than from any prose about it.
+ * The closed set of operation kinds the coordinator admits, each with its reason stated at the
+ * entry where the name does not carry it. A kind outside this list is refused at construction, and
+ * a kind here with no installed handler is refused at publish. Count them from this list rather
+ * than from any prose about it.
  */
 export const PUBLICATION_KINDS = [
   'intake',
@@ -20,8 +20,10 @@ export const PUBLICATION_KINDS = [
   'semantic_write',
   'source_suppression',
   'narrative_publish',
-  'family_cutover',
-  'legacy_materialization',
+  // A session's narrative family, recorded once and fenced. Its own kind because a revision
+  // binds the selection version it published under, and that fence is what a later change to how
+  // a session is narrated has to move.
+  'narrative_family_selection',
   'coverage_activation',
   'projection_rebuild',
   'episode_eviction',
@@ -36,29 +38,18 @@ export const PUBLICATION_KINDS = [
   // the chunk family has, publishing through the same coordinator. Its own kind because it is
   // its own writer with its own membership fence, not a variant of the chunk publication.
   'overview_publish',
-  /** The first proved historical capture order, copied under the guard without changing raw data. */
-  'migration_order',
-  /** The temporary whole-session writer remains separately fenced until its family cuts over. */
-  'legacy_narrative_publish',
-  // The legacy calendar summary: the graph-only day and week writer the cutover exists to
-  // retire. Its own kind rather than a variant of `overview_publish`, because that family owns
-  // a manifest, a revision number and a membership fence, and this one owns none of them. What
-  // it does share is the family fence: a summary that publishes over a session's whole-session
-  // narrative, or absorbs one, has to own it at the moment it writes.
-  'calendar_rollup_publish',
-  // Arming the destructive capability. Its own kind rather than a variant of
-  // `coverage_activation`, which is the gate that decides what a substrate may serve; this one
-  // decides what may be taken out of it, and the two answer opposite questions on one row. It
-  // is a publication at all so the act leaves a receipt: a substrate that can remove memory is
-  // a substrate somebody deliberately said could, and that statement has to be recoverable and
-  // readable afterwards like any other.
-  'eviction_arming',
   // Recomputing the served `context_vec` from a node's current neighbourhood. Its own kind
   // rather than a variant of `semantic_write`, because it derives no new meaning: it makes a
   // stored aggregate agree with the neighbourhood it was taken over, and one receipt covers a
   // set of nodes whose membership the intent names exactly. It is a publication at all because
   // three passes had reason to move that property and only a receipt can say which one did.
   'context_vector_sync',
+  // The evidence a node derived from a capture is born with: the extraction or mention the stage
+  // just wrote, and the censuses a minted id is entitled to. Its own kind rather than a variant of
+  // `semantic_write`, because it writes no meaning at all: it records relationships the graph
+  // already holds, and the receipt is what says a node's sources were counted from birth rather
+  // than by a later walk.
+  'derived_node_evidence',
 ] as const;
 export type PublicationKind = (typeof PUBLICATION_KINDS)[number];
 

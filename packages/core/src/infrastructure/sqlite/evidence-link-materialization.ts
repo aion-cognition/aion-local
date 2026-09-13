@@ -1,8 +1,8 @@
 import type { SqliteHandle } from './database.js';
 
 /**
- * The two writers that record a link version nobody stated: the legacy relationship a migration
- * materializes, and the retirement a merge or a legacy-coverage close appends.
+ * The two writers that record a link version nobody stated: the relationship a node's own writer
+ * recorded when it made it, and the retirement a merge or a coverage close appends.
  *
  * Split from `evidence-links.ts` at the 500-line cap, and along the seam the file's own docstring
  * already draws: that module is the stated-reference chain, and these two write the same table for
@@ -28,8 +28,8 @@ export type MaterializedLinkVersion = {
   readonly recordedValues: Record<string, unknown>;
   readonly temporalProof: Record<string, unknown>;
   readonly observedAt: Date;
-  /** A new legacy narrative uses the same first-version primitive without claiming it was backfilled. */
-  readonly recordSource?: 'legacy_materialization' | 'legacy_narrative';
+  /** Which writer recorded this link, stored on the row. */
+  readonly recordSource?: 'derived_node' | 'narrative_coverage';
 };
 
 export type MaterializedLinkOutcome = {
@@ -69,7 +69,7 @@ export function prepareMaterializedLinkVersion(
         input.fromId,
         input.toId,
         input.originalRelId,
-        input.recordSource ?? 'legacy_materialization',
+        input.recordSource ?? 'derived_node',
         input.observedAt.toISOString(),
       );
       const held = db

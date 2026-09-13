@@ -78,7 +78,6 @@ export type ReplayCounts = {
  */
 export type ReplayCursor =
   | { readonly kind: 'ingest'; readonly position: number }
-  | { readonly kind: 'cohort'; readonly cohortId: string; readonly sourceId: string }
   | ({ readonly kind: 'archive' } & ExperienceArchiveCursor);
 
 export type ReplayProgress = ReplayCounts & {
@@ -90,8 +89,6 @@ export type ReplayReport = ReplayCounts & {
   readonly scanned: number;
   /** Where the run stopped, so an aborted pass resumes instead of starting over. */
   readonly cursor: ReplayCursor | undefined;
-  /** Cohort members the live order cannot reach, which the frozen pass visited. */
-  readonly cohortMembers: number;
   /** Archive rows no occurrence record accounts for, which the fallback pass visited. */
   readonly unrecorded: number;
   readonly aborted: boolean;

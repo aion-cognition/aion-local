@@ -14,7 +14,7 @@ import {
   ownershipSummaryFor,
 } from '../../evidence/application/ownership.js';
 import { ownershipVerdict, OWNERSHIP_SCOPES } from '../../evidence/domain/ownership.js';
-import { durableRoleScope } from '../../evidence/domain/scopes.js';
+import { durableRoleScope, GRAPH_NODE_SCOPE } from '../../evidence/domain/scopes.js';
 import { checkedContext } from '../../evidence/test-support/evidence.fixture.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
@@ -182,11 +182,16 @@ describe('the census an acceptance proves about the node ids it mints', () => {
     }
   });
 
-  it('counts nothing on a turn beyond the three an ownership reader asks for', () => {
+  it('counts nothing on a turn beyond what a reader asks of it', () => {
     const [turnId] = turnIds;
     expect(turnId).toBeDefined();
 
-    expect(Object.keys(scopeRows(turnId ?? '')).sort()).toEqual([...OWNERSHIP_SCOPE_NAMES].sort());
+    // The three an ownership reader consults, and the node's own state, which a judgment binds.
+    // The other four support roles stay ABSENT: nothing on this path records the incidence they
+    // would be counting, and counting them would mature a fresh turn toward suppression.
+    expect(Object.keys(scopeRows(turnId ?? '')).sort()).toEqual(
+      [...OWNERSHIP_SCOPE_NAMES, GRAPH_NODE_SCOPE].sort(),
+    );
   });
 
   it('reads the capturing session as the sole owner of the episode and of a turn', () => {

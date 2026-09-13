@@ -16,8 +16,8 @@ import { countCitationsFrom } from '../../infrastructure/sqlite/narrative-citati
  * Three answers, and only one of them is a licence. `supported` means the manifest names members
  * or citations behind an ACKNOWLEDGED revision. `unknown` means the manifest binds it and cannot
  * prove that, which authorizes nothing. `unbound` means these tables were never asked about this
- * id at all, which is where a legacy whole-session narrative sits until its family is cut over; it
- * is silence, not absence, and a caller that reads it as absence has invented a fact.
+ * id at all; it is silence, not absence, and a caller that reads it as absence has invented a
+ * fact.
  *
  * The acknowledgment is load-bearing and it is a separate question from the membership. A chunk's
  * members freeze at the seal, so an allocated or prepared revision of it already has a full

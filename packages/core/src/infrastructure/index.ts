@@ -51,9 +51,6 @@ export type { ExperienceArchiveRow } from './sqlite/experience-archive.js';
 
 /** C1's canonical mapping, for a reader that must find an occurrence's own archive row. */
 export { listReferenceBatches, readSourceRecord } from './sqlite/source-identity.js';
-export { readNarrativeMigration } from './sqlite/narrative-migration-job.js';
-export { PARTITION_POLICY_VERSION } from './sqlite/chunk-manifest.js';
-export { openReadOnlySqliteHandle, sqliteTableExists } from './sqlite/database.js';
 
 export { countUsageEvents } from './sqlite/usage-events.js';
 
@@ -135,7 +132,11 @@ export {
   verifyNeo4jPairing,
 } from './graph/provision.js';
 
-export { latestAppliedGraphMigration, runGraphMigrations } from './graph/migrations.js';
+export {
+  appliedGraphSchemaVersion,
+  GRAPH_SCHEMA_VERSION,
+  runGraphMigrations,
+} from './graph/migrations.js';
 
 export { GraphConnection } from './graph/connection.js';
 
@@ -281,8 +282,3 @@ export {
   type ApiUsageGroup,
 } from './sqlite/api-usage.js';
 export { estimateApiCost } from './providers/api-pricing.js';
-
-export { abandonNarrativeMigration } from './sqlite/narrative-migration-state.js';
-export { MigrationRefused } from './sqlite/migration-refusal.js';
-
-export { readMigrationIssues } from './sqlite/narrative-migration-pass.js';

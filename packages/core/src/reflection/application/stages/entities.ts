@@ -1,3 +1,4 @@
+import { recordDerivedEvidence } from './derived-evidence.js';
 import {
   attachVectors,
   ENTITY_EXTRACTION_METHOD,
@@ -20,12 +21,14 @@ import {
   type ExtractedEntity,
 } from '../../domain/entity-extraction.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../../domain/stage.js';
+import { derivedNode } from '../derived-node-evidence.js';
 
 export { ENTITY_EXTRACTION_METHOD } from './entity-resolution.js';
 
 /**
- * The model names the entities in an episode, each name resolves to exactly one node, and
- * the episode records that it mentioned them.
+ * The model names the entities in an episode, each name resolves to exactly one node, and the
+ * episode records both relationships it wrote: that it mentioned them, and that they took part
+ * in it.
  *
  * The extraction is the only judgment call in the pipeline that a heuristic could fake, and
  * it does not get one. A failed or unusable answer is retried once with the first attempt in
@@ -161,7 +164,7 @@ export class EntityExtractionStage implements ReflectionStage {
 
     const resolved = await resolveEntities(ctx, extraction.entities);
     const deferred = await attachVectors(ctx, resolved);
-    const mentions = await linkEntityMentions(ctx.driver, {
+    const links = await linkEntityMentions(ctx.driver, {
       episodeId: ctx.episodeId,
       entityIds: resolved.map((entity) => entity.id),
       now: ctx.now,
@@ -169,8 +172,42 @@ export class EntityExtractionStage implements ReflectionStage {
       provenance: [ENTITY_EXTRACTION_METHOD],
     });
 
+    // Both relationships the write above made, each under the role it carries and with the
+    // identity the graph gave it. The mention is the episode standing behind the entity, the
+    // participation is the entity standing in the experience, and a record of one is no record of
+    // the other: an edge whose fact nothing durable holds is one the eviction cut has to refuse.
+    // A minted entity is counted here because this write drew its id; an entity an earlier run
+    // created keeps that run's census and this one only moves the counters.
+    const minted = new Set(resolved.filter((entity) => entity.minted).map((entity) => entity.id));
+    const recorded = await recordDerivedEvidence(
+      ctx,
+      'entity extraction',
+      links.flatMap((link) => [
+        derivedNode({
+          nodeId: link.entityId,
+          role: 'mention',
+          relationType: link.mention.type,
+          relationId: link.mention.id,
+          sourceId: ctx.episodeId,
+          minted: minted.has(link.entityId),
+        }),
+        derivedNode({
+          nodeId: link.entityId,
+          role: 'participation',
+          relationType: link.participation.type,
+          relationId: link.participation.id,
+          sourceId: ctx.episodeId,
+          minted: minted.has(link.entityId),
+        }),
+      ]),
+    );
+    if (recorded !== undefined) {
+      return recorded;
+    }
+
     const created = resolved.filter((entity) => entity.created).length;
     const structural = resolved.filter((entity) => entity.structural).length;
+    const mentions = links.length;
     return {
       status: 'ok',
       summary:

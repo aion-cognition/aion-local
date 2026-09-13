@@ -1,5 +1,3 @@
-import type { ColumnAddition } from './column-additions.js';
-
 /**
  * The narrative manifest: which sources sealed into which chunk, what revisions each family
  * has allocated, which one is published, and what a published revision cited. Two families
@@ -178,74 +176,15 @@ export const NARRATIVE_SCHEMA_STATEMENTS: readonly string[] = [
     updated_at TEXT NOT NULL
   )`,
   /**
-   * Whole-session narratives written before chunks existed. `retired_at` is transaction time,
-   * not the moment the content stopped being true: the row keeps serving until a chunk family
-   * takes over, and what took over is recorded beside it.
-   */
-  `CREATE TABLE IF NOT EXISTS legacy_narratives (
-    narrative_id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    family TEXT NOT NULL DEFAULT 'legacy_session_overview',
-    verification_status TEXT NOT NULL,
-    verification_json TEXT,
-    original_publication_json TEXT,
-    published_operation_id TEXT,
-    published_known_from TEXT CHECK ((published_operation_id IS NULL) = (published_known_from IS NULL)),
-    retired_at TEXT,
-    retirement_family_json TEXT,
-    created_at TEXT NOT NULL
-  )`,
-  /**
-   * Ingest order for new intake, and never shared with the ordering a legacy scan uses.
-   * `AUTOINCREMENT` for the reason the usage stream uses it: a position is never handed out
-   * twice, so a keyset cursor holding one can only move forward and an aborted pass resumes
-   * where it stopped.
+   * The order sources arrived in. `AUTOINCREMENT` for the reason the usage stream uses it: a
+   * position is never handed out twice, so a keyset cursor holding one can only move forward and
+   * an aborted pass resumes where it stopped.
    */
   `CREATE TABLE IF NOT EXISTS ingest_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source_id TEXT NOT NULL UNIQUE,
     recorded_at TEXT NOT NULL
   )`,
-];
-
-/**
- * The retry columns and the coverage payload reach a substrate that already holds revision
- * rows by ALTER. Definitions match the fresh tables; legacy files can retain a different physical
- * column order, so readers name columns rather than decoding them by position.
- */
-export const NARRATIVE_COLUMN_ADDITIONS: readonly ColumnAddition[] = [
-  { table: 'legacy_narratives', column: 'original_publication_json', definition: 'TEXT' },
-  { table: 'legacy_narratives', column: 'published_operation_id', definition: 'TEXT' },
-  {
-    table: 'legacy_narratives',
-    column: 'published_known_from',
-    definition: 'TEXT CHECK ((published_operation_id IS NULL) = (published_known_from IS NULL))',
-  },
-  { table: 'chunks', column: 'overlaps_json', definition: 'TEXT' },
-  { table: 'chunks', column: 'overlaps_truncated', definition: 'INTEGER' },
-  { table: 'chunk_revisions', column: 'coverage_gaps_json', definition: 'TEXT' },
-  {
-    table: 'chunk_revisions',
-    column: 'attempts',
-    definition: 'INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0)',
-  },
-  { table: 'chunk_revisions', column: 'next_attempt_at', definition: 'TEXT' },
-  { table: 'chunk_revisions', column: 'blocked_reason', definition: 'TEXT' },
-  { table: 'chunk_revisions', column: 'last_failure_reason', definition: 'TEXT' },
-  { table: 'chunk_revisions', column: 'attempt_policy_json', definition: 'TEXT' },
-  { table: 'chunk_revisions', column: 'claim_expires_at', definition: 'TEXT' },
-  { table: 'chunk_revisions', column: 'blocked_context_json', definition: 'TEXT' },
-  {
-    table: 'overview_revisions',
-    column: 'attempts',
-    definition: 'INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0)',
-  },
-  { table: 'overview_revisions', column: 'next_attempt_at', definition: 'TEXT' },
-  { table: 'overview_revisions', column: 'blocked_reason', definition: 'TEXT' },
-  { table: 'overview_revisions', column: 'last_failure_reason', definition: 'TEXT' },
-  { table: 'overview_revisions', column: 'attempt_policy_json', definition: 'TEXT' },
-  { table: 'overview_revisions', column: 'claim_expires_at', definition: 'TEXT' },
-  { table: 'overview_revisions', column: 'blocked_context_json', definition: 'TEXT' },
 ];
 
 export const NARRATIVE_INDEX_STATEMENTS: readonly string[] = [

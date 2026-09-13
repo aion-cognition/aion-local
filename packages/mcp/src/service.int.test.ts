@@ -15,6 +15,7 @@ import {
   stopNeo4jHarness,
   type Neo4jHarness,
 } from '@aion/core/infrastructure/graph/test-support/neo4j-harness.fixture.js';
+import { listReflectionJobs } from '@aion/core/infrastructure/sqlite/reflection-queue.js';
 import { MemoryPackSchema, ReflectionOutputSchema } from '@aion/protocol';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -102,6 +103,29 @@ async function open(): Promise<Connected> {
   return { client, transport };
 }
 
+function pause(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+/**
+ * Waits out the reflection queue. A recall's effects are fenced on the publication position it
+ * read under, so one taken while a pipeline is publishing is served and records nothing, and the
+ * pack this file reads back is the recorded one.
+ */
+async function settled(): Promise<void> {
+  const deadline = Date.now() + 240_000;
+  while (Date.now() < deadline) {
+    if (listReflectionJobs(db).length === 0) {
+      await pause(2_000);
+      return;
+    }
+    await pause(500);
+  }
+  throw new Error('the reflection queue never drained');
+}
+
 /** One agent session's whole loop: store an experience, then ask for it back. */
 async function storeThenRecall(observation: string, query: string): Promise<Exchange> {
   const { client, transport } = await open();
@@ -111,6 +135,7 @@ async function storeThenRecall(observation: string, query: string): Promise<Exch
       arguments: { observations: [observation] },
     });
     const stored = ReflectionOutputSchema.parse(ack.structuredContent);
+    await settled();
     const recalled = await client.callTool({ name: 'recall', arguments: { query } });
     const { sessionId } = transport;
     if (sessionId === undefined) {

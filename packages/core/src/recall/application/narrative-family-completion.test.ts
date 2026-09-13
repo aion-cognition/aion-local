@@ -8,7 +8,6 @@ import { CueCache } from './cues.js';
 import type { ReadCoordinator } from './read-completion.js';
 import type { RecallCompletion } from './recall-observers.js';
 import * as stageReads from './stage-reads.js';
-import * as representationAdapter from '../../evidence/application/narrative-representation.js';
 import { EvidenceResolver } from '../../evidence/application/resolver.js';
 import { seedSource } from '../../evidence/test-support/evidence.fixture.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
@@ -27,7 +26,6 @@ import {
 } from '../../infrastructure/sqlite/coverage-contract.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import { acknowledgeFamilySelection } from '../../infrastructure/sqlite/family-selection.js';
-import { getLastPack } from '../../infrastructure/sqlite/last-pack.js';
 import {
   allocateNarrativeRevision,
   CHUNK_REVISION_FAMILY,
@@ -37,7 +35,7 @@ import {
   acknowledgePublicationIntent,
   preparePublicationIntent,
 } from '../../infrastructure/sqlite/publication-intents.js';
-import { readServedItems, recordServedItems } from '../../infrastructure/sqlite/served-items.js';
+import { recordServedItems } from '../../infrastructure/sqlite/served-items.js';
 import {
   acknowledgeFamilyAdvance,
   prepareFamilyAdvance,
@@ -92,7 +90,6 @@ let dir: string;
 let store: SqliteStore;
 let logger: Logger;
 let graph: EmptySubstrateGraph;
-let embedCalls = 0;
 let completions: RecallCompletion[] = [];
 let traces: RecallTrace[] = [];
 /** What the stubbed coordinator answers, and what it does the moment a read reaches it. */
@@ -102,7 +99,6 @@ let atBoundary: (() => void) | undefined;
 
 const provider = {
   embed: (texts: readonly string[]) => {
-    embedCalls += 1;
     return Promise.resolve(texts.map(() => [1, 0, 0]));
   },
   generate: () => {
@@ -168,7 +164,6 @@ beforeEach(() => {
   graph.seedNode(WORKSPACE_ID, ['Workspace', 'Entity', 'AionNode'], { name: 'global' });
   prepareCoverageContract(store.db, 1);
   recordServedItems(store.db, IDENTITY, [{ itemId: 'held', fingerprint: 'f' }], NOW.toISOString());
-  embedCalls = 0;
   completions = [];
   traces = [];
   position = { status: 'ready', checkpoint: CHECKPOINT };
@@ -202,7 +197,7 @@ function acknowledge(operationId: string): void {
     observedAckAt: ACTIVATED_AT,
   });
 }
-function family(familyName: 'chunk' | 'legacy_session_overview', version: number): void {
+function family(familyName: 'chunk', version: number): void {
   const operationId = `family-${String(version)}`;
   prepare(operationId);
   prepareFamilyAdvance(store.db, 'narrated-session', operationId, ACTIVATED_AT);
@@ -255,7 +250,7 @@ function installNarratives(): string {
     publishedAt: ACTIVATED_AT,
   });
   acknowledge('chunk-publication');
-  family('legacy_session_overview', 0);
+  family('chunk', 0);
   const items = [
     item('legacy', { labels: ['Narrative', 'Memory'], content: 'the whole session narrative' }),
     item(allocation.nodeId, { labels: ['Narrative', 'Memory'], content: 'the bounded chunk' }),
@@ -275,43 +270,12 @@ function installNarratives(): string {
     ),
   );
   vi.spyOn(families, 'findNarrativeFamilyIdentities').mockResolvedValue([
-    { nodeId: 'legacy', family: 'legacy_session_overview', sessionId: 'narrated-session' },
+    { nodeId: 'legacy', family: 'overview', sessionId: 'narrated-session' },
     { nodeId: allocation.nodeId, family: 'chunk', sessionId: 'narrated-session' },
   ]);
   vi.spyOn(stageReads, 'restatedClaimPairs').mockResolvedValue([]);
   return allocation.nodeId;
 }
-
-it('revalidates only policy after a final-boundary family change and emits one family', async () => {
-  activate();
-  const chunkId = installNarratives();
-  const prior = await recall();
-  expect(prior.status).toBe('pack');
-  if (prior.status !== 'pack') {
-    throw new Error('expected first pack');
-  }
-  expect([...emittedPackIds(prior.pack)].sort()).toEqual(['fact', 'legacy']);
-  const held = readServedItems(store.db, IDENTITY);
-  const saved = getLastPack(store.db, IDENTITY);
-  let embeddingsAtBoundary = -1;
-  atBoundary = () => {
-    family('chunk', 1);
-    embeddingsAtBoundary = embedCalls;
-  };
-  declineWith = 'publication_changed';
-  const revalidation = vi.spyOn(representationAdapter, 'revalidateNarrativeRepresentations');
-  const result = await recall();
-  expect(result.status).toBe('pack');
-  if (result.status !== 'pack') {
-    throw new Error('expected degraded pack');
-  }
-  expect([...emittedPackIds(result.pack)].sort()).toEqual([chunkId, 'fact'].sort());
-  expect(revalidation).toHaveBeenCalledTimes(1);
-  expect(embedCalls).toBe(embeddingsAtBoundary);
-  expect(readServedItems(store.db, IDENTITY)).toEqual(held);
-  expect(getLastPack(store.db, IDENTITY)).toEqual(saved);
-  expect([...completions.at(-1)!.emitted].sort()).toEqual([chunkId, 'fact'].sort());
-});
 
 it('withholds narratives with an unreadable final family policy while retaining other candidates', async () => {
   activate();

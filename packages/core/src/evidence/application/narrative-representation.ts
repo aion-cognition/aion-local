@@ -1,13 +1,11 @@
 import type { Driver } from 'neo4j-driver';
 
-import { legacyBeforeFirstSelection } from './legacy-family-history.js';
 import {
   findNarrativeFamilyIdentities,
   type NarrativeFamilyIdentity,
 } from '../../infrastructure/graph/narrative-families.js';
 import type { EvidenceDependency } from '../../infrastructure/publication/preconditions.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { readLegacyNarrative } from '../../infrastructure/sqlite/legacy-narratives.js';
 import type { CheckedReadContext } from '../../recall/application/coverage-checker.js';
 import { readFamilyFence } from '../../reflection/application/family-fence.js';
 import { idAddress } from '../domain/address.js';
@@ -24,7 +22,6 @@ export type NarrativeRepresentation = {
   /** Request-local issue identities let policy revalidation replace only the evidence it reread. */
   readonly policyIssues?: readonly EvidenceIssue[];
   readonly knownAtVantage?: false;
-  readonly retired?: { readonly operationId: string; readonly knownFrom: string };
 };
 
 export type RepresentationReading = {
@@ -154,64 +151,8 @@ class RepresentationReader {
     const { nodeId, family } = identity;
     let publication: NarrativeRepresentation['publication'] = 'established';
     let sessions: readonly string[] = [];
-    let retired: NarrativeRepresentation['retired'];
     let known = true;
-    if (family === 'legacy_session_overview') {
-      if (identity.sessionId !== undefined) {
-        sessions = [identity.sessionId];
-      }
-      const record = readLegacyNarrative(this.#db, nodeId);
-      const birth = record?.publication;
-      if (birth !== undefined || identity.publicationOperationId !== undefined) {
-        const receipt = this.#db
-          .prepare(
-            "SELECT known_from FROM publication_intents WHERE operation_id = ? AND kind = 'legacy_narrative_publish' AND state = 'acknowledged'",
-          )
-          .get(identity.publicationOperationId ?? birth?.operationId) as
-          { known_from: string | null } | undefined;
-        if (
-          birth === undefined ||
-          receipt?.known_from !== birth.knownFrom ||
-          (identity.publicationOperationId !== undefined &&
-            identity.publicationOperationId !== birth.operationId)
-        ) {
-          publication = 'unknown';
-          this.issue(nodeId, 'unverified_scope');
-        } else {
-          known =
-            this.#context.mode.knownAt === undefined ||
-            birth.knownFrom <= this.#context.mode.knownAt.toISOString();
-        }
-      }
-      if (record?.retiredAt != null) {
-        const retirement = JSON.parse(record.retirementFamilyJson ?? '{}') as {
-          operationId?: string;
-        };
-        const receipt =
-          retirement.operationId === undefined
-            ? undefined
-            : (this.#db
-                .prepare(
-                  "SELECT known_from FROM publication_intents WHERE operation_id = ? AND kind = 'family_cutover' AND state = 'acknowledged'",
-                )
-                .get(retirement.operationId) as { known_from: string | null } | undefined);
-        if (
-          record.sessionId !== identity.sessionId ||
-          receipt?.known_from !== record.retiredAt ||
-          retirement.operationId === undefined
-        ) {
-          this.issue(nodeId, 'unverified_scope', 'narrative_revision', false);
-        } else if (
-          this.#context.mode.knownAt === undefined ||
-          record.retiredAt <= this.#context.mode.knownAt.toISOString()
-        ) {
-          retired = { operationId: retirement.operationId, knownFrom: record.retiredAt };
-        }
-      } else if (identity.retirementOperationId !== undefined) {
-        // A marker awaiting ACK cannot change the committed family or erase the old publication.
-        this.issue(nodeId, 'pending_publication', 'narrative_revision', false);
-      }
-    } else if (family === 'chunk' || family === 'overview') {
+    if (family === 'chunk' || family === 'overview') {
       const scope = this.#sessions(nodeId, new Set());
       if (scope === undefined) {
         publication = 'unknown';
@@ -227,7 +168,6 @@ class RepresentationReader {
     }
     let selected: NarrativeRepresentation['selection'] = 'selected';
     let unproved = false;
-    let excluded = false;
     if (sessions.length === 0) {
       unproved = true;
       this.issue(nodeId, this.#missing, 'representation_preference');
@@ -239,34 +179,6 @@ class RepresentationReader {
         continue;
       }
       const reading = readFamilyFence(this.#db, sessionId, this.#context.mode.knownAt);
-      if (
-        reading === undefined &&
-        family === 'legacy_session_overview' &&
-        this.#context.mode.knownAt !== undefined
-      ) {
-        const prior = legacyBeforeFirstSelection(
-          this.#db,
-          readLegacyNarrative(this.#db, nodeId),
-          sessionId,
-          this.#context.mode.knownAt,
-        );
-        if (prior !== undefined) {
-          this.dependencies.push(prior.dependency);
-          if (prior.known === 'unknown') {
-            publication = 'unknown';
-            this.issues.push({
-              address: idAddress(nodeId),
-              field: 'narrative_revision',
-              reason: 'unsupported_history',
-              historyReason: 'not_recorded',
-              required: true,
-            });
-          } else {
-            known &&= prior.known;
-          }
-          continue;
-        }
-      }
       if (reading === undefined) {
         unproved = true;
         this.issues.push(
@@ -286,15 +198,15 @@ class RepresentationReader {
               },
         );
       } else {
+        // One family: a session whose selection resolves selects the family every narrative is
+        // published under, so a resolved reading is a bound dependency and nothing more.
         this.dependencies.push(reading.dependency);
-        const expected = family === 'legacy_session_overview' ? 'legacy_session_overview' : 'chunk';
-        excluded ||= reading.selection.family !== expected;
       }
     }
     if (unproved) {
       selected = 'unknown';
     }
-    if (excluded || !known) {
+    if (!known) {
       selected = 'not_selected';
     }
     this.values.set(nodeId, {
@@ -304,7 +216,6 @@ class RepresentationReader {
       publication,
       identity,
       ...(known ? {} : { knownAtVantage: false as const }),
-      ...(retired === undefined ? {} : { retired }),
     });
   }
 }

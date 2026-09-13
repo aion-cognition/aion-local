@@ -270,12 +270,11 @@ function contextFor(narrativeEdgeRepairBatch = 50): OperationContext {
 
 describe('narrativeCleanupOperation against a live graph', () => {
   /**
-   * A legacy session carrying two standing narratives is a repair obligation, not an arithmetic
-   * problem. Nothing binds either of them to a head, and the signed rule is explicit that a
-   * winner is not picked by coverage count, prose or graph timestamp; reconciling the preserved
-   * coverage and citation records is the cutover's work.
+   * A session carrying two standing narratives the manifest binds no head for is a repair
+   * obligation, not an arithmetic problem. The rule is explicit that a winner is not picked by
+   * coverage count, prose or graph timestamp, so the run reports the pair and closes neither.
    */
-  it('reports a legacy session duplicate and closes neither version', async () => {
+  it('reports an unbound session duplicate and closes neither version', async () => {
     await seedSession('dup-session');
     // A live episode, so this session is not *also* nominated as an orphan under the same run.
     await seedEpisode('dup-episode', 'dup-session');
@@ -284,7 +283,7 @@ describe('narrativeCleanupOperation against a live graph', () => {
 
     const outcome = await narrativeCleanupOperation().run(contextFor());
 
-    expect(outcome.detail).toContain('1 legacy session family/families reported');
+    expect(outcome.detail).toContain('1 unbound session(s) reported');
     for (const id of ['dup-narrative-v1', 'dup-narrative-v2']) {
       const props = await nodeProperties(harness.driver, id);
       expect(props[BITEMPORAL_PROPERTIES.validUntil]).toBeUndefined();
@@ -294,8 +293,8 @@ describe('narrativeCleanupOperation against a live graph', () => {
 
   /**
    * The forget this operation used to perform. A session with no live Episode says nothing about
-   * whether the records still hold the narrative up, and for a legacy narrative they cannot speak
-   * at all, so the run withholds and says so.
+   * whether the records still hold the narrative up, and for a narrative the manifest never bound
+   * they cannot speak at all, so the run withholds and says so.
    */
   it('withholds a narrative whose session holds no live episode rather than forgetting it', async () => {
     await seedSession('orphan-session');

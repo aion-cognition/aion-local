@@ -5,62 +5,11 @@ import { expect, it } from 'vitest';
 
 import { SqliteStore } from './database.js';
 import { claimNarrativeRevision, releaseNarrativeClaim } from './narrative-allocations.js';
-import {
-  allocateNarrativeRevision,
-  CHUNK_REVISION_FAMILY,
-  OVERVIEW_REVISION_FAMILY,
-} from './narrative-revisions.js';
+import { CHUNK_REVISION_FAMILY, OVERVIEW_REVISION_FAMILY } from './narrative-revisions.js';
 
 const NOW = new Date('2026-09-09T06:00:00.000Z');
 const LATER = new Date(NOW.getTime() + 60_001);
 const families = [CHUNK_REVISION_FAMILY, OVERVIEW_REVISION_FAMILY];
-
-it.each(families)('adds and preserves lease columns on reopen for $revisionTable', (family) => {
-  const dir = mkdtempSync(join(tmpdir(), 'aion-lease-schema-review-'));
-  const path = join(dir, 'store.sqlite');
-  let store = new SqliteStore({ filePath: path });
-  try {
-    const first = allocateNarrativeRevision(store.db, family, 'schema-family', NOW);
-    expect(first.revisionNo).toBe(1);
-    const names = store.db.prepare(`PRAGMA table_info(${family.revisionTable})`).all() as {
-      name: string;
-    }[];
-    expect(names.some((row) => row.name === 'claim_expires_at')).toBe(true);
-    store.db.exec(
-      `ALTER TABLE ${family.revisionTable} RENAME COLUMN claim_expires_at TO review_old_claim`,
-    );
-    store.close();
-    store = new SqliteStore({ filePath: path });
-    const row = store.db
-      .prepare(`SELECT revision_no, state, claim_expires_at FROM ${family.revisionTable}`)
-      .get();
-    expect(row).toEqual({ revision_no: 1, state: 'allocated', claim_expires_at: null });
-    const lease = new Date(NOW.getTime() + 60_000);
-    const claim = claimNarrativeRevision(store.db, family, {
-      familyKey: 'schema-family',
-      operationPrefix: 'schema:',
-      now: NOW,
-      leaseUntil: lease,
-    });
-    expect(claim.revisionNo).toBe(1);
-    expect(
-      store.db
-        .prepare(`SELECT claim_expires_at, next_attempt_at FROM ${family.revisionTable}`)
-        .get(),
-    ).toEqual({
-      claim_expires_at: lease.toISOString(),
-      next_attempt_at: null,
-    });
-    store.close();
-    store = new SqliteStore({ filePath: path });
-    expect(store.db.prepare(`SELECT claim_expires_at FROM ${family.revisionTable}`).get()).toEqual({
-      claim_expires_at: lease.toISOString(),
-    });
-  } finally {
-    store.close();
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
 
 it.each(families)(
   'does not let an old actor release a reclaimed lease in $revisionTable',

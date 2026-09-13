@@ -36,6 +36,7 @@ function row(overrides: Partial<EntityMergeRow> = {}): EntityMergeRow {
     nameNorm: 'postgresql',
     id: 'node-1',
     created: false,
+    sourceEpisodeId: 'ep-1',
     canonicalNameNorm: 'postgresql',
     type: 'tool',
     typeCounts: '{"tool":1}',

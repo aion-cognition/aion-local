@@ -11,10 +11,7 @@ import {
 } from './source-manifest.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import { getExperienceByEpisode } from '../../infrastructure/sqlite/experience-archive.js';
-import {
-  listIngestAfter,
-  readIntakeWatermark,
-} from '../../infrastructure/sqlite/migration-cohorts.js';
+import { listIngestAfter, readIntakeWatermark } from '../../infrastructure/sqlite/ingest-log.js';
 import {
   listGenerations,
   listStageWork,

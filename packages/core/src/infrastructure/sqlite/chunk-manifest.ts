@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 
 import { overlappingChunks } from './chunk-overlap.js';
 import type { SqliteHandle } from './database.js';
-import { migrationMemberProblem, RESERVED_MIGRATION_SOURCE } from './migration-membership.js';
 
 /**
  * The chunk half of the narrative manifest: which sources sealed together, what the unsealed tail
@@ -62,7 +61,7 @@ const LIVE_BASES = new Set(['archive_acceptance', 'graph_tx_from']);
  * question with a different answer: that chunk stays sealed and its publication blocks.
  */
 const LIVE_MEMBER = `r.verification_status = '${VERIFIED}'
-         AND r.capture_order_basis IN ${LIVE_CAPTURE_BASES} AND NOT ${RESERVED_MIGRATION_SOURCE}`;
+         AND r.capture_order_basis IN ${LIVE_CAPTURE_BASES}`;
 
 /**
  * The complement, written out rather than as `NOT (...)`.
@@ -73,7 +72,7 @@ const LIVE_MEMBER = `r.verification_status = '${VERIFIED}'
  */
 const HELD_MEMBER = `(r.verification_status <> '${VERIFIED}'
          OR r.capture_order_basis IS NULL
-         OR r.capture_order_basis NOT IN ${LIVE_CAPTURE_BASES} OR ${RESERVED_MIGRATION_SOURCE})`;
+         OR r.capture_order_basis NOT IN ${LIVE_CAPTURE_BASES})`;
 
 /** How many earlier chunks one seal records an overlap against. A bound, not a survey. */
 export const CHUNK_OVERLAP_LIMIT = 16;
@@ -168,8 +167,6 @@ export type ChunkSealInput = {
    * decision and asks for no re-check.
    */
   readonly expected?: readonly ExpectedMember[];
-  /** Historical seals validate saved cohort order instead of the independent live cursor. */
-  readonly migrationCohortId?: string;
 };
 
 export type ExpectedMember = {
@@ -189,11 +186,7 @@ export class ChunkSealRefused extends Error {
 }
 
 /** Re-reads one stated fact inside the freeze, and says which part of it moved. */
-function verifyExpectedMember(
-  db: SqliteHandle,
-  expected: ExpectedMember,
-  input: ChunkSealInput,
-): void {
+function verifyExpectedMember(db: SqliteHandle, expected: ExpectedMember): void {
   const row = db
     .prepare(
       `SELECT verification_status, capture_order_basis, capture_order_value
@@ -214,28 +207,6 @@ function verifyExpectedMember(
       expected.sourceId,
       `is ${row.verification_status} at the freeze, not ${VERIFIED}`,
     );
-  }
-  if (input.migrationCohortId !== undefined) {
-    const problem = migrationMemberProblem(db, {
-      sourceId: expected.sourceId,
-      cohortId: input.migrationCohortId,
-      sessionId: input.sessionId,
-      order: expected.captureOrderValue,
-      policyVersion: input.partitionPolicyVersion ?? PARTITION_POLICY_VERSION,
-    });
-    if (problem !== undefined) {
-      throw new ChunkSealRefused(expected.sourceId, problem);
-    }
-    return;
-  }
-  if (
-    db
-      .prepare(
-        `SELECT 1 FROM source_records r WHERE r.source_id = ? AND ${RESERVED_MIGRATION_SOURCE}`,
-      )
-      .get(expected.sourceId) !== undefined
-  ) {
-    throw new ChunkSealRefused(expected.sourceId, 'is reserved for a frozen migration');
   }
   if (row.capture_order_basis === null || !LIVE_BASES.has(row.capture_order_basis)) {
     throw new ChunkSealRefused(
@@ -266,13 +237,6 @@ export function sealChunk(db: SqliteHandle, input: ChunkSealInput): ChunkSealOut
   if (input.sourceIds.length === 0) {
     throw new Error('a chunk seals over at least one member');
   }
-  if (
-    input.migrationCohortId !== undefined &&
-    JSON.stringify([...(input.expected ?? []).map((row) => row.sourceId)].sort()) !==
-      JSON.stringify([...input.sourceIds].sort())
-  ) {
-    throw new Error('a migration seal requires the complete expected membership');
-  }
   const policy = input.partitionPolicyVersion ?? PARTITION_POLICY_VERSION;
   const chunkId = chunkIdentity(input.sessionId, input.sourceIds, policy);
   return db
@@ -287,7 +251,7 @@ export function sealChunk(db: SqliteHandle, input: ChunkSealInput): ChunkSealOut
         return { chunkId, created: false };
       }
       for (const expected of input.expected ?? []) {
-        verifyExpectedMember(db, expected, input);
+        verifyExpectedMember(db, expected);
       }
       const sealedAt = input.sealedAt.toISOString();
       // Computed inside the seal's own transaction, over the chunks that were already sealed when

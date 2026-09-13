@@ -130,18 +130,12 @@ vi.mock('@aion/core', async (importOriginal) => {
       workspace: { id: 'workspace-1' },
     }),
     readMemberName: async () => 'member-1',
-    latestAppliedGraphMigration: () => 'migration-1',
+    appliedGraphSchemaVersion: () => 'migration-1',
     // Boot's own step, faked for the same reason the coordinator is: the stores here are
     // shells, and what this file asserts is the order components start and stop in.
     activateCoverageOnStart: async () => {
       calls.push('coverage.activate');
       return { state: 'active', historySince: '2026-09-11T06:00:00.000Z' };
-    },
-    // The other boot-time act on the same record, faked for the same reason and recorded in the
-    // same list: the fence arms itself at start, and the order it happens in is what this asserts.
-    armEvictionOnStart: async () => {
-      calls.push('eviction.arm');
-      return { state: 'armed', revision: 1 };
     },
     // The shape the real report returns when routing has nothing to unload, `evicted` included:
     // boot reads that list to decide whether the run is worth recording.
@@ -177,7 +171,6 @@ describe('bootstrapService failing partway through construction', () => {
       'coverage.activate',
       // Arming follows activation and precedes the recovery loop: it refuses against a contract
       // that is not active, and one actor asks for the guard at boot.
-      'eviction.arm',
       'publicationRecovery.start',
       'idleNarratives.start',
       'introspector.start',

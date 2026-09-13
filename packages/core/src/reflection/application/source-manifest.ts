@@ -14,7 +14,7 @@ import {
   insertExperience,
   mergeExperienceProvenance,
 } from '../../infrastructure/sqlite/experience-archive.js';
-import { recordIngest } from '../../infrastructure/sqlite/migration-cohorts.js';
+import { recordIngest } from '../../infrastructure/sqlite/ingest-log.js';
 import {
   allocateProcessingGeneration,
   listGenerations,

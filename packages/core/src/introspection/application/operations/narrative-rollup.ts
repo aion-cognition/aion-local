@@ -1,13 +1,12 @@
-import { rollUpNarratives } from '../../../reflection/application/narrative-rollup.js';
 import { rollUpOverviews } from '../../../reflection/application/overview-rollup.js';
 import type { RollupScope } from '../../../reflection/domain/rollup.js';
 import { HEALTH_COLLECTORS, type HealthSnapshot } from '../../domain/health.js';
 import type { IntrospectionOperation, OperationOutcome } from '../../domain/operation.js';
 
 /**
- * The two scopes above a session, as maintenance. A session narrative is written by the close
- * that ends the session; nothing before this compressed the day those sessions made up, or the
- * week those days made up, so a month of work reached recall as a hundred separate stories.
+ * The two scopes above a chunk, as maintenance. A chunk narrative is written when its membership
+ * seals; nothing before this compressed the day those chunks made up, or the week those days made
+ * up, so a month of work reached recall as a hundred separate stories.
  *
  * Each scope rolls up the one below it and closes what it absorbed, which is the same act a
  * second session narrative already performs over the first. Both find nothing on a young
@@ -56,8 +55,7 @@ function narrativeRollupOperation(
         };
       }
 
-      // The signed family first: windows the manifest names, published through the coordinator.
-      // The legacy pass below still serves the whole-session family until its cutover retires it.
+      // Windows the manifest names, published through the coordinator.
       const overviews =
         ctx.narratives === undefined
           ? undefined
@@ -80,26 +78,6 @@ function narrativeRollupOperation(
               },
             );
 
-      const report = await rollUpNarratives(
-        {
-          driver: ctx.driver,
-          db: ctx.db,
-          provider: ctx.provider,
-          logger: ctx.logger,
-          ...(ctx.narratives === undefined ? {} : { publications: ctx.narratives.publications }),
-        },
-        {
-          scope,
-          model: ctx.config.models.reflect,
-          timeoutMs: ctx.config.reflection.stageTimeoutMs,
-          reflection: ctx.config.reflection,
-          windowLimit: ctx.config.maintenance.narrativeRollupWindows,
-          renderedInputAllowance: ctx.config.maintenance.chunkRenderedInputAllowance,
-          now: ctx.now,
-          signal: ctx.signal,
-        },
-      );
-
       const overviewDetail =
         overviews === undefined
           ? 'no publisher composed for the overview family'
@@ -110,16 +88,10 @@ function narrativeRollupOperation(
             `${String(overviews.unplaceable)} chunk(s) no window could be derived for`;
       const published = overviews?.published ?? 0;
       return {
-        status: report.created + published === 0 ? 'noop' : 'applied',
-        itemsProcessed: report.windows + (overviews?.windows ?? 0),
-        itemsAffected: report.created + published,
-        detail:
-          `${overviewDetail}; legacy: ` +
-          `${String(report.windows)} closed ${scope} window(s): ${String(report.created)} rolled up ` +
-          `over ${String(report.absorbed)} member narrative(s), ${String(report.skipped)} already covered, ` +
-          `${String(report.blocked)} blocked for capacity or incomplete membership, ` +
-          `${String(report.fenced)} refused by the family fence, ` +
-          `${String(report.vetoed)} vetoed by review, ${String(report.failed)} generation failure(s)`,
+        status: published === 0 ? 'noop' : 'applied',
+        itemsProcessed: overviews?.windows ?? 0,
+        itemsAffected: published,
+        detail: overviewDetail,
       };
     },
   };

@@ -228,8 +228,7 @@ export const MAINTENANCE_KNOBS = {
   chunkMaxSpanMs: ['AION_MAINTENANCE_CHUNK_MAX_SPAN_MS', positiveInt, 86_400_000],
   // `narrative_seal`'s bound: publication attempts one invocation makes. An attempt is one chunk
   // revision, not one source and not one model call, and a run that seals a group and publishes
-  // it spends one. Two an hour is the steady-state cadence; the resumable migration job that
-  // drains a historical partition carries a budget of its own and does not spend this one.
+  // it spends one. Two an hour is the steady-state cadence.
   // MEASUREMENT STATUS: unmeasured, on C0's list beside the allowance above.
   narrativeSealBatch: ['AION_MAINTENANCE_NARRATIVE_SEAL_BATCH', positiveInt, 2],
   // How long a source's complete coverage has to stand before its raw projection may go, measured
@@ -241,8 +240,7 @@ export const MAINTENANCE_KNOBS = {
   // MEASUREMENT STATUS: proposed, unmeasured. C0 reports its throughput effect.
   episodeEvictMinAgeMs: ['AION_MAINTENANCE_EPISODE_EVICT_MIN_AGE_MS', positiveInt, 86_400_000],
   // `episode_evict`'s bound: attempts one invocation makes, one source each. Eight independent
-  // guarded attempts, never one transaction over eight sources, and the migration job that drains
-  // a historical cohort carries a budget of its own rather than spending this one.
+  // guarded attempts, never one transaction over eight sources.
   // MEASUREMENT STATUS: proposed, unmeasured, on C0's list with the internal attempt bounds.
   episodeEvictBatch: ['AION_MAINTENANCE_EPISODE_EVICT_BATCH', positiveInt, 8],
   // The kill switch both narrative rollup scopes read. On by default, which is what acting from

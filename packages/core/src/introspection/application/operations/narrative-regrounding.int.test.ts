@@ -222,17 +222,20 @@ describe('narrative regrounding', () => {
     expect(found.map((narrative) => narrative.id)).toEqual(['regrounding-narrative']);
   }, 120_000);
 
-  it('rewrites the marked narrative from the claims that are open now', async () => {
+  /**
+   * A marked narrative is one a rewrite is owed for, and the rewrite goes through the family that
+   * publishes narratives. A session with nothing sealed under it has no revision to republish, so
+   * the run reports no rewrite rather than inventing one from a node nobody bound.
+   */
+  it('reports no rewrite for a marked narrative its family cannot republish', async () => {
     const outcome = await narrativeRegroundingOperation(BATCH).run(context());
 
-    expect(outcome.status).toBe('applied');
-    expect(outcome.itemsAffected).toBeGreaterThanOrEqual(1);
-    // Superseded rather than edited in place: the old sentence stays readable under `as_of`.
-    expect(await narrativeIsOpen('regrounding-narrative')).toBe(false);
-    expect(await findStaleNarratives(harness.driver, NARRATIVE_GROUNDING, 50)).toEqual([]);
+    expect(outcome.status).toBe('noop');
+    expect(outcome.itemsAffected).toBe(0);
+    expect(await narrativeIsOpen('regrounding-narrative')).toBe(true);
   }, 120_000);
 
-  it('converges: a second pass finds nothing left to reground', async () => {
+  it('converges: a second pass reports the same, and nothing accumulates', async () => {
     const outcome = await narrativeRegroundingOperation(BATCH).run(context());
 
     expect(outcome.status).toBe('noop');

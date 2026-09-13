@@ -221,6 +221,9 @@ export function prepareEntityMerge(
     `SET resolved.${LOCK_PROPERTY} = $now`,
     'RETURN name_norm, proposed_id, resolved.id AS id,',
     '       resolved.id = proposed_id AS created,',
+    // The episode that created the identity, written once on the create branch above. It is how
+    // a caller tells a node its own earlier attempt drew from one an unrelated run left behind.
+    `       resolved.${MEMORY_PROPERTIES.sourceEpisodeId} AS source_episode_id,`,
     `       resolved.${ENTITY_NAME_NORM_PROPERTY} AS canonical_name_norm,`,
     `       resolved.${ENTITY_TYPE_PROPERTY} AS type,`,
     `       resolved.${ENTITY_TYPE_COUNTS_PROPERTY} AS type_counts,`,
@@ -268,6 +271,7 @@ function mapEntityMergeRow(row: Row): EntityMergeRow {
     nameNorm: row.name_norm as string,
     id: row.id as string,
     created: row.created === true,
+    sourceEpisodeId: (row.source_episode_id as string | null) ?? '',
     canonicalNameNorm: (row.canonical_name_norm as string | null) ?? '',
     type: (row.type as string | null) ?? '',
     typeCounts: typeof row.type_counts === 'string' ? row.type_counts : '',

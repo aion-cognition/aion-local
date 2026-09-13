@@ -4,6 +4,10 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { CognitiveExtractionStage } from './cognitive.js';
+import {
+  establishNodeState,
+  establishNodeSupportScopes,
+} from '../../../evidence/test-support/evidence.fixture.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { BITEMPORAL_PROPERTIES } from '../../../infrastructure/graph/bitemporal.js';
 import {
@@ -30,12 +34,13 @@ import type {
   StructuredRequest,
   Vector,
 } from '../../../infrastructure/providers/types.js';
-import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import { SqliteStore } from '../../../infrastructure/sqlite/database.js';
 import { intentionHorizon, readingHorizon } from '../../domain/claim-key.js';
 import { foldName } from '../../domain/name-fold.js';
 import type { StageContext } from '../../domain/stage.js';
 import { PIPELINE_VERSION } from '../../domain/version.js';
 import { FakeGraph } from '../../test-support/fake-graph.fixture.js';
+import { RecordingPublisher } from '../../test-support/recording-publisher.fixture.js';
 
 const EPISODE_ID = 'episode-1';
 const NOW = new Date('2026-08-28T09:05:00.000Z');
@@ -57,17 +62,24 @@ function stubProvider(generate: GenerateFn, embed?: EmbedFn): Provider {
 }
 
 let graph: FakeGraph;
+let publisher: RecordingPublisher;
+let store: SqliteStore;
 let dataDir: string;
 let logger: Logger;
 
 beforeEach(() => {
   graph = new FakeGraph();
+  publisher = new RecordingPublisher();
   graph.seedNode(EPISODE_ID, ['Episode', 'Memory', 'AionNode']);
   dataDir = mkdtempSync(join(tmpdir(), 'aion-cognitive-stage-'));
+  // The stage reads the records to tell a claim nothing has ever counted from one an earlier run
+  // recorded, so the substrate is real here even though the graph is a fake.
+  store = new SqliteStore({ filePath: join(dataDir, 'aion.sqlite') });
   logger = openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' });
 });
 
 afterEach(() => {
+  store.close();
   rmSync(dataDir, { recursive: true, force: true });
 });
 
@@ -84,7 +96,7 @@ function buildContext(
 ): StageContext {
   return {
     driver: graph.driver,
-    db: undefined as unknown as SqliteHandle,
+    db: store.db,
     provider,
     episodeId: EPISODE_ID,
     episode: {
@@ -99,6 +111,7 @@ function buildContext(
     now: NOW,
     occurredAt: OCCURRED_AT,
     pipelineVersion: PIPELINE_VERSION,
+    publications: publisher.asCoordinator(),
   };
 }
 
@@ -151,6 +164,90 @@ describe('CognitiveExtractionStage', () => {
     expect(requests[0]?.temperature).toBe(0);
     expect(requests[0]?.think).toBe(false);
     expect(requests[0]?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('reports every claim it wrote, with the id it minted marked as minted', async () => {
+    const generate = async (): Promise<unknown> => ({
+      nodes: [
+        { type: 'Decision', text: 'use SQLite for the queue' },
+        { type: 'Insight', text: 'idempotency needs two levels' },
+      ],
+    });
+    const stage = new CognitiveExtractionStage();
+
+    const outcome = await stage.run(buildContext(stubProvider(generate)));
+
+    expect(outcome.status).toBe('ok');
+    const [payload] = publisher.payloadsOf('derived_node_evidence');
+    expect(payload).toMatchObject({ subject: EPISODE_ID });
+    const { nodes } = payload as {
+      nodes: { nodeId: string; sourceId: string; role: string; minted: boolean }[];
+    };
+    expect(nodes).toHaveLength(2);
+    for (const node of nodes) {
+      expect(node).toMatchObject({
+        role: 'extraction',
+        minted: true,
+        relationType: 'EXTRACTED_FROM',
+      });
+    }
+    expect(nodes.map((node) => node.nodeId).sort()).toEqual(
+      [...graph.nodesWithLabel('Decision'), ...graph.nodesWithLabel('Insight')]
+        .map((held) => held.id)
+        .sort(),
+    );
+  });
+
+  it('reports a claim a previous run already recorded as one this write did not mint', async () => {
+    const generate = async (): Promise<unknown> => ({
+      nodes: [{ type: 'Decision', text: 'use SQLite for the queue' }],
+    });
+    const stage = new CognitiveExtractionStage();
+
+    await stage.run(buildContext(stubProvider(generate)));
+    const [decision] = graph.nodesWithLabel('Decision');
+    establishNodeSupportScopes(store.db, decision?.id ?? '', NOW);
+    establishNodeState(store.db, decision?.id ?? '', { revision: 1, at: NOW });
+    await stage.run(buildContext(stubProvider(generate)));
+
+    const payloads = publisher.payloadsOf('derived_node_evidence');
+    expect(payloads).toHaveLength(2);
+    const minted = payloads.map(
+      (payload) => (payload as { nodes: { minted: boolean }[] }).nodes[0]?.minted,
+    );
+    expect(minted).toEqual([true, false]);
+  });
+
+  it('still owes the birth of a claim whose first attempt lost its evidence', async () => {
+    const generate = async (): Promise<unknown> => ({
+      nodes: [{ type: 'Decision', text: 'use SQLite for the queue' }],
+    });
+    const stage = new CognitiveExtractionStage();
+
+    // The first attempt wrote the graph and nothing recorded it, which is what a publication
+    // that failed leaves behind. The node the retry finds is its own and is still uncounted.
+    await stage.run(buildContext(stubProvider(generate)));
+    await stage.run(buildContext(stubProvider(generate)));
+
+    const minted = publisher
+      .payloadsOf('derived_node_evidence')
+      .map((payload) => (payload as { nodes: { minted: boolean }[] }).nodes[0]?.minted);
+    expect(minted).toEqual([true, true]);
+  });
+
+  it('fails the stage when the claims it wrote cannot be recorded', async () => {
+    const generate = async (): Promise<unknown> => ({
+      nodes: [{ type: 'Decision', text: 'use SQLite for the queue' }],
+    });
+    const context = buildContext(stubProvider(generate));
+    const stage = new CognitiveExtractionStage();
+
+    const outcome = await stage.run({ ...context, publications: undefined });
+
+    expect(outcome).toMatchObject({
+      status: 'failed',
+      summary: 'cognitive extraction is not composed: no publication coordinator',
+    });
   });
 
   it('extracts, embeds, and links each node type with its modest per-type fields', async () => {

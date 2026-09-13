@@ -1,49 +1,18 @@
 import type { Driver } from 'neo4j-driver';
 
-import { LEGACY_HEAD_LIMIT } from './family-cutover.js';
 import { dispatchChunkNarrative } from './narrative-chunk-dispatch.js';
-import { compress, type Synthesis } from './narrative-compress.js';
 import { ensureSessionFamily } from './narrative-family.js';
-import {
-  attachVector,
-  closeSuperseded,
-  NARRATIVE_EXTRACTION_METHOD,
-  writeNarrative,
-  type NarrativeWrite,
-} from './narrative-write.js';
-import { sourceScopeDependencies } from '../../evidence/application/dependencies.js';
 import type { EvidenceResolver } from '../../evidence/application/resolver.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
-import { describeError } from '../../infrastructure/errors.js';
-import { LEGACY_NARRATIVE_LIMITS } from '../../infrastructure/graph/legacy-narrative-input.js';
-import { findLegacyHeads } from '../../infrastructure/graph/narrative-families.js';
-import {
-  findIdleSessions,
-  findSessionNarratives,
-  loadSessionEpisodes,
-  loadSessionSourceNodes,
-} from '../../infrastructure/graph/narrative-queries.js';
+import { findIdleSessions } from '../../infrastructure/graph/narrative-queries.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import type { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { readSourceRecord } from '../../infrastructure/sqlite/source-identity.js';
 import { checkPresentCoverage } from '../../recall/application/coverage-checker.js';
 import type { ChunkBoundaryPolicy } from '../domain/chunk-boundary.js';
-import {
-  LegacyPublicationDeferred,
-  legacyInputDigest,
-  type LegacyNarrativeFence,
-} from '../domain/legacy-narrative-fence.js';
-import { decideSessionBoundary } from '../domain/mid-session.js';
 import { narrativeScale } from '../domain/narrative-scale.js';
-import {
-  decideSessionNarrative,
-  narrativeNodeId,
-  narrativeSpan,
-  NARRATIVE_GROUNDING,
-} from '../domain/narrative.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../domain/stage.js';
 
 /**
@@ -61,7 +30,7 @@ const MINUTE_MS = 60 * 1000;
 /** The idle window in the unit the closer works in; config states it in minutes. */
 export const DEFAULT_SESSION_IDLE_MS = DEFAULTS.reflection.narrativeIdleMinutes * MINUTE_MS;
 
-export { NARRATIVE_EXTRACTION_METHOD };
+export { NARRATIVE_EXTRACTION_METHOD } from '../domain/narrative.js';
 
 export type NarrativeDeps = {
   readonly driver: Driver;
@@ -91,12 +60,6 @@ export type NarrativeOptions = {
   readonly occurredAt?: Date;
   /** Cleanup only: rewrite the standing narrative over the same episodes, superseding it. */
   readonly regenerate?: boolean;
-  /** The mid-session boundary's kill switch. Off, a running session waits for its close. */
-  readonly midSession?: boolean;
-  /** Uncovered episodes that cross the mid-session boundary on their own. */
-  readonly midSessionEpisodes?: number;
-  /** A pause inside a running session that crosses the same boundary. */
-  readonly midSessionGapMs?: number;
   /** The caller's shutdown signal, composed under each compression call's own deadline. */
   readonly signal?: AbortSignal;
 };
@@ -129,9 +92,6 @@ export type NarrativeSettings = {
   readonly now: Date;
   readonly occurredAt: Date;
   readonly regenerate: boolean;
-  readonly midSession: boolean;
-  readonly midSessionEpisodes: number;
-  readonly midSessionGapMs: number;
   readonly signal?: AbortSignal;
 };
 
@@ -153,16 +113,8 @@ function settingsOf(options: NarrativeOptions, provider: Provider): NarrativeSet
     now,
     occurredAt: options.occurredAt ?? now,
     regenerate: options.regenerate ?? false,
-    midSession: options.midSession ?? DEFAULTS.reflection.midSessionRollup,
-    midSessionEpisodes: options.midSessionEpisodes ?? DEFAULTS.reflection.midSessionEpisodes,
-    midSessionGapMs:
-      options.midSessionGapMs ?? DEFAULTS.reflection.midSessionGapMinutes * MINUTE_MS,
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   };
-}
-
-function skipped(sessionId: string, episodes: number, summary: string): NarrativeResult {
-  return { status: 'skipped', summary, sessionId, episodes };
 }
 
 /**
@@ -203,192 +155,12 @@ async function narrateSession(
       summary: `coverage ${coverage.refusal.reason}`,
     };
   }
-  if (family.reading.selection.family === 'chunk') {
-    return dispatchChunkNarrative(
-      { ...deps, db: deps.db, publications: deps.publications },
-      sessionId,
-      settings,
-      !requireIdle,
-    );
-  }
-  const heads = await findLegacyHeads(deps.driver, sessionId, LEGACY_HEAD_LIMIT + 1);
-  if (heads.length > LEGACY_HEAD_LIMIT) {
-    return { status: 'failed', sessionId, episodes: 0, summary: 'legacy head bound exceeded' };
-  }
-  const episodes = await loadSessionEpisodes(deps.driver, sessionId, settings.now);
-  if (episodes.length === 0) {
-    return skipped(sessionId, 0, 'the session holds no episodes');
-  }
-
-  const { db } = deps;
-  const sourceDependencies = episodes.flatMap((episode) =>
-    sourceScopeDependencies(db, episode.id).filter(
-      (entry) => entry.scope === 'source.content' || entry.scope === 'source.parts',
-    ),
-  );
-  if (
-    episodes.some(
-      (episode) => readSourceRecord(db, episode.id)?.verificationStatus !== 'verified',
-    ) ||
-    sourceDependencies.length !== episodes.length * 2
-  ) {
-    return {
-      status: 'failed',
-      sessionId,
-      episodes: episodes.length,
-      summary: 'legacy_source_verification_unproved',
-    };
-  }
-  const existing = await findSessionNarratives(deps.driver, sessionId);
-
-  if (requireIdle) {
-    const boundary = decideSessionBoundary(episodes, existing, settings);
-    if (!boundary.narrate) {
-      return skipped(sessionId, episodes.length, boundary.reason);
-    }
-  }
-
-  const span = narrativeSpan(episodes);
-  // The narrative's world time is the end of what it compresses; a session whose episodes
-  // carry no timestamps falls back to the run's.
-  const occurredAt = span.end ?? settings.occurredAt;
-  const decision = decideSessionNarrative(episodes, existing, { regenerate: settings.regenerate });
-  const generation = settings.regenerate ? NARRATIVE_GROUNDING : '';
-  let narrativeId = narrativeNodeId(sessionId, decision.coverageKey, generation);
-  if (settings.regenerate && existing.some((row) => row.id === narrativeId)) {
-    narrativeId = narrativeNodeId(
-      sessionId,
-      decision.coverageKey,
-      `${generation}:${String(decision.version)}`,
-    );
-  }
-  const fence: LegacyNarrativeFence = {
-    familyVersion: family.reading.selection.version,
-    familyDependency: family.reading.dependency,
-    sourceDependencies,
-    coverageEpoch: coverage.context.coverageEpoch,
-    heads,
-    inputDigest: legacyInputDigest(episodes, []),
-    includeExtracted: false,
-  };
-
-  if (decision.action === 'skip') {
-    try {
-      await closeSuperseded(deps, decision, narrativeId, settings.now, occurredAt, fence);
-    } catch (error) {
-      if (error instanceof LegacyPublicationDeferred && error.reason === 'legacy_family_changed') {
-        return dispatchChunkNarrative(
-          { ...deps, db: deps.db, publications: deps.publications },
-          sessionId,
-          settings,
-          !requireIdle,
-        );
-      }
-      if (error instanceof LegacyPublicationDeferred) {
-        return { status: 'failed', sessionId, episodes: episodes.length, summary: error.message };
-      }
-      throw error;
-    }
-    return skipped(sessionId, episodes.length, decision.reason);
-  }
-
-  const extracted = await loadSessionSourceNodes(deps.driver, sessionId, settings.now);
-  if (
-    episodes.length > LEGACY_NARRATIVE_LIMITS.episodes ||
-    JSON.stringify({ episodes, extracted }).length > LEGACY_NARRATIVE_LIMITS.units
-  ) {
-    return {
-      status: 'failed',
-      sessionId,
-      episodes: episodes.length,
-      summary: 'legacy input exceeds the bounded publication check',
-    };
-  }
-  const fullFence: LegacyNarrativeFence = {
-    ...fence,
-    inputDigest: legacyInputDigest(episodes, extracted),
-    includeExtracted: true,
-  };
-
-  let synthesis: Synthesis;
-  try {
-    synthesis = await compress(deps, settings, episodes, extracted);
-  } catch (err) {
-    deps.logger.warn({ err, sessionId, episodes: episodes.length }, 'narrative compression failed');
-    return {
-      status: 'failed',
-      summary: `narrative compression failed: ${describeError(err)}`,
-      sessionId,
-      episodes: episodes.length,
-    };
-  }
-
-  const { output, source } = synthesis;
-
-  if (output.kept === 0) {
-    deps.logger.warn(
-      { sessionId, episodes: episodes.length, dropped: output.dropped },
-      'narrative dropped: no sentence cited a source the session holds',
-    );
-    return {
-      status: 'failed',
-      summary: `narrative dropped: ${String(output.dropped)} sentences cited nothing in the session`,
-      sessionId,
-      episodes: episodes.length,
-    };
-  }
-
-  const write: NarrativeWrite = {
-    narrativeId,
+  return dispatchChunkNarrative(
+    { ...deps, db: deps.db, publications: deps.publications },
     sessionId,
-    decision,
-    output,
-    source,
-    span,
-    now: settings.now,
-    occurredAt,
-  };
-  try {
-    await writeNarrative(deps, write, fullFence);
-  } catch (error) {
-    if (error instanceof LegacyPublicationDeferred && error.reason === 'legacy_family_changed') {
-      return dispatchChunkNarrative(
-        { ...deps, db: deps.db, publications: deps.publications },
-        sessionId,
-        settings,
-        !requireIdle,
-      );
-    }
-    if (error instanceof LegacyPublicationDeferred) {
-      return { status: 'failed', sessionId, episodes: episodes.length, summary: error.message };
-    }
-    throw error;
-  }
-  await attachVector(deps, narrativeId, output.narrative);
-
-  deps.logger.info(
-    {
-      sessionId,
-      narrativeId,
-      version: decision.version,
-      episodes: episodes.length,
-      rendered: source.renderedCount,
-      sentences: output.kept,
-      dropped: output.dropped,
-      citations: output.citations.length,
-      superseded: decision.supersedes.length,
-    },
-    'session narrative stored',
+    settings,
+    !requireIdle,
   );
-
-  return {
-    status: 'created',
-    summary: `narrative v${String(decision.version)} over ${String(episodes.length)} episodes`,
-    sessionId,
-    episodes: episodes.length,
-    narrativeId,
-    version: decision.version,
-  };
 }
 
 /**

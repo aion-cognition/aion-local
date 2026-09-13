@@ -1,6 +1,6 @@
 import {
   hostDataDir,
-  latestAppliedGraphMigration,
+  appliedGraphSchemaVersion,
   readMemberName,
   type Config,
   type SqliteHandle,
@@ -199,7 +199,7 @@ export async function readStorePairing(driver: Driver, db: SqliteHandle): Promis
   const memberName = await readMemberName(driver);
   return storePairing({
     graphEstablished: memberName !== undefined,
-    databaseEstablished: latestAppliedGraphMigration(db) !== undefined,
+    databaseEstablished: appliedGraphSchemaVersion(db) !== undefined,
   });
 }
 

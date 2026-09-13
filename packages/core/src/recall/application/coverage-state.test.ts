@@ -33,10 +33,6 @@ describe('the coverage state the operator surfaces read', () => {
       coverageState: 'failed',
       historySince: null,
       coverageEpoch: null,
-      evictionGate: 'unarmed',
-      evictionCompatibilityRevision: 0,
-      evictionDisarmedAt: null,
-      evictionStopRequestedBy: null,
     });
   });
 
@@ -58,41 +54,6 @@ describe('the coverage state the operator surfaces read', () => {
       coverageState: 'active',
       historySince: NOW.toISOString(),
       coverageEpoch: active.epoch,
-    });
-  });
-
-  it('reports the eviction fence apart from coverage, closed under an active contract', () => {
-    prepareCoverageContract(store.db, 1);
-    activateCoverageContract(store.db, { activatedAt: NOW, fieldPolicyVersion: 1 });
-
-    expect(readCoverageState(store.db)).toMatchObject({
-      coverageState: 'active',
-      evictionGate: 'unarmed',
-      evictionCompatibilityRevision: 0,
-    });
-
-    store.db.prepare('UPDATE publication_control SET eviction_compatibility_revision = 3').run();
-
-    expect(readCoverageState(store.db)).toMatchObject({
-      evictionGate: 'armed',
-      evictionCompatibilityRevision: 3,
-    });
-  });
-
-  it('reports a stopped fence apart from one nobody ever opened', () => {
-    prepareCoverageContract(store.db, 1);
-    activateCoverageContract(store.db, { activatedAt: NOW, fieldPolicyVersion: 1 });
-    store.db.prepare('UPDATE publication_control SET eviction_compatibility_revision = 3').run();
-    store.db
-      .prepare('UPDATE publication_control SET eviction_disarmed_at = ?')
-      .run(NOW.toISOString());
-
-    // The revision it established is still readable. A stop is not the loss of a capability, and
-    // a reader that could not tell the two apart would report a stopped substrate as a fresh one.
-    expect(readCoverageState(store.db)).toMatchObject({
-      evictionGate: 'disarmed',
-      evictionCompatibilityRevision: 3,
-      evictionDisarmedAt: NOW.toISOString(),
     });
   });
 });

@@ -7,12 +7,6 @@ import {
 } from './coverage-contract.js';
 import { SqliteStore } from './database.js';
 import {
-  freezeMigrationCohort,
-  readMigrationCohort,
-  readMigrationProgress,
-  countMigrationProgress,
-} from './migration-cohorts.js';
-import {
   activateProcessingGeneration,
   allocateProcessingGeneration,
   listOutstandingWork,
@@ -71,42 +65,6 @@ describe('durable foundation boundaries', () => {
       )
       .run(generation, NOW.toISOString());
     expect(listOutstandingWork(store.db, LATER, 1)).toEqual([]);
-  });
-
-  it('does not expand a frozen cohort on retry with a new live census', () => {
-    const initial = {
-      cohortId: 'legacy',
-      cohortDigest: 'digest-a',
-      intakeWatermark: 2,
-      archiveRowidLow: 1,
-      archiveRowidHigh: 2,
-      graphCensusDigest: 'graph-a',
-      orderingPolicyVersion: 1,
-      createdAt: NOW,
-      members: ['source-a'],
-    };
-    freezeMigrationCohort(store.db, initial);
-    const before = readMigrationCohort(store.db, 'legacy');
-    // Refusal or reuse of the frozen record are both safe; mutating its membership is not.
-    try {
-      freezeMigrationCohort(store.db, {
-        ...initial,
-        cohortDigest: 'digest-b',
-        intakeWatermark: 3,
-        archiveRowidHigh: 3,
-        graphCensusDigest: 'graph-b',
-        members: ['source-a', 'late'],
-      });
-    } catch {
-      // An explicit mismatched retry refusal is an allowed implementation.
-    }
-    expect(readMigrationCohort(store.db, 'legacy')).toEqual(before);
-    expect(readMigrationProgress(store.db, 'legacy', 'late')).toBeUndefined();
-    expect(countMigrationProgress(store.db, 'legacy')).toEqual({
-      accounted: 1,
-      verified: 0,
-      pinned: 0,
-    });
   });
 
   it('keeps a no-change reference delivery idempotent after a later accepted set', () => {

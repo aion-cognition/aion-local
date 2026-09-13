@@ -345,6 +345,15 @@ export type MergedEntity = {
   readonly aliasesNorm: readonly string[];
   /** True when this call's proposed id is the one the node kept, which only a creation does. */
   readonly created: boolean;
+  /**
+   * The episode the identity records as having created it, empty where the node carries none.
+   *
+   * A caller whose own episode is named here drew this id, whether or not this call is the one
+   * that did it. That is a different question from `created`, which answers only for this call's
+   * proposal, and it is the one a retry has to ask: its first attempt drew the id and the node
+   * kept it, so `created` is false and the identity is still the retry's own.
+   */
+  readonly sourceEpisodeId: string;
   readonly hasNameVector: boolean;
   readonly hasContentVector: boolean;
   readonly nameVectorHash?: string;
@@ -356,6 +365,7 @@ export type EntityMergeRow = {
   readonly nameNorm: string;
   readonly id: string;
   readonly created: boolean;
+  readonly sourceEpisodeId: string;
   readonly canonicalNameNorm: string;
   readonly type: string;
   readonly typeCounts: string;
@@ -454,6 +464,7 @@ export function reconcileMergedEntities(
       type: final?.type ?? row.type,
       aliasesNorm: final?.aliasesNorm ?? [],
       created: row.created,
+      sourceEpisodeId: row.sourceEpisodeId,
       hasNameVector: row.hasNameVector,
       hasContentVector: row.hasContentVector,
       ...(row.nameVectorHash === undefined ? {} : { nameVectorHash: row.nameVectorHash }),

@@ -89,9 +89,6 @@ const configured: Config = {
     keyedNarrativeSentences: 13,
     keyedNarrativeEpisodeChars: 4_100,
     narrativeSweepLimit: 21,
-    midSessionRollup: false,
-    midSessionEpisodes: 13,
-    midSessionGapMinutes: 11,
   },
 };
 
@@ -246,9 +243,6 @@ describe('narrativeOptions', () => {
       // The whole group, both routes' numbers included: the resolved route picks inside it at
       // the moment of the call, which is the one place that knows which model reads the source.
       reflection: configured.reflection,
-      midSession: configured.reflection.midSessionRollup,
-      midSessionEpisodes: configured.reflection.midSessionEpisodes,
-      midSessionGapMs: configured.reflection.midSessionGapMinutes * MINUTE_MS,
     });
   });
 

@@ -74,8 +74,7 @@ packages/mcp/src/                       MCP server: tool definitions, HTTP trans
 packages/cli/src/                       aion command: init, status, doctor, stats, last, why,
                                         timeline, search, source-search, source, forget,
                                         unforget, unsupersede, queue, replay, proposals,
-                                        maintain, unmerge, consolidate, costs, logs, uninstall,
-                                        evict, hooks, help
+                                        maintain, unmerge, costs, logs, uninstall, hooks, help
 packages/cli/src/hook/                  the harness hook client: codex-rollout.ts reads the codex
                                         rollout, codex-settings.ts shapes its hooks file
 bin/aion                                host wrapper: rebuilds the image, runs the CLI container
@@ -185,11 +184,12 @@ when `packages/*/dist` is at least as new as the tracked sources, so a pull with
 
 ## The re-exercise gate
 
-`packages/mcp/src/gate/` holds eleven int test files. Three of them carry seven scripted
+`packages/mcp/src/gate/` holds twelve int test files. Three of them carry seven scripted
 batteries, listed below. Each battery is a finding from the first full-system exercise round,
 re-run against the shipped pipeline (`bootstrap.ts`'s own stage list, live Ollama, a pooled
-throwaway Neo4j cleared for each file). The other eight files gate one behavior each, four of
-them the mode-setting batteries further down.
+throwaway Neo4j cleared for each file). The other nine files gate one behavior each, four of
+them the mode-setting batteries further down and one of them `judged-pair-liveness`, which is
+where a fresh contradicting pair has to reach the judge and the judgment has to complete.
 
 ```
 npx vitest run --project integration --reporter=verbose re-exercise-gate         # all seven

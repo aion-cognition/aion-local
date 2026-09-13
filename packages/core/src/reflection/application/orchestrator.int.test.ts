@@ -31,6 +31,7 @@ import type { ReflectionStage, StageContext, StageOutcome } from '../domain/stag
 import { stageLedgerKey } from '../domain/stage.js';
 import { PIPELINE_VERSION } from '../domain/version.js';
 import { directIntakePublisher } from '../test-support/direct-intake.fixture.js';
+import { RecordingPublisher } from '../test-support/recording-publisher.fixture.js';
 
 const SESSION_IDENTITY = 'mcp-transport-session-orchestrator';
 
@@ -123,6 +124,9 @@ function orchestrator(stages: readonly ReflectionStage[]): ReflectionOrchestrato
         embedModel: DEFAULTS.models.embed,
       }),
       logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
+      // The extraction stages record what they wrote and fail when they cannot. This file's
+      // subject is the stage order and the retry, so the report is captured rather than published.
+      publications: new RecordingPublisher().asCoordinator(),
     },
     stages,
   );
@@ -149,6 +153,7 @@ function refusingOrchestrator(stages: readonly ReflectionStage[]): ReflectionOrc
       db,
       provider,
       logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
+      publications: new RecordingPublisher().asCoordinator(),
     },
     stages,
   );

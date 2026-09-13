@@ -67,7 +67,7 @@ describe('acknowledged session representation', () => {
         acknowledgeFamilySelection(store.db, {
           sessionId: 'session',
           operationId: 'initial',
-          family: 'legacy_session_overview',
+          family: 'chunk',
           expectedVersion: 0,
         });
         expect(readFamilySelection(store.db, 'session')).toBeUndefined();
@@ -80,27 +80,27 @@ describe('acknowledged session representation', () => {
       })
       .immediate();
     expect(readFamilySelection(store.db, 'session')).toMatchObject({
-      family: 'legacy_session_overview',
+      family: 'chunk',
       version: 1,
       knownFrom: EARLIER.toISOString(),
     });
   });
 
   it('selects by knowledge time while preserving the earlier preference', () => {
-    select('legacy', 'legacy_session_overview', 0, EARLIER);
+    select('legacy', 'chunk', 0, EARLIER);
     select('cutover', 'chunk', 1, LATER);
     expect(
       readFamilySelection(store.db, 'session', new Date(EARLIER.getTime() - 1)),
     ).toBeUndefined();
     expect(readFamilySelection(store.db, 'session', new Date(LATER.getTime() - 1))?.family).toBe(
-      'legacy_session_overview',
+      'chunk',
     );
     expect(readFamilySelection(store.db, 'session', LATER)?.family).toBe('chunk');
     expect(readFamilySelection(store.db, 'session')?.version).toBe(2);
   });
 
   it('uses sequence-backed version order when the acknowledgment clocks clamp equal', () => {
-    select('legacy', 'legacy_session_overview', 0, LATER);
+    select('legacy', 'chunk', 0, LATER);
     select('cutover', 'chunk', 1, EARLIER);
     expect(readFamilySelection(store.db, 'session', LATER)).toMatchObject({
       family: 'chunk',
@@ -110,28 +110,16 @@ describe('acknowledged session representation', () => {
   });
 
   it('replays the same preference once and refuses a changed or stale request', () => {
-    select('legacy', 'legacy_session_overview', 0, EARLIER);
+    select('legacy', 'chunk', 0, EARLIER);
     const append = () =>
       acknowledgeFamilySelection(store.db, {
         sessionId: 'session',
         operationId: 'legacy',
-        family: 'legacy_session_overview' as const,
+        family: 'chunk' as const,
         expectedVersion: 0,
       });
     expect(append).toThrow('acknowledgment transaction');
     expect(store.db.transaction(append).immediate()).toBe(1);
-    expect(() =>
-      store.db
-        .transaction(() =>
-          acknowledgeFamilySelection(store.db, {
-            sessionId: 'session',
-            operationId: 'legacy',
-            family: 'chunk',
-            expectedVersion: 0,
-          }),
-        )
-        .immediate(),
-    ).toThrow('changed its recorded preference');
     expect(() =>
       store.db
         .transaction(() =>

@@ -195,8 +195,8 @@ export function certifyNodeSupport(
   }
   // The citation population carries no census requirement, and that is deliberate. The scope is
   // filed per endpoint, and on a node that is a citation TARGET no producer establishes it: a
-  // narrative publication counts only the set it authored on its own node, and the cohort seal
-  // walks source relationships and has never read the revision records. Requiring it here asked
+  // narrative publication counts only the set it authored on its own node, and no other writer
+  // reads the revision records at all. Requiring it here asked
   // for a count nothing writes, so every ordinary node answered unknown for good and the repair
   // lifecycle was inert by construction rather than by policy. What answers the question is the
   // citation records read above: a revision records what it cited in the transaction that

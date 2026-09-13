@@ -5,8 +5,6 @@ import { durableEligibility } from './eviction-eligibility.js';
 import {
   acceptEpisode,
   activateCoverage,
-  armEviction,
-  disarmEviction,
   driver,
   eligibleSource,
   evictionPayload,
@@ -33,7 +31,6 @@ import {
   setNodeLabel,
 } from '../../infrastructure/graph/test-support/a3-eviction-graph.fixture.js';
 import { countNodesWithId } from '../../infrastructure/graph/test-support/graph-queries.fixture.js';
-import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
 import { readEvictionManifest } from '../../infrastructure/sqlite/eviction-manifests.js';
 import {
   prepareMaterializedLinkVersion,
@@ -55,7 +52,6 @@ import {
   readActiveGeneration,
   stageWorkId,
 } from '../../infrastructure/sqlite/processing-generations.js';
-import { readSubstratePairing } from '../../infrastructure/sqlite/publication-control.js';
 import {
   acceptReferenceBatch,
   readSourceParts,
@@ -91,7 +87,6 @@ async function publishEviction(nomination: EvictionNomination, operationId = ran
 
 beforeAll(async () => {
   await activateCoverage();
-  await armEviction();
 });
 
 it('removes one source projection exactly and leaves everything it stood beside', async () => {
@@ -225,37 +220,6 @@ it('holds a qualified source inside its maturation window', async () => {
     status: 'pinned',
     reason: 'qualification_age_unmet',
   });
-  expect(await nodeExists(driver, sourceId)).toBe(true);
-});
-
-it('refuses every source while the compatibility capability is unestablished', async () => {
-  const sourceId = await eligibleSource('evict-capability', 'S1');
-  store.db.prepare('UPDATE publication_control SET eviction_compatibility_revision = 0').run();
-
-  expect(durableEligibility(store.db, sourceId, POLICY)).toEqual({
-    status: 'pinned',
-    reason: 'compatibility_not_established',
-  });
-
-  await armEviction();
-  expect(durableEligibility(store.db, sourceId, POLICY).status).toBe('eligible');
-  expect(await nodeExists(driver, sourceId)).toBe(true);
-});
-
-it('keeps refusing with the coverage contract active and its capability established', async () => {
-  const sourceId = await eligibleSource('evict-coverage-only', 'S1');
-  store.db.prepare('UPDATE publication_control SET eviction_compatibility_revision = 0').run();
-  try {
-    expect(readCurrentCoverageContract(store.db)?.state).toBe('active');
-    expect(readSubstratePairing(store.db)?.activationCapabilityRevision).toBe(1);
-
-    expect(durableEligibility(store.db, sourceId, POLICY)).toEqual({
-      status: 'pinned',
-      reason: 'compatibility_not_established',
-    });
-  } finally {
-    await armEviction();
-  }
   expect(await nodeExists(driver, sourceId)).toBe(true);
 });
 
@@ -605,31 +569,6 @@ it('pins a member whose neighbour carries a gap for a reason the rider does not 
     restore.run(original, chunkId, head?.revisionNo ?? 0);
   }
   expect(durableEligibility(store.db, healthy, POLICY).status).toBe('eligible');
-});
-
-it('refuses a prepared attempt whose substrate was stopped under it', async () => {
-  const sourceId = await eligibleSource('evict-disarmed', 'S1');
-  const nomination = await nominate(sourceId);
-
-  await disarmEviction();
-  try {
-    // The guard re-derives eligibility, and the stop is part of it, so honouring a disarm inside
-    // the guard costs nothing extra: an attempt nominated before the stop refuses after it.
-    expect(await publishEviction(nomination)).toMatchObject({
-      status: 'deferred',
-      reason: 'compatibility_disarmed',
-    });
-    expect(await nodeExists(driver, sourceId)).toBe(true);
-    expect(durableEligibility(store.db, sourceId, POLICY)).toEqual({
-      status: 'pinned',
-      reason: 'compatibility_disarmed',
-    });
-  } finally {
-    await armEviction();
-  }
-
-  // Stopping was never about this source: armed again, it is exactly where it was.
-  expect(durableEligibility(store.db, sourceId, POLICY).status).toBe('eligible');
 });
 
 it('re-owes what a forget closed the moment the forget is withdrawn', async () => {

@@ -12,7 +12,6 @@ import { listRunnableSurvivorWork } from '../../../infrastructure/sqlite/evictio
 import { readSourceResidency } from '../../../infrastructure/sqlite/source-lifecycle.js';
 import {
   activateCoverage,
-  armEviction,
   chunks,
   driver,
   eligibleSource,
@@ -56,7 +55,6 @@ function context(): OperationContext {
 
 beforeAll(async () => {
   await activateCoverage();
-  await armEviction();
 });
 
 it('scores one eligible source of a batch of eight as an eighth and then evicts it', async () => {

@@ -301,10 +301,10 @@ export type MentionRecencyReading =
  * still an open mention, and dropping it would age an identifier on a silence that is really a
  * suppression somebody else applied.
  *
- * The clock is the mention's own `updated_at` and no substitute. A backfill acknowledges every
- * legacy mention on the day it runs, and a world start says when the relationship began rather
- * than when it was last touched: reading either as the last mention would age the whole corpus
- * wrongly, in opposite directions. Missing proof stays missing.
+ * The clock is the mention's own `updated_at` and no substitute. A bulk pass acknowledges every
+ * mention it touches on the day it runs, and a world start says when the relationship began
+ * rather than when it was last touched: reading either as the last mention would age the whole
+ * corpus wrongly, in opposite directions. Missing proof stays missing.
  */
 export function openMentionRecency(db: SqliteHandle, nodeId: string): MentionRecencyReading {
   const token = gate(db, nodeId, 'mention');

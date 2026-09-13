@@ -17,10 +17,7 @@ import {
   readPublishedRevision,
 } from '../../infrastructure/sqlite/narrative-revisions.js';
 import { readActiveGeneration } from '../../infrastructure/sqlite/processing-generations.js';
-import {
-  evictionStopStands,
-  readSubstratePairing,
-} from '../../infrastructure/sqlite/publication-control.js';
+import { readSubstratePairing } from '../../infrastructure/sqlite/publication-control.js';
 import {
   listReferenceBatches,
   readSourceParts,
@@ -128,15 +125,14 @@ function qualificationAnchor(
  *
  * They are named apart because they are different obligations. A statement somebody made about
  * this source is the reference machinery's. The other two name a class of record rather than one
- * caller: `materialized` is written by the legacy record producer and by the opening half of a
- * legacy-coverage write, `retired` by a merge and by that same write's closing half. One reason
- * covering all three would name the wrong cause for two of them; the operation that prepared the
- * version is what names which of a class's two writers is owed.
+ * caller: `materialized` is written by the writer that recorded a node's own relationships and by
+ * the opening half of a coverage write, `retired` by a merge and by that same write's closing
+ * half. One reason covering all three would name the wrong cause for two of them; the operation
+ * that prepared the version is what names which of a class's two writers is owed.
  *
  * The harm above is a FROM-SIDE argument, and the read is keyed on `from_id` deliberately. A source
- * can land on the to side — a stated link whose target turns out to be a source is written that way,
- * and a legacy relation whose far endpoint carries the Episode label is classified rather than
- * excluded. Keying on either endpoint would pin that source on an obligation only the other
+ * can land on the to side: a stated link whose target turns out to be a source is written that way.
+ * Keying on either endpoint would pin that source on an obligation only the other
  * endpoint's operation can discharge: a pin with no repair path, against condition 5's rule that a
  * remaining obligation is acknowledged or transferred, and it would report a settlement owed for a
  * statement this source never made. The to side is covered instead, and more strongly: an incoming
@@ -201,32 +197,18 @@ function owesWork(db: SqliteHandle, sourceId: string, generation: number): boole
 }
 
 /**
- * The arming fence, and the one place it is read.
+ * The pairing this reads, and the one place it is read.
  *
- * It answers to the eviction compatibility revision and the stop beside it. An active coverage
- * contract is a different gate with a different owner, and a substrate whose coverage the
- * ordinary startup activated is still refused here until somebody arms this one.
- *
- * The stop is read FIRST and beats any revision value. An operator stopping eviction is saying
- * remove nothing from here, and a fence that weighed that against a number could answer yes to
- * one because the other said so. The revision is left where it is on purpose: it records the
- * capability this substrate established, and a stop is not the loss of that capability.
- *
- * A stop asked for and not yet recorded reads the same way. The request is claimed before the
- * guard settles anything, so it is exactly what stands between a pending removal and the operator
- * who ran the command to prevent it. It stops being a stop when its own operation ends refused,
- * which `evictionStopStands` resolves from that operation's record rather than from a timer.
+ * A substrate that finished its bootstrap is one this build can remove from. There is no second
+ * fence in front of that: eviction is a condition of the source rather than a permission the
+ * substrate is granted, and the conditions below are what decide it. What used to stand here was a
+ * revision an operator had to publish before any source could pass, which answered the same
+ * question the bootstrap state already answers.
  */
 function pairingHolds(db: SqliteHandle): string | undefined {
   const pairing = readSubstratePairing(db);
   if (pairing?.bootstrapState !== 'initialized') {
     return 'substrate_pairing_unproved';
-  }
-  if (evictionStopStands(db, pairing)) {
-    return 'compatibility_disarmed';
-  }
-  if (pairing.evictionCompatibilityRevision <= 0) {
-    return 'compatibility_not_established';
   }
   return undefined;
 }

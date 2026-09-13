@@ -9,7 +9,7 @@ import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { openLogger } from '../../infrastructure/logging/logger.js';
 import type { Vector } from '../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { readIntakeWatermark } from '../../infrastructure/sqlite/migration-cohorts.js';
+import { readIntakeWatermark } from '../../infrastructure/sqlite/ingest-log.js';
 import {
   listStageWork,
   readActiveGeneration,

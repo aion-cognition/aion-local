@@ -33,6 +33,7 @@ import { openLogger } from '../../../infrastructure/logging/logger.js';
 import { SqliteStore } from '../../../infrastructure/sqlite/database.js';
 import type { StageContext } from '../../domain/stage.js';
 import { PIPELINE_VERSION } from '../../domain/version.js';
+import { RecordingPublisher } from '../../test-support/recording-publisher.fixture.js';
 
 const EPISODE_ID = 'episode-1';
 const SESSION_ID = 'session-1';
@@ -54,6 +55,7 @@ const EXTRACTION = {
 };
 
 let graph: EntityFakeGraph;
+let publisher: RecordingPublisher;
 let store: SqliteStore;
 let dataDir: string;
 
@@ -78,6 +80,7 @@ function context(provider: FakeProvider, text?: string): StageContext {
     now: NOW,
     occurredAt: NOW,
     pipelineVersion: PIPELINE_VERSION,
+    publications: publisher.asCoordinator(),
   };
 }
 
@@ -116,6 +119,7 @@ function entityNames(): string[] {
 
 beforeEach(() => {
   graph = new EntityFakeGraph();
+  publisher = new RecordingPublisher();
   seedEpisode();
   dataDir = mkdtempSync(join(tmpdir(), 'aion-entities-'));
   store = new SqliteStore({ filePath: join(dataDir, 'aion.sqlite') });
@@ -127,6 +131,51 @@ afterEach(() => {
 });
 
 describe('canonicalization', () => {
+  it('reports both relationships it wrote for every entity, marking the ids it minted', async () => {
+    const provider = fakeProvider({ generate: [EXTRACTION] });
+
+    const outcome = await new EntityExtractionStage().run(context(provider));
+
+    expect(outcome.status).toBe('ok');
+    const [payload] = publisher.payloadsOf('derived_node_evidence');
+    expect(payload).toMatchObject({ subject: EPISODE_ID });
+    const { nodes } = payload as {
+      nodes: {
+        nodeId: string;
+        sourceId: string;
+        role: string;
+        relationType: string;
+        minted: boolean;
+      }[];
+    };
+    expect(nodes).toHaveLength(4);
+    for (const node of nodes) {
+      expect(node).toMatchObject({ sourceId: EPISODE_ID, minted: true });
+    }
+    // Two entities, each with the mention that runs to it and the participation that runs back.
+    expect(new Set(nodes.map((node) => node.nodeId)).size).toBe(2);
+    expect(nodes.map((node) => `${node.role} ${node.relationType}`).sort()).toEqual([
+      `mention ${ENTITY_MENTION_TYPE}`,
+      `mention ${ENTITY_MENTION_TYPE}`,
+      `participation ${ENTITY_PARTICIPATION_TYPE}`,
+      `participation ${ENTITY_PARTICIPATION_TYPE}`,
+    ]);
+  });
+
+  it('fails the stage when the mentions it wrote cannot be recorded', async () => {
+    const provider = fakeProvider({ generate: [EXTRACTION] });
+
+    const outcome = await new EntityExtractionStage().run({
+      ...context(provider),
+      publications: undefined,
+    });
+
+    expect(outcome).toMatchObject({
+      status: 'failed',
+      summary: 'entity extraction is not composed: no publication coordinator',
+    });
+  });
+
   it('writes one node per extracted identity, with its text, provenance and both vectors', async () => {
     const provider = fakeProvider({ generate: [EXTRACTION] });
     const outcome = await new EntityExtractionStage().run(context(provider));

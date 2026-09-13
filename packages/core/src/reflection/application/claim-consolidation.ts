@@ -1,7 +1,9 @@
 import type { Driver } from 'neo4j-driver';
 
+import { recordConsolidationEvidence } from './consolidation-evidence.js';
 import { synthesizeGrounded } from './consolidation-synthesis.js';
 import { attachContentVectors } from './vectors.js';
+import { advanceNodeState } from '../../evidence/application/node-state.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import {
@@ -27,6 +29,7 @@ import { findNodesWithoutCurrency } from '../../infrastructure/graph/supersessio
 import type { GraphProperties } from '../../infrastructure/graph/values.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
+import type { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { isLedgerApplied, markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import {
@@ -80,6 +83,8 @@ export type ConsolidationDeps = {
   /** Where a veto is recorded, so the next tick spends its budget somewhere it can compress. */
   readonly db: SqliteHandle;
   readonly logger: Logger;
+  /** Where the consolidation's own evidence is recorded. Absent, the claim lands uncounted. */
+  readonly publications?: PublicationCoordinator;
 };
 
 /**
@@ -194,9 +199,9 @@ function consolidationProperties(input: ConsolidationWrite): GraphProperties {
 async function writeConsolidation(
   deps: ConsolidationDeps,
   input: ConsolidationWrite,
-): Promise<void> {
-  await inWriteTransaction(deps.driver, async (tx) => {
-    await writeStampedDerivedNodeInTransaction(tx, {
+): Promise<boolean> {
+  return inWriteTransaction(deps.driver, async (tx) => {
+    const node = await writeStampedDerivedNodeInTransaction(tx, {
       label: CONSOLIDATION_LABEL,
       id: input.claimId,
       now: input.now,
@@ -217,6 +222,7 @@ async function writeConsolidation(
         now: input.now,
       });
     }
+    return node.created;
   });
 }
 
@@ -340,7 +346,7 @@ async function consolidateSubject(
     return { outcome: 'stale', absorbed: 0 };
   }
 
-  await writeConsolidation(deps, {
+  const minted = await writeConsolidation(deps, {
     claimId,
     memberIds,
     coverageKey: key,
@@ -354,7 +360,30 @@ async function consolidateSubject(
     now: settings.now,
   });
 
+  const unrecorded = await recordConsolidationEvidence(deps, {
+    claimId,
+    memberIds,
+    minted,
+    now: settings.now,
+  });
+  if (unrecorded !== undefined) {
+    deps.logger.warn(
+      { community: profile.community, claimId, reason: unrecorded },
+      'consolidated claim stored with no evidence record; every judge asked about it will abstain',
+    );
+  }
+
   const absorbed = await closeMembers(deps, claimId, memberIds, settings.now, occurredAt);
+  // The members lost their currency in the close above, which is a change to each one's own
+  // semantic state; a judgment fenced on the reading this absorbed goes stale here.
+  for (const memberId of memberIds) {
+    advanceNodeState(
+      deps.db,
+      memberId,
+      `claim-consolidation:${claimId}`,
+      settings.now.toISOString(),
+    );
+  }
   await attachVector(deps, claimId, synthesis.grounded.narrative);
 
   deps.logger.info(

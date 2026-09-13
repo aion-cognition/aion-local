@@ -168,17 +168,6 @@ export const REFLECTION_KNOBS = {
   maxContradictionJudgments: ['AION_REFLECTION_MAX_CONTRADICTION_JUDGMENTS', positiveInt, 24],
   /** Minutes, because that is the unit the pinned trigger is stated in (30 min idle). */
   narrativeIdleMinutes: ['AION_REFLECTION_NARRATIVE_IDLE_MINUTES', positiveInt, 30],
-  // The mid-session boundary: a running session is compressed before anyone closes it, so what
-  // recall reaches mid-flight is a narrative rather than raw episodes. Off, the close and the
-  // idle window are the only boundaries, which is the behaviour that came before it.
-  midSessionRollup: ['AION_REFLECTION_MID_SESSION_ROLLUP', z.boolean(), true],
-  // Uncovered episodes that make a running session worth compressing. Twelve is under a third
-  // of the source ceiling a narrative renders, so a session crossing it has enough behind it to
-  // compress and enough ahead of it that the close still has something to add.
-  midSessionEpisodes: ['AION_REFLECTION_MID_SESSION_EPISODES', positiveInt, 12],
-  // Silence that reads as one stretch of work finishing. A third of the idle window: shorter
-  // than the silence that ends a session, longer than a pause for a build.
-  midSessionGapMinutes: ['AION_REFLECTION_MID_SESSION_GAP_MINUTES', positiveInt, 10],
   maxNarrativeEpisodes: ['AION_REFLECTION_MAX_NARRATIVE_EPISODES', positiveInt, 40],
   maxNarrativeEpisodeChars: ['AION_REFLECTION_MAX_NARRATIVE_EPISODE_CHARS', positiveInt, 2_000],
   // The three above are what qwen3:8b was measured on, and these three are what the same

@@ -286,9 +286,6 @@ function renderDurableEvidence(
     write(
       `  representation   ${metadata.representation.family}; ${metadata.representation.selection} for default recall`,
     );
-    if (metadata.representation.retired !== undefined) {
-      write(`  family retired   ${metadata.representation.retired.knownFrom}`);
-    }
   }
   write('');
 }

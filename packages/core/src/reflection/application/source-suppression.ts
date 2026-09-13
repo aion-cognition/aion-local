@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { reopenWorkAWithdrawnForgetClosed } from './forget-disposition.js';
-import { GRAPH_NODE_SCOPE } from '../../evidence/domain/scopes.js';
+import { advanceNodeState } from '../../evidence/application/node-state.js';
 import {
   forgetNodeInTransaction,
   suppressionStateInTransaction,
@@ -10,7 +10,6 @@ import {
 import { PublicationOperation } from '../../infrastructure/publication/operation.js';
 import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
 import { readCurrentCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
-import { readScopeMirror, recordScopeMirror } from '../../infrastructure/sqlite/evidence-scope.js';
 import { readSourceRecord } from '../../infrastructure/sqlite/source-identity.js';
 import {
   acknowledgeSourceStateVersions,
@@ -148,17 +147,7 @@ export const sourceSuppressionPublication = new PublicationOperation({
     // The node's own semantic state moved, so evidence somebody is holding about that state
     // stops being current here, in the operation that moved it. Left alone, a judgment fenced on
     // the reading this act invalidated would still verify as current.
-    const held = readScopeMirror(context.db, {
-      endpointId: data.nodeId,
-      relationClass: GRAPH_NODE_SCOPE,
-    });
-    recordScopeMirror(context.db, {
-      endpointId: data.nodeId,
-      relationClass: GRAPH_NODE_SCOPE,
-      mirroredRevision: (held?.mirroredRevision ?? 0) + 1,
-      operationId: context.operationId,
-      mirroredAt: new Date(context.knownFrom),
-    });
+    advanceNodeState(context.db, data.nodeId, context.operationId, context.knownFrom);
     return undefined;
   },
   discardSqlite(context) {

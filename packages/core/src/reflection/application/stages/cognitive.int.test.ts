@@ -47,6 +47,7 @@ import { foldName } from '../../domain/name-fold.js';
 import type { StageContext } from '../../domain/stage.js';
 import { PIPELINE_VERSION } from '../../domain/version.js';
 import { directIntakePublisher } from '../../test-support/direct-intake.fixture.js';
+import { RecordingPublisher } from '../../test-support/recording-publisher.fixture.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../intake.js';
 import { LaneAssigner } from '../lanes.js';
 
@@ -154,6 +155,7 @@ describe('CognitiveExtractionStage against a live graph and a live model', () =>
       now: new Date(),
       occurredAt: new Date(),
       pipelineVersion: PIPELINE_VERSION,
+      publications: new RecordingPublisher().asCoordinator(),
     };
 
     const stage = new CognitiveExtractionStage({ model: DEFAULTS.models.reflect });
@@ -240,6 +242,7 @@ describe('CognitiveExtractionStage against a live graph and a live model', () =>
       now: new Date(),
       occurredAt: new Date(),
       pipelineVersion: PIPELINE_VERSION,
+      publications: new RecordingPublisher().asCoordinator(),
     };
 
     const outcome = await new CognitiveExtractionStage({ model: DEFAULTS.models.reflect }).run(ctx);
@@ -300,6 +303,7 @@ describe('CognitiveExtractionStage against a live graph and a live model', () =>
       now: KEYED_NOW,
       occurredAt: KEYED_OCCURRED_AT,
       pipelineVersion: PIPELINE_VERSION,
+      publications: new RecordingPublisher().asCoordinator(),
     };
 
     const outcome = await new CognitiveExtractionStage({

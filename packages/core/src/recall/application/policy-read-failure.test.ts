@@ -34,11 +34,11 @@ it('replaces the failed snapshot consistently without losing an identity-less ca
         ids.map((id, index) => [
           id,
           {
-            family: 'legacy_session_overview' as const,
+            family: 'chunk' as const,
             sessions: [id],
             selection: 'unknown' as const,
             publication: 'established' as const,
-            identity: { nodeId: id, family: 'legacy_session_overview' as const, sessionId: id },
+            identity: { nodeId: id, family: 'chunk' as const, sessionId: id },
             policyIssues: [old[index]!],
           },
         ]),

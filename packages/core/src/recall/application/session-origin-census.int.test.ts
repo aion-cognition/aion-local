@@ -265,25 +265,15 @@ describe('a certified recall asking about what the session just captured', () =>
   });
 
   /**
-   * Both halves of the statement. The ownership line goes because this endpoint's three counters
-   * are counted now; the interpretation line stays because nothing establishes a census for the
-   * graph's own node scope, on any item, before or after.
+   * Both halves of the statement, and the acceptance closes both. The ownership line goes because
+   * this endpoint's three counters are counted now; the interpretation line goes because the same
+   * write establishes the node's own state counter and records the reading it was established at.
    */
-  it('drops the ownership gap for that episode and keeps the interpretation one', async () => {
+  it('drops both coverage gaps for an episode the acceptance counted', async () => {
     const theirs = await read(READ_SESSION);
     const gaps = theirs.metadata.history_coverage?.gaps ?? [];
-    const mine = gaps.filter((entry) => entry.id === episodeId);
 
-    expect(mine).toContainEqual({
-      id: episodeId,
-      field: 'interpretation_text',
-      reason: 'unverified_scope',
-    });
-    expect(mine).not.toContainEqual({
-      id: episodeId,
-      field: 'ownership',
-      reason: 'unverified_scope',
-    });
+    expect(gaps.filter((entry) => entry.id === episodeId)).toEqual([]);
   });
 });
 

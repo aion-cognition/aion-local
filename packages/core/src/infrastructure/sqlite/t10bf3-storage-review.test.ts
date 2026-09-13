@@ -1,18 +1,12 @@
 import type { Driver } from 'neo4j-driver';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 
 import { sealChunk } from './chunk-manifest.js';
 import { prepareCoverageContract } from './coverage-contract.js';
 import { SqliteStore } from './database.js';
-import { readBlockContext } from './narrative-blocks.js';
 import {
   allocateNarrativeRevision,
-  blockRevisionAttempt,
   CHUNK_REVISION_FAMILY,
-  OVERVIEW_REVISION_FAMILY,
   publishNarrativeRevision,
 } from './narrative-revisions.js';
 import { getLedgerEntry } from './ops-ledger.js';
@@ -25,51 +19,6 @@ import type { PublicationCoordinator } from '../publication/coordinator.js';
 import { buildEvidenceRevision } from '../publication/preconditions.js';
 
 const NOW = new Date('2026-09-09T06:00:00.000Z');
-
-it.each([CHUNK_REVISION_FAMILY, OVERVIEW_REVISION_FAMILY])(
-  'preserves recorded block context and adds the nullable column on retrofit in $revisionTable',
-  (family) => {
-    const dir = mkdtempSync(join(tmpdir(), 'aion-block-schema-'));
-    const filePath = join(dir, 'store.sqlite');
-    let store = new SqliteStore({ filePath });
-    const context = {
-      at: NOW.toISOString(),
-      uncountedScopes: [{ sourceId: 'external', scope: 'sqlite:stated_correction:in' }],
-      suppressedMembers: ['suppressed'],
-    };
-    try {
-      const row = allocateNarrativeRevision(store.db, family, 'family', NOW);
-      blockRevisionAttempt(
-        store.db,
-        family,
-        'family',
-        row.revisionNo,
-        'member_scope_census_missing',
-        context,
-      );
-      store.close();
-      store = new SqliteStore({ filePath });
-      expect(readBlockContext(store.db, family, 'family', row.revisionNo)).toEqual(context);
-      store.db.exec(
-        `ALTER TABLE ${family.revisionTable} RENAME COLUMN blocked_context_json TO review_old_context`,
-      );
-      store.close();
-      store = new SqliteStore({ filePath });
-      expect(readBlockContext(store.db, family, 'family', row.revisionNo)).toBeUndefined();
-      expect(
-        store.db
-          .prepare(`SELECT blocked_reason, review_old_context FROM ${family.revisionTable}`)
-          .get(),
-      ).toEqual({
-        blocked_reason: 'member_scope_census_missing',
-        review_old_context: JSON.stringify(context),
-      });
-    } finally {
-      store.close();
-      rmSync(dir, { recursive: true, force: true });
-    }
-  },
-);
 
 it('writes only the operational census cursor and reports a read-only store as unavailable', () => {
   const store = new SqliteStore({ filePath: ':memory:' });

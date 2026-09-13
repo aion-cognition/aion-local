@@ -11,6 +11,11 @@ import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.j
 import type { ChatMessage, JsonSchema, Vector } from '../../../infrastructure/providers/types.js';
 import { markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
 import { LOCAL as SYSTEM_PROMPT } from '../../../prompts/curiosity.js';
+import {
+  derivedNode,
+  owesBirthEstablishment,
+  publishDerivedNodeEvidence,
+} from '../../../reflection/application/derived-node-evidence.js';
 import { recordLifecycleEvent } from '../../../reflection/application/lifecycle-events.js';
 import type {
   IntrospectionOperation,
@@ -218,6 +223,36 @@ async function askAbout(ctx: OperationContext, entity: UndescribedEntity): Promi
     ...(contentVector === undefined ? {} : { contentVector }),
   });
 
+  // The question is a node this run minted, from a capture this run accepted. It is counted here
+  // for the reason the extraction stages count theirs: nothing else has ever recorded anything
+  // about the id, so the populations behind its counters are whole because they are this write's.
+  // The id is folded from the episode this run just accepted, so an id the records have never
+  // counted belongs to this question and to nothing else.
+  if (ctx.narratives !== undefined) {
+    const recorded = await publishDerivedNodeEvidence(
+      { publications: ctx.narratives.publications, now: ctx.now },
+      {
+        subject: episodeId,
+        nodes: [
+          derivedNode({
+            nodeId: written.node.id,
+            role: 'extraction',
+            relationType: written.edge.type,
+            relationId: written.edge.id,
+            sourceId: episodeId,
+            minted: written.created || owesBirthEstablishment(ctx.db, written.node.id),
+          }),
+        ],
+      },
+    );
+    if (recorded.status !== 'published') {
+      ctx.logger.warn(
+        { entityId: entity.id, goalId: written.node.id, reason: recorded.reason },
+        'curiosity question stored with its evidence unrecorded; the ledger key is not marked',
+      );
+      return false;
+    }
+  }
   await stampCuriosityAsked(ctx.driver, { id: entity.id, now: ctx.now });
   markLedgerApplied(ctx.db, curiosityLedgerKey(entity.id), {
     askedAt: ctx.now.toISOString(),

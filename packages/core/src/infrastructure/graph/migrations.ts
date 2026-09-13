@@ -19,84 +19,47 @@ import type { SqliteHandle } from '../sqlite/database.js';
 import { getMeta, setMeta } from '../sqlite/meta.js';
 
 /**
- * Backbone nodes (the single Member, the global Workspace and the Substrate) must carry BOTH
- * their structural label (`Member`/`Workspace`/`Substrate`) and `Entity`, so the `Entity` name
- * uniqueness constraint and the per-label id constraints all apply to the same node. Every
- * content-bearing memory node (Episode, Turn, and the cognitive types that follow) must carry
- * a shared `Memory` label: Neo4j vector indexes cannot span a
- * label union, so `Memory` is the only way `content_vec_idx`/`context_vec_idx` cover more
- * than one node type. Every node carries `BASE_NODE_LABEL`, which is what gives the
- * type-agnostic id lookups an index to seek. All three are contracts for whoever writes
- * nodes; this migration only declares the schema objects that depend on them.
+ * The graph schema, declared once.
+ *
+ * Three label contracts hold every statement below together, and they are contracts for whoever
+ * writes nodes rather than anything this file can enforce. Backbone nodes (the single Member, the
+ * global Workspace and the Substrate) carry BOTH their structural label and `Entity`, so the
+ * `Entity` name uniqueness rule and the per-label id rules apply to the same node. Every
+ * content-bearing memory node carries `Memory`: Neo4j vector indexes cannot span a label union, so
+ * that shared label is the only way `content_vec_idx` and `context_vec_idx` cover more than one
+ * node type. Every node carries `BASE_NODE_LABEL`, which is what gives the type-agnostic id
+ * lookups an index to seek.
+ *
+ * Entity identity is keyed on the name alone. `type` is a reconciled label backed by counted
+ * observations rather than half of the key: the extractor is unstable in the type it picks, so a
+ * composite key forked one referent into a tool node and a topic node and every pair the merge
+ * queue then surfaced was of its own making. `name_squash` gets a plain index and not a
+ * constraint, because separator variants are duplicate evidence for the dedup cascade to weigh
+ * rather than a uniqueness rule the write path has to satisfy.
  */
-export type MigrationContext = {
+export type GraphSchemaContext = {
   embedDimension: number;
 };
 
-export type GraphMigration = {
-  readonly version: number;
-  readonly name: string;
-  statements(ctx: MigrationContext): readonly string[];
-};
+/** The version this build declares. It moves when the statements below change. */
+export const GRAPH_SCHEMA_VERSION = 7;
 
-const MIGRATION_001_BACKBONE_SCHEMA: GraphMigration = {
-  version: 1,
-  name: 'backbone constraints, memory vector/range indexes, fulltext',
-  statements: (ctx) => [
+export function graphSchemaStatements(ctx: GraphSchemaContext): readonly string[] {
+  return [
     `CREATE CONSTRAINT aion_node_id_unique IF NOT EXISTS FOR (n:${BASE_NODE_LABEL}) REQUIRE n.id IS UNIQUE`,
     'CREATE CONSTRAINT session_id_unique IF NOT EXISTS FOR (n:Session) REQUIRE n.id IS UNIQUE',
     'CREATE CONSTRAINT episode_id_unique IF NOT EXISTS FOR (n:Episode) REQUIRE n.id IS UNIQUE',
     'CREATE CONSTRAINT turn_id_unique IF NOT EXISTS FOR (n:Turn) REQUIRE n.id IS UNIQUE',
-    // Migration 003 owns Entity identity and retires the composite `(name_norm, type)`
-    // constraint this migration used to declare. Declaring it here as well would create it
-    // and drop it again on every init, rebuilding its backing index over every Entity for
-    // nothing.
     'CREATE CONSTRAINT member_id_unique IF NOT EXISTS FOR (n:Member) REQUIRE n.id IS UNIQUE',
     'CREATE CONSTRAINT workspace_id_unique IF NOT EXISTS FOR (n:Workspace) REQUIRE n.id IS UNIQUE',
-    `CREATE VECTOR INDEX content_vec_idx IF NOT EXISTS FOR (n:${MEMORY_LABEL}) ON (n.${MEMORY_PROPERTIES.contentVector})
-     OPTIONS { indexConfig: { \`vector.dimensions\`: ${ctx.embedDimension}, \`vector.similarity_function\`: 'cosine' } }`,
-    `CREATE VECTOR INDEX context_vec_idx IF NOT EXISTS FOR (n:${MEMORY_LABEL}) ON (n.${CONTEXT_VECTOR_PROPERTY})
-     OPTIONS { indexConfig: { \`vector.dimensions\`: ${ctx.embedDimension}, \`vector.similarity_function\`: 'cosine' } }`,
-    // These serve the bounded half of a time-travel filter (`valid_until > t`). An open
-    // interval is an absent property, which no Neo4j index covers, so the `IS NULL` half
-    // is a scan by construction and every read anchors on a seek before it applies.
-    `CREATE RANGE INDEX memory_valid_until_idx IF NOT EXISTS FOR (n:${MEMORY_LABEL}) ON (n.${BITEMPORAL_PROPERTIES.validUntil})`,
-    `CREATE RANGE INDEX memory_tx_until_idx IF NOT EXISTS FOR (n:${MEMORY_LABEL}) ON (n.${BITEMPORAL_PROPERTIES.txUntil})`,
-    // Migration 002 owns the fulltext index. It was declared here first, over the three
-    // labels that existed then; widening it needed a drop, and a drop that runs on every
-    // `aion init` destroys a healthy index and its contents. The name moved instead, so the
-    // retirement below is a no-op from the second run onward.
-    'DROP INDEX content_fts IF EXISTS',
-  ],
-};
-
-/**
- * The nine cognitive types (Goal, Plan, Decision, Insight, Concept, Context, Event,
- * Pattern, Trend) plus Narrative and Bridge: the pinned label table. Each gets its own
- * id uniqueness constraint, matching Episode/Turn/Session/Member/Workspace in migration
- * 001; the vector, currency-range, and `Memory`-scoped indexes already declared
- * `FOR (n:Memory)` cover them once `labels.ts`'s `COMPANION_LABELS` carries them into
- * `resolveLabels`, so no per-label index statement is needed here.
- *
- * The fulltext index moves to a new name rather than being dropped and recreated under
- * the old one. `IF NOT EXISTS` cannot redefine an index that already exists, so widening
- * the label set needs a drop, and `runGraphMigrations` replays every statement on every
- * `aion init`, which would make that drop destroy and repopulate a healthy index each time
- * a user reran init. Under a new name both statements are no-ops from the second run on,
- * leaving a healthy index untouched. The property list is unchanged: `summary` already
- * covers `Narrative.summary` and `text` already covers the cognitive types' text property
- * (canonical name `text` across all nine).
- *
- * `Bridge` carries `Memory` and holds text, and is still left out of the fulltext label list.
- * A bridge's text is a sentence the introspection loop generated about two communities
- * (`symbiosis-bridge.ts`), so a keyword hit on it answers with the substrate's own connector
- * rather than with anything a person said. Its content vector puts it in `content_vec_idx`,
- * and spreading activation reaches it from either endpoint it joins.
- */
-const MIGRATION_002_COGNITIVE_SCHEMA: GraphMigration = {
-  version: 2,
-  name: 'cognitive node labels, id constraints, fulltext index over the content-bearing labels',
-  statements: (_ctx) => [
+    // The substrate's own identity node, keyed the way the Member and the global Workspace are:
+    // the singleton resolution that mints an id has a uniqueness rule behind it. It carries
+    // `Entity` too, which puts its name under `entity_name_unique`.
+    'CREATE CONSTRAINT substrate_id_unique IF NOT EXISTS FOR (n:Substrate) REQUIRE n.id IS UNIQUE',
+    `CREATE CONSTRAINT entity_name_unique IF NOT EXISTS FOR (n:Entity) REQUIRE n.${ENTITY_NAME_NORM_PROPERTY} IS UNIQUE`,
+    // The nine cognitive types, plus Narrative and Bridge: the pinned label table, each with its
+    // own id rule. The vector, currency and `Memory`-scoped indexes below cover them once
+    // `labels.ts`'s `COMPANION_LABELS` carries them into `resolveLabels`.
     'CREATE CONSTRAINT narrative_id_unique IF NOT EXISTS FOR (n:Narrative) REQUIRE n.id IS UNIQUE',
     'CREATE CONSTRAINT goal_id_unique IF NOT EXISTS FOR (n:Goal) REQUIRE n.id IS UNIQUE',
     'CREATE CONSTRAINT plan_id_unique IF NOT EXISTS FOR (n:Plan) REQUIRE n.id IS UNIQUE',
@@ -108,106 +71,42 @@ const MIGRATION_002_COGNITIVE_SCHEMA: GraphMigration = {
     'CREATE CONSTRAINT pattern_id_unique IF NOT EXISTS FOR (n:Pattern) REQUIRE n.id IS UNIQUE',
     'CREATE CONSTRAINT trend_id_unique IF NOT EXISTS FOR (n:Trend) REQUIRE n.id IS UNIQUE',
     'CREATE CONSTRAINT bridge_id_unique IF NOT EXISTS FOR (n:Bridge) REQUIRE n.id IS UNIQUE',
-    `CREATE FULLTEXT INDEX ${CONTENT_FULLTEXT_INDEX} IF NOT EXISTS FOR (n:Episode|Turn|Entity|Narrative|Goal|Plan|Decision|Insight|Concept|Context|Event|Pattern|Trend) ON EACH [n.${MEMORY_PROPERTIES.summary}, n.${MEMORY_PROPERTIES.text}, n.${ENTITY_NAME_PROPERTY}]`,
-  ],
-};
-
-/**
- * The identity re-key. `type` stops being half of the key. The extractor is unstable in the
- * type it picks, so one referent forked into a tool node and a topic node, and everything the
- * merge queue then surfaced was cross-type near-name pairs of its own making. Name alone is
- * the key; `type` becomes a reconciled label backed by counted observations, which is a
- * property update rather than an identity event.
- *
- * This deploys together with the planned graph reset, and only works that way. Neo4j refuses
- * `CREATE CONSTRAINT` against data that already violates it, so a pre-reset graph carrying
- * cross-type duplicates fails this migration. That is by design: those duplicates are the
- * exact thing the re-key exists to stop, and nothing in the old graph needs preserving.
- *
- * The drop is a no-op from the second run onward, the same shape as 001's `content_fts`
- * retirement, so replaying every statement on every init stays free. `name_squash` gets a
- * plain index and not a constraint: separator variants are duplicate evidence for the dedup
- * cascade to weigh, never a uniqueness rule the write path has to satisfy.
- */
-const MIGRATION_003_IDENTITY_REKEY: GraphMigration = {
-  version: 3,
-  name: 'entity identity keyed on name alone, squashed-name lookup index',
-  statements: (_ctx) => [
-    'DROP CONSTRAINT entity_name_type_unique IF EXISTS',
-    `CREATE CONSTRAINT entity_name_unique IF NOT EXISTS FOR (n:Entity) REQUIRE n.${ENTITY_NAME_NORM_PROPERTY} IS UNIQUE`,
+    // The uniqueness rule behind the publication guard, declared before any coordinator can use
+    // one. Only the rule belongs here: the guard node itself is created under the substrate's
+    // bootstrap marker, so a guard that goes missing afterwards is reported rather than silently
+    // replaced (`publication-guard.ts`).
+    PUBLICATION_GUARD_CONSTRAINT_STATEMENT,
+    `CREATE VECTOR INDEX content_vec_idx IF NOT EXISTS FOR (n:${MEMORY_LABEL}) ON (n.${MEMORY_PROPERTIES.contentVector})
+     OPTIONS { indexConfig: { \`vector.dimensions\`: ${ctx.embedDimension}, \`vector.similarity_function\`: 'cosine' } }`,
+    `CREATE VECTOR INDEX context_vec_idx IF NOT EXISTS FOR (n:${MEMORY_LABEL}) ON (n.${CONTEXT_VECTOR_PROPERTY})
+     OPTIONS { indexConfig: { \`vector.dimensions\`: ${ctx.embedDimension}, \`vector.similarity_function\`: 'cosine' } }`,
+    // These serve the bounded half of a time-travel filter (`valid_until > t`). An open interval
+    // is an absent property, which no Neo4j index covers, so the `IS NULL` half is a scan by
+    // construction and every read anchors on a seek before it applies.
+    `CREATE RANGE INDEX memory_valid_until_idx IF NOT EXISTS FOR (n:${MEMORY_LABEL}) ON (n.${BITEMPORAL_PROPERTIES.validUntil})`,
+    `CREATE RANGE INDEX memory_tx_until_idx IF NOT EXISTS FOR (n:${MEMORY_LABEL}) ON (n.${BITEMPORAL_PROPERTIES.txUntil})`,
     `CREATE INDEX entity_name_squash_idx IF NOT EXISTS FOR (n:Entity) ON (n.${ENTITY_NAME_SQUASH_PROPERTY})`,
-  ],
-};
-
-/**
- * The seek behind the subject-keyed claim lookup: a claim about to be written asks which open
- * claim already asserts the same attribute of the same subject, and a scan for that answer runs
- * on every fact-bearing write.
- *
- * Scoped to `Memory` for the reason the vector and currency indexes are: it is the one label
- * every cognitive type carries, and the four fact-bearing labels are a post-filter over the
- * handful of rows the composite seek returns. The currency half of the lookup is a scan by
- * construction, since an open interval is an absent property, so the composite pair has to
- * anchor the read before that filter applies.
- */
-const MIGRATION_004_CLAIM_KEY_LOOKUP: GraphMigration = {
-  version: 4,
-  name: 'subject-keyed claim lookup index',
-  statements: (_ctx) => [
+    // The seek behind the subject-keyed claim lookup: a claim about to be written asks which open
+    // claim already asserts the same attribute of the same subject, and a scan for that answer
+    // would run on every fact-bearing write. Scoped to `Memory` for the reason the vector and
+    // currency indexes are, with the four fact-bearing labels a post-filter over the handful of
+    // rows the composite seek returns.
     `CREATE RANGE INDEX claim_subject_aspect_idx IF NOT EXISTS FOR (n:${MEMORY_LABEL}) ON (n.${CLAIM_SUBJECT_PROPERTY}, n.${CLAIM_ASPECT_PROPERTY})`,
-  ],
-};
-
-/**
- * The substrate's own identity node, keyed the way the Member and the global Workspace are
- * keyed in migration 001: one id constraint per structural label, so the singleton resolution
- * that mints an id has a uniqueness rule behind it. The node carries `Entity` too, which puts
- * its name under `entity_name_unique` and needs no statement here.
- */
-const MIGRATION_005_SUBSTRATE_IDENTITY: GraphMigration = {
-  version: 5,
-  name: 'substrate identity node id constraint',
-  statements: (_ctx) => [
-    'CREATE CONSTRAINT substrate_id_unique IF NOT EXISTS FOR (n:Substrate) REQUIRE n.id IS UNIQUE',
-  ],
-};
-
-/**
- * The uniqueness rule behind the publication guard, declared before any coordinator can use
- * one. Only the constraint belongs here: the runner replays every statement on every call, and
- * the guard node itself is created under the substrate's bootstrap marker instead, so a guard
- * that goes missing after initialization is reported rather than silently replaced
- * (`publication-guard.ts`).
- */
-const MIGRATION_006_PUBLICATION_GUARD: GraphMigration = {
-  version: 6,
-  name: 'publication guard substrate id constraint',
-  statements: (_ctx) => [PUBLICATION_GUARD_CONSTRAINT_STATEMENT],
-};
-
-/**
- * Ordered oldest-first, and the runner replays every version's statements on every call. The
- * meta table records first application rather than gating the run, which is what lets 003 drop
- * a constraint 001 no longer creates.
- */
-export const GRAPH_MIGRATIONS: readonly GraphMigration[] = [
-  MIGRATION_001_BACKBONE_SCHEMA,
-  MIGRATION_002_COGNITIVE_SCHEMA,
-  MIGRATION_003_IDENTITY_REKEY,
-  MIGRATION_004_CLAIM_KEY_LOOKUP,
-  MIGRATION_005_SUBSTRATE_IDENTITY,
-  MIGRATION_006_PUBLICATION_GUARD,
-];
-
-const META_KEY_PREFIX = 'graph:migration:';
-
-export function graphMigrationMetaKey(version: number): string {
-  return `${META_KEY_PREFIX}${String(version).padStart(3, '0')}`;
+    // One fulltext index over every content-bearing label. `summary` covers `Narrative.summary`
+    // and `text` covers the cognitive types' text property. `Bridge` carries `Memory` and holds
+    // text and is still left out: a bridge's text is a sentence the introspection loop generated
+    // about two communities, so a keyword hit on it answers with the substrate's own connector
+    // rather than with anything a person said. Its content vector puts it in `content_vec_idx`,
+    // and spreading activation reaches it from either endpoint it joins.
+    `CREATE FULLTEXT INDEX ${CONTENT_FULLTEXT_INDEX} IF NOT EXISTS FOR (n:Episode|Turn|Entity|Narrative|Goal|Plan|Decision|Insight|Concept|Context|Event|Pattern|Trend) ON EACH [n.${MEMORY_PROPERTIES.summary}, n.${MEMORY_PROPERTIES.text}, n.${ENTITY_NAME_PROPERTY}]`,
+  ];
 }
 
-export type GraphMigrationOutcome = {
-  /** Versions recorded in the meta table for the first time on this run. */
-  readonly applied: readonly number[];
+const SCHEMA_META_KEY = 'graph:schema_version';
+
+export type GraphSchemaOutcome = {
+  /** True when this run recorded the version for the first time. */
+  readonly applied: boolean;
   /** Schema objects this run actually created, empty when the graph was already whole. */
   readonly created: readonly string[];
 };
@@ -227,45 +126,31 @@ async function schemaObjectNames(driver: Driver): Promise<readonly string[]> {
 }
 
 /**
- * Runs every migration's statements on every call, in version order. The statements are
- * independently idempotent (`IF NOT EXISTS`), and the graph lives on a different volume
- * from the SQLite meta table, so the meta row records first application rather than
- * gating the run: a graph volume reset on its own has to be repaired by the next init,
- * not skipped because SQLite still remembers the migration.
+ * Runs every statement on every call.
+ *
+ * They are independently idempotent (`IF NOT EXISTS`), and the graph lives on a different volume
+ * from the SQLite meta table, so the meta row records first application rather than gating the
+ * run: a graph volume reset on its own has to be repaired by the next init, not skipped because
+ * SQLite still remembers it.
  */
 export async function runGraphMigrations(
   driver: Driver,
   db: SqliteHandle,
-  ctx: MigrationContext,
-): Promise<GraphMigrationOutcome> {
+  ctx: GraphSchemaContext,
+): Promise<GraphSchemaOutcome> {
   const before = new Set(await schemaObjectNames(driver));
-  const applied: number[] = [];
-
-  for (const migration of GRAPH_MIGRATIONS) {
-    for (const statement of migration.statements(ctx)) {
-      await driver.executeQuery(statement);
-    }
-
-    const key = graphMigrationMetaKey(migration.version);
-    if (getMeta(db, key) === undefined) {
-      setMeta(db, key, new Date().toISOString());
-      applied.push(migration.version);
-    }
+  for (const statement of graphSchemaStatements(ctx)) {
+    await driver.executeQuery(statement);
   }
-
+  const applied = getMeta(db, SCHEMA_META_KEY) === undefined;
+  if (applied) {
+    setMeta(db, SCHEMA_META_KEY, new Date().toISOString());
+  }
   const created = (await schemaObjectNames(driver)).filter((name) => !before.has(name));
   return { applied, created };
 }
 
-/** Highest migration version recorded as applied, or undefined if none has run yet. Used by `aion doctor`'s schema-version check. */
-export function latestAppliedGraphMigration(db: SqliteHandle): number | undefined {
-  let latest: number | undefined;
-
-  for (const migration of GRAPH_MIGRATIONS) {
-    if (getMeta(db, graphMigrationMetaKey(migration.version)) !== undefined) {
-      latest = migration.version;
-    }
-  }
-
-  return latest;
+/** The schema version recorded as applied, or nothing when none has been. `aion doctor` reads it. */
+export function appliedGraphSchemaVersion(db: SqliteHandle): number | undefined {
+  return getMeta(db, SCHEMA_META_KEY) === undefined ? undefined : GRAPH_SCHEMA_VERSION;
 }

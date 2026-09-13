@@ -134,9 +134,6 @@ export function narrativeOptions(config: Config): WiredNarrativeOptions {
     idleMs: config.reflection.narrativeIdleMinutes * MINUTE_MS,
     timeoutMs: config.reflection.stageTimeoutMs,
     reflection: config.reflection,
-    midSession: config.reflection.midSessionRollup,
-    midSessionEpisodes: config.reflection.midSessionEpisodes,
-    midSessionGapMs: config.reflection.midSessionGapMinutes * MINUTE_MS,
   };
 }
 

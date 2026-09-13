@@ -14,7 +14,7 @@ import { SYSTEM_SESSION_IDENTITY } from '../../infrastructure/graph/sessions.js'
  */
 export type LifecycleEvent =
   | 'substrate_initialized'
-  | 'migrations_applied'
+  | 'schema_recorded'
   | 'replay_completed'
   | 'models_reconciled'
   | 'curiosity';

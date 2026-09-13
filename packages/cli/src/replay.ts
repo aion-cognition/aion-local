@@ -6,7 +6,7 @@ import {
   DEFAULT_SQLITE_PATH,
   experienceArchiveSpan,
   isManagedNeo4jUri,
-  latestAppliedGraphMigration,
+  appliedGraphSchemaVersion,
   PIPELINE_VERSION,
   ProviderRouter,
   readMemberName,
@@ -230,7 +230,7 @@ function writeRefusal(substrate: Substrate, flags: ReplayFlags): string | undefi
   if (refusal !== undefined) {
     return refusal;
   }
-  if (latestAppliedGraphMigration(substrate.db()) === undefined) {
+  if (appliedGraphSchemaVersion(substrate.db()) === undefined) {
     return (
       `no schema on this substrate (${describeSubstrate(substrate.config)}); ` +
       'run `aion init` against it first'

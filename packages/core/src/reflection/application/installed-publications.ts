@@ -1,14 +1,10 @@
-import { calendarRollupPublication } from './calendar-rollup-publication.js';
 import { reflectionCompletionPublication } from './completion-publication.js';
 import { contextVectorSyncPublication } from './context-vector-sync.js';
+import { derivedNodeEvidencePublication } from './derived-node-evidence.js';
 import { episodeEvictionPublication } from './episode-eviction.js';
-import { evictionArmingPublication } from './eviction-arming.js';
-import { familyCutoverPublication } from './family-cutover.js';
+import { familySelectionPublication } from './family-selection.js';
 import { intakePublication } from './intake-publication.js';
-import { legacyMaterializationPublication } from './legacy-materialization.js';
-import { legacyNarrativePublication } from './legacy-narrative-publication.js';
 import { claimMergePublication } from './merge-publication.js';
-import { migrationOrderPublication } from './migration-order.js';
 import { narrativePublication } from './narrative-publication.js';
 import { narrativeFamilyRepairPublication } from './narrative-repair.js';
 import { overviewPublication } from './overview-publication.js';
@@ -16,10 +12,7 @@ import { projectionRebuildPublication } from './rebuild-publication.js';
 import { statedReferencesPublication } from './reference-publication.js';
 import { sourceSuppressionPublication } from './source-suppression.js';
 import { PUBLICATION_HANDLERS } from '../../infrastructure/publication/handlers.js';
-import type {
-  PublicationHandler,
-  PublicationKind,
-} from '../../infrastructure/publication/types.js';
+import type { PublicationHandler } from '../../infrastructure/publication/types.js';
 import { orphanSuppressionPublication } from '../../introspection/application/operations/orphan-suppression.js';
 
 /**
@@ -40,15 +33,11 @@ export const INSTALLED_PUBLICATION_HANDLERS: readonly PublicationHandler[] = [
   statedReferencesPublication,
   projectionRebuildPublication,
   reflectionCompletionPublication,
-  familyCutoverPublication,
-  migrationOrderPublication,
-  legacyNarrativePublication,
-  legacyMaterializationPublication,
   claimMergePublication,
+  familySelectionPublication,
   narrativePublication,
   narrativeFamilyRepairPublication,
   overviewPublication,
-  calendarRollupPublication,
   orphanSuppressionPublication,
   sourceSuppressionPublication,
   episodeEvictionPublication,
@@ -56,17 +45,7 @@ export const INSTALLED_PUBLICATION_HANDLERS: readonly PublicationHandler[] = [
   // staleness scan and the survivor repair all recompute the same served property, and a
   // process composing a smaller set would meet one of them pending and refuse.
   contextVectorSyncPublication,
-  // Installed like any other, and reached from two places: the service start arms, an operator
-  // stops. A pending act of either kind has to be recoverable by whatever process finds it,
-  // which is what installing it in the one shared set is for.
-  evictionArmingPublication,
+  // Reached from the two extraction stages, which are the only callers that can say what they
+  // wrote. Installed here like any other so a process that meets one pending can recover it.
+  derivedNodeEvidencePublication,
 ];
-
-/**
- * The kinds the installed set covers, which is what every command in this repo composes.
- *
- * A surface asking whether the writer audit is complete has to ask it of the set it will publish
- * through. Asking it of the declared list answers itself.
- */
-export const INSTALLED_PUBLICATION_KINDS: readonly PublicationKind[] =
-  INSTALLED_PUBLICATION_HANDLERS.map((handler) => handler.kind);

@@ -3,7 +3,7 @@ import type { Driver } from 'neo4j-driver';
 import { RECORD_SALIENCE_BUMP } from './access-tracking.js';
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
 import { inWriteTransaction, runRead, type GraphStatement } from './connection.js';
-import { upsertEdgeInTransaction } from './edges.js';
+import { upsertEdgeInTransaction, type UpsertedEdge } from './edges.js';
 import { ENTITY_TYPE_PROPERTY } from './entity-identity-queries.js';
 import { CONTAINMENT_TYPE } from './episodes.js';
 import { ENTITY_LABEL } from './labels.js';
@@ -54,6 +54,20 @@ export type EntityMentionInput = {
 };
 
 /**
+ * The two relationships this write made for one entity, handed back to the caller that made
+ * them. Each carries the graph's own relationship id, minted on the create branch of the merge
+ * policy and kept on every later write, so the record a caller keeps of one names the edge
+ * itself rather than a shape derived from its endpoints.
+ */
+export type EntityMentionLink = {
+  readonly entityId: string;
+  /** Entity to episode: the entity took part in the experience. */
+  readonly participation: UpsertedEdge;
+  /** Episode to entity: this episode is evidence of the entity. */
+  readonly mention: UpsertedEdge;
+};
+
+/**
  * Both edges and the salience bump for one episode, in one transaction: an entity linked to
  * an episode it is not recorded as mentioned by would misreport the salience signals that
  * maintenance reads to decide what to prune.
@@ -64,15 +78,16 @@ export type EntityMentionInput = {
 export async function linkEntityMentions(
   driver: Driver,
   input: EntityMentionInput,
-): Promise<number> {
+): Promise<readonly EntityMentionLink[]> {
   const entityIds = [...new Set(input.entityIds)];
   if (entityIds.length === 0) {
-    return 0;
+    return [];
   }
 
   return inWriteTransaction(driver, async (tx) => {
+    const links: EntityMentionLink[] = [];
     for (const entityId of entityIds) {
-      await upsertEdgeInTransaction(tx, {
+      const participation = await upsertEdgeInTransaction(tx, {
         type: ENTITY_PARTICIPATION_TYPE,
         sourceId: entityId,
         targetId: input.episodeId,
@@ -83,7 +98,7 @@ export async function linkEntityMentions(
         count: 0,
         now: input.now,
       });
-      await upsertEdgeInTransaction(tx, {
+      const mention = await upsertEdgeInTransaction(tx, {
         type: ENTITY_MENTION_TYPE,
         sourceId: input.episodeId,
         targetId: entityId,
@@ -94,6 +109,7 @@ export async function linkEntityMentions(
         count: 1,
         now: input.now,
       });
+      links.push({ entityId, participation, mention });
     }
 
     await tx.run(
@@ -102,7 +118,7 @@ export async function linkEntityMentions(
       () => undefined,
     );
 
-    return entityIds.length;
+    return links;
   });
 }
 

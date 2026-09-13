@@ -40,7 +40,7 @@ import {
   ARCHIVE_SCHEMA_VERSION,
   experienceArchiveKey,
 } from '../../infrastructure/sqlite/experience-archive.js';
-import { readIngestPosition } from '../../infrastructure/sqlite/migration-cohorts.js';
+import { readIngestPosition } from '../../infrastructure/sqlite/ingest-log.js';
 import { markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import { readGeneration } from '../../infrastructure/sqlite/processing-generations.js';
 import { readReferenceDelivery } from '../../infrastructure/sqlite/source-identity.js';

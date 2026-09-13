@@ -25,6 +25,7 @@ import {
   type ReflectionIntakeDeps,
   type SqliteHandle,
   EvidenceResolver,
+  CoveredJudgmentEvidence,
 } from '@aion/core';
 import {
   startNeo4jHarness,
@@ -77,6 +78,15 @@ export type GateSubstrateOptions = {
    * the shipped value makes its own claim untestable, and says which claim in its own file.
    */
   readonly tune?: (config: Config) => Config;
+  /**
+   * Compose the judgment evidence seam the service composes (`bootstrap.ts`).
+   *
+   * Off, a judging stage reads for itself and every pair is `unchecked`, which is what the
+   * precision batteries measure: they score the judge's answers, and the seam decides which pairs
+   * reach it rather than what it says about one. A battery whose subject IS whether a pair reaches
+   * the judge turns it on, and then the stage runs exactly as the service runs it.
+   */
+  readonly certifyJudgments?: boolean;
 };
 
 /**
@@ -94,6 +104,7 @@ export class GateSubstrate {
   readonly label: string;
   readonly config: Config;
   readonly #lanes: LaneAssigner;
+  readonly #certifyJudgments: boolean | undefined;
   /** The worker `intakeDeps` wakes, set by `worker()`. A substrate with none just enqueues. */
   #worker: ReflectionWorker | undefined;
   #harness: Neo4jHarness | undefined;
@@ -119,6 +130,7 @@ export class GateSubstrate {
       recall: { ...DEFAULTS.recall, sessionDedup: false, ownSessionFilter: false },
     };
     this.config = options.tune === undefined ? shipped : options.tune(shipped);
+    this.#certifyJudgments = options.certifyJudgments;
     this.#lanes = new LaneAssigner(this.config.lanes);
   }
 
@@ -232,8 +244,25 @@ export class GateSubstrate {
     };
   }
 
+  /** The seam the service gives a judging stage, or nothing where the battery reads without one. */
+  judgmentEvidence(): CoveredJudgmentEvidence | undefined {
+    if (this.#certifyJudgments !== true) {
+      return undefined;
+    }
+    return new CoveredJudgmentEvidence({
+      db: this.db,
+      resolver: new EvidenceResolver({
+        driver: this.driver,
+        db: this.db,
+        logger: this.logger,
+        publications: this.publications,
+      }),
+    });
+  }
+
   /** The shipped stage list, from `bootstrap.ts`, over this substrate. */
   orchestrator(): ReflectionOrchestrator {
+    const evidence = this.judgmentEvidence();
     return new ReflectionOrchestrator(
       {
         driver: this.driver,
@@ -241,6 +270,7 @@ export class GateSubstrate {
         provider: this.provider,
         logger: this.logger,
         publications: this.publications,
+        ...(evidence === undefined ? {} : { evidence }),
       },
       reflectionStages(this.config),
     );

@@ -3,7 +3,7 @@ import { expect, it } from 'vitest';
 import { incomingStatementScopes, memberScopesCounted } from './chunk-evidence.js';
 import { acceptCorrection, acceptSource, store } from './test-support/t10b-review.fixture.js';
 import { OWNERSHIP_SCOPES } from '../../evidence/domain/ownership.js';
-import { durableRoleScope } from '../../evidence/domain/scopes.js';
+import { durableRoleScope, GRAPH_NODE_SCOPE } from '../../evidence/domain/scopes.js';
 import { readScopeVersion } from '../../infrastructure/sqlite/evidence-scope.js';
 
 /**
@@ -45,6 +45,7 @@ it('counts those populations and nothing else it did not enumerate', async () =>
   expect(scopeRows(source)).toEqual({
     [CORRECTION]: 'established',
     [CONFIRMATION]: 'established',
+    [GRAPH_NODE_SCOPE]: 'established',
     ...Object.fromEntries(
       OWNERSHIP_SCOPES.map(({ role, direction }) => [
         durableRoleScope(role, direction),
