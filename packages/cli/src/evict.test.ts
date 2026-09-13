@@ -1,4 +1,9 @@
-import { INSTALLED_PUBLICATION_KINDS, SqliteStore, type CoverageStateReport } from '@aion/core';
+import {
+  EVICTION_COMPATIBILITY_REVISION,
+  INSTALLED_PUBLICATION_KINDS,
+  SqliteStore,
+  type CoverageStateReport,
+} from '@aion/core';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -180,6 +185,60 @@ describe('what `aion evict` actually prints', () => {
     // Under the table it qualifies, never above it.
     expect(said.findIndex((line) => line.startsWith('  ['))).toBeLessThan(heading);
     expect(said.join('\n')).toContain('writer audit');
+  });
+
+  /**
+   * The state the service leaves every substrate in at start, written into the database the
+   * command opens. The revision is a parameter because the fence can stand at one this build does
+   * not implement, which is the case the row still has to read as failing.
+   */
+  function armedSubstrate(revision = EVICTION_COMPATIBILITY_REVISION): void {
+    const store = new SqliteStore({ filePath: join(dir, 'aion.sqlite') });
+    try {
+      store.db
+        .prepare(
+          `INSERT INTO publication_control
+             (substrate_id, bootstrap_state, protocol_version, activation_capability_revision,
+              eviction_compatibility_revision)
+           VALUES ('s1', 'initialized', 1, 1, ?)`,
+        )
+        .run(revision);
+      store.db
+        .prepare(
+          `INSERT INTO coverage_contract
+             (epoch, history_since, activated_at, field_policy_version, state)
+           VALUES ('epoch-1', '2026-09-12T00:00:00.000Z', '2026-09-12T00:00:00.000Z', 1, 'active')`,
+        )
+        .run();
+    } finally {
+      store.close();
+    }
+  }
+
+  it('reads the fence row as state on an armed substrate, not as a failed precondition', async () => {
+    // The service arms at start, so armed is the steady state rather than the moment after a
+    // deliberate act. `already_armed` refuses a second arm, which is the right answer to a request
+    // and the wrong one under a banner that just said ARMED.
+    armedSubstrate();
+
+    const said = await output(['status']);
+
+    expect(said.join('\n')).toContain('ARMED at compatibility revision 1');
+    const row = said.find((line) => line.startsWith('  [') && line.includes('armed at 1'));
+    expect(row).toBeDefined();
+    expect(row?.startsWith('  [ok]')).toBe(true);
+  });
+
+  it('still reads a fence at a revision this build does not implement as one that does not hold', async () => {
+    // The other half of the same row: a substrate armed at a revision this build cannot honour is
+    // not a substrate whose fence stands, and `status` is where that has to be visible.
+    armedSubstrate(EVICTION_COMPATIBILITY_REVISION + 1);
+
+    const said = await output(['status']);
+
+    const row = said.find((line) => line.startsWith('  [') && line.includes('armed at 2'));
+    expect(row).toBeDefined();
+    expect(row?.startsWith('  [--]')).toBe(true);
   });
 
   async function disarmTable(): Promise<{ said: string[]; prompts: string[] }> {

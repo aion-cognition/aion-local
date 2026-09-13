@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { parseEvictFlags } from './evict.js';
 import { CLI_NAME, run } from './run.js';
 
 describe('run', () => {
@@ -86,6 +87,27 @@ describe('run', () => {
     await expect(run(['why', '--help'])).resolves.toBe(0);
 
     expect(String(stdout.mock.calls[0]?.[0])).toContain('usage: aion why <node_id>');
+  });
+
+  /**
+   * The catalog is the first thing anybody reads, and it is the one surface with no parser behind
+   * it: an act removed from `evict` left its name in this line for a release, where the only way
+   * to find out was to run it and be refused. So the acts the summary advertises are put through
+   * the parser that has to accept them.
+   */
+  it('advertises no evict act the command would refuse', async () => {
+    const stdout = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+
+    await run(['help']);
+
+    const row = String(stdout.mock.calls[0]?.[0])
+      .split('\n')
+      .find((line) => line.trimStart().startsWith('evict '));
+    const acts = (row ?? '').split(':').slice(-1)[0]?.split('|') ?? [];
+    expect(acts.length).toBeGreaterThan(1);
+    for (const act of acts) {
+      expect(() => parseEvictFlags([act.trim()])).not.toThrow();
+    }
   });
 
   it('reports an unknown command on stderr and exits 1', async () => {

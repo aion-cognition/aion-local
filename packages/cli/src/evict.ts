@@ -65,9 +65,12 @@ export function parseEvictFlags(argv: readonly string[]): EvictFlags {
   return { action: args.subcommand, yes: args.flags.has('--yes') };
 }
 
-/** What the fence reads now, in the words `aion doctor` and `/health` use for the same row. */
-export function writeGateState(db: SqliteHandle, write: Writer): void {
-  const state = readCoverageState(db);
+/**
+ * What the fence reads now, in the words `aion doctor` and `/health` use for the same row. The
+ * state is passed in rather than read here, because the table printed under this banner is judged
+ * against the same read: two reads could print a banner and a row from different moments.
+ */
+export function writeGateState(state: CoverageStateReport, write: Writer): void {
   write(evictionFence(state));
   write(`coverage contract ${state.coverageState}, epoch ${state.coverageEpoch ?? 'unrecorded'}`);
 }
@@ -77,6 +80,31 @@ export function writePreconditions(checks: readonly ArmingPrecondition[], write:
     write(`  [${check.holds ? 'ok' : '--'}] ${check.name}: ${check.detail}`);
   }
   return checks.every((check) => check.holds);
+}
+
+/**
+ * The arming table as a reader asks it rather than as the act asks it.
+ *
+ * `already_armed` refuses a second arm. That is the right answer to "may I arm" and the wrong one
+ * to "what stands": the service arms at start, so an armed fence is the steady state of every
+ * healthy substrate, and the row printed a failing line under a banner that had just said ARMED.
+ * The row is kept rather than dropped, because the fence being at this build's revision is worth a
+ * line — and a fence at some other revision still reads as one that does not hold.
+ */
+export function statusPreconditions(
+  checks: readonly ArmingPrecondition[],
+  state: CoverageStateReport,
+): readonly ArmingPrecondition[] {
+  const atThisRevision = state.evictionCompatibilityRevision === EVICTION_COMPATIBILITY_REVISION;
+  return checks.map((check) =>
+    check.reason === 'already_armed'
+      ? {
+          ...check,
+          name: 'the fence is at this revision, or open to be armed to it',
+          holds: check.holds || atThisRevision,
+        }
+      : check,
+  );
 }
 
 /**
@@ -211,11 +239,15 @@ export function runEvict(
     run: async (substrate, flags) => {
       const db = substrate.db();
       if (flags.action === 'status') {
-        writeGateState(db, write);
+        const state = readCoverageState(db);
+        writeGateState(state, write);
         // The table the service's own arm is checked against, so what it refused on is readable
         // here rather than only in the boot log. A failing line is retried at the next start.
         writePreconditions(
-          armingPreconditions(db, INSTALLED_PUBLICATION_KINDS, EVICTION_COMPATIBILITY_REVISION),
+          statusPreconditions(
+            armingPreconditions(db, INSTALLED_PUBLICATION_KINDS, EVICTION_COMPATIBILITY_REVISION),
+            state,
+          ),
           write,
         );
         writeNotVerified(write);

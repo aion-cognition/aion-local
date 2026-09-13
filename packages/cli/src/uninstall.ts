@@ -9,7 +9,12 @@ import { launchAgentPath, MCP_LAUNCH_LABEL } from './launchd.js';
 import { askLine, confirmOrExit, stderrWriter, stdoutWriter, type Writer } from './output.js';
 import { resolveRepoDir } from './paths.js';
 import { withSubstrate } from './substrate.js';
-import { planUninstall, sharedToolCommands, type UninstallItem } from './uninstall-plan.js';
+import {
+  installedModelTags,
+  planUninstall,
+  sharedToolCommands,
+  type UninstallItem,
+} from './uninstall-plan.js';
 
 /**
  * `aion uninstall`: the mirror of init, and the only command that removes the memory store.
@@ -130,6 +135,7 @@ export async function executeUninstall(
 function writeSummary(
   execution: UninstallExecution,
   items: readonly UninstallItem[],
+  models: readonly string[],
   write: Writer,
 ): void {
   write('');
@@ -144,7 +150,7 @@ function writeSummary(
   }
   write('');
   write('shared tools are never removed by this command. To take them off the machine too:');
-  for (const command of sharedToolCommands()) {
+  for (const command of sharedToolCommands(models)) {
     write(`  $ ${command}`);
   }
 }
@@ -163,12 +169,14 @@ export function runUninstall(
       const { config } = substrate;
       const { dataDir } = config.operational;
       const manifest = readInstallManifest(dataDir);
+      const models = installedModelTags(config);
       const items = planUninstall({
         profile: config.install.profile,
         dataDir,
         manifest,
         launchAgentPath: launchAgentPath(homedir()),
         platform: process.platform,
+        models,
       });
       write(`data root ${dataDir}`);
       write(
@@ -214,7 +222,7 @@ export function runUninstall(
         composeRunner(resolveRepoDir()),
         write,
       );
-      writeSummary(execution, items, write);
+      writeSummary(execution, items, models, write);
       return execution.failed.length === 0 ? 0 : 1;
     },
   });

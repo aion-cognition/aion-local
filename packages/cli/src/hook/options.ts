@@ -40,11 +40,10 @@ export type HookOptions = {
   readonly minChars: number;
   /**
    * Which route this fire feeds, decided once per process so eight handlers cannot disagree about
-   * it mid-session. It is reported and never gates: a capture is worth storing on either route.
+   * it mid-session. It goes on the trace line and never gates: a capture is worth storing on
+   * either route.
    */
   readonly route: GenerationRoute;
-  /** The settings file this client was installed into, for the status surfaces that name it. */
-  readonly settingsPath: string;
   readonly stateDir: string;
   readonly endpoint: string;
   readonly fetchImpl: FetchImpl;

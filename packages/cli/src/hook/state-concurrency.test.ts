@@ -176,7 +176,6 @@ describe('two hook fires against one session state', () => {
       stopMode: 'push',
       minChars: 40,
       route: 'keyed',
-      settingsPath: join(dir, 'settings.json'),
       stateDir,
       endpoint: 'http://127.0.0.1:8765/mcp',
       fetchImpl,

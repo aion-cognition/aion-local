@@ -1,5 +1,4 @@
 import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import {
@@ -24,7 +23,6 @@ import {
   type StopMode,
 } from './options.js';
 import { generationRoute } from './route-state.js';
-import { claudeSettingsPath, codexHooksPath } from './settings-file.js';
 import { takeLockReport } from './state-lock.js';
 import { defaultStateDir } from './state.js';
 
@@ -147,6 +145,9 @@ export async function runHook(
     ts: options.now().toISOString(),
     event: options.event,
     session: typeof input.session_id === 'string' ? input.session_id : undefined,
+    // The route never gates a fire, so the log is where it is answerable at all: which route a
+    // session's captures fed is otherwise unreadable after the fact.
+    route: options.route,
   };
   try {
     const exit = await HANDLERS[options.event]({ input, options });
@@ -177,7 +178,6 @@ export type HookMainDeps = {
   readonly stdout?: (line: string) => void;
   readonly stderr?: (line: string) => void;
   readonly stateDir?: string;
-  readonly settingsPath?: string;
   /** How the repo is found: the harness invokes `<repo>/packages/cli/dist/hook-main.js`. */
   readonly scriptPath?: string;
   readonly fetchImpl?: FetchImpl;
@@ -194,14 +194,6 @@ async function readStdin(): Promise<string> {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
   }
   return Buffer.concat(chunks).toString('utf8');
-}
-
-/** The file the keyless strip rewrites, which is the one the harness that fired reads its hooks from. */
-function hooksFilePath(harness: Harness, env: NodeJS.ProcessEnv): string {
-  if (harness === 'codex') {
-    return codexHooksPath(homedir(), env);
-  }
-  return claudeSettingsPath(homedir());
 }
 
 export async function main(argv: readonly string[], deps: HookMainDeps = {}): Promise<number> {
@@ -224,7 +216,6 @@ export async function main(argv: readonly string[], deps: HookMainDeps = {}): Pr
       stopMode: flags.stopMode,
       minChars: flags.minChars,
       route: generationRoute(env, deps.scriptPath ?? process.argv[1]),
-      settingsPath: deps.settingsPath ?? hooksFilePath(flags.harness, env),
       stateDir: deps.stateDir ?? defaultStateDir(),
       endpoint: mcpEndpoint(env),
       fetchImpl: deps.fetchImpl ?? fetch,

@@ -338,6 +338,7 @@ offset was measured against. `session-end` deletes the file.
 State is a convenience, never a dependency. Missing or corrupt, the next read starts 64KB from
 the end of the transcript rather than at the beginning, and the session continues.
 
-`~/.aion/hook-state/hooks.log` holds one JSON line per fire: event, session, exit code, and
-duration, plus an error field on a caught exception. It is the only record of what a fire did,
-since every hook fails open with nothing on stdout. It rotates once past 5MB to `hooks.log.1`.
+`~/.aion/hook-state/hooks.log` holds one JSON line per fire: event, session, generation route,
+exit code, and duration, plus an error field on a caught exception. It is the only record of what
+a fire did, since every hook fails open with nothing on stdout. It rotates once past 5MB to
+`hooks.log.1`.

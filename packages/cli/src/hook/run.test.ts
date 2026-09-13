@@ -165,7 +165,6 @@ describe('hook events', () => {
     readonly stopMode?: StopMode;
     readonly minChars?: number;
     readonly route?: GenerationRoute;
-    readonly settingsPath?: string;
     readonly now?: () => Date;
   };
 
@@ -176,8 +175,6 @@ describe('hook events', () => {
       stopMode: overrides.stopMode ?? 'push',
       minChars: overrides.minChars ?? 40,
       route: overrides.route ?? 'keyed',
-      // Under the temp directory whatever the case: no test may reach the real settings file.
-      settingsPath: overrides.settingsPath ?? join(dir, 'home', '.claude', 'settings.json'),
       stateDir: join(dir, 'state'),
       endpoint: 'http://127.0.0.1:8765/mcp',
       fetchImpl: overrides.fetchImpl,
@@ -934,7 +931,7 @@ describe('hook events', () => {
         .filter((entry) => entry !== '')
         .map((entry) => JSON.parse(entry) as Record<string, unknown>)[0];
       expect(line?.keyless).toBeUndefined();
-      expect(line).toMatchObject({ event: 'session-end', exit: 0 });
+      expect(line).toMatchObject({ event: 'session-end', exit: 0, route: 'local' });
     });
   });
 

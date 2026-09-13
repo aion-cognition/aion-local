@@ -1,3 +1,4 @@
+import { localChatModels, resolveProviderRouting, type Config } from '@aion/core';
 import { existsSync, readFileSync } from 'node:fs';
 
 import type { InstallManifest } from './install-manifest.js';
@@ -36,16 +37,33 @@ export type UninstallPlanInput = {
   readonly manifest: InstallManifest | undefined;
   readonly launchAgentPath: string;
   readonly platform: string;
+  /** The model tags this install pulled, which is what the Ollama line may offer to remove. */
+  readonly models: readonly string[];
   /** Injected so the plan is decidable in a test against scratch paths. */
   readonly exists?: (path: string) => boolean;
   readonly readFile?: (path: string) => string;
 };
 
-/** The shared tools, never removed and always named. Ollama holds models other things use too. */
-export function sharedToolCommands(): readonly string[] {
+/**
+ * The tags this install pulled, read off config the way init reads it: the embed model, plus the
+ * chat models routing still resolves locally. A role routed to Anthropic downloaded nothing, so
+ * naming its tag would offer to remove a model something else on the machine put there.
+ */
+export function installedModelTags(config: Config): readonly string[] {
+  const routing = resolveProviderRouting(config);
+  return [...new Set([...localChatModels(routing), config.models.embed])];
+}
+
+/**
+ * The shared tools, never removed and always named. Ollama holds models other things use too,
+ * which is why the tags are the ones this install configured rather than the ones the defaults
+ * shipped with: an operator who changed a model reads the command that removes theirs.
+ */
+export function sharedToolCommands(models: readonly string[]): readonly string[] {
+  const tags = models.filter((tag) => tag.trim() !== '');
   return [
     'brew services stop neo4j && brew uninstall neo4j',
-    'ollama rm qwen3:4b-instruct-2507-q4_K_M qwen3:1.7b snowflake-arctic-embed2',
+    ...(tags.length === 0 ? [] : [`ollama rm ${tags.join(' ')}`]),
     'brew uninstall ollama',
   ];
 }
@@ -118,7 +136,7 @@ export function planUninstall(input: UninstallPlanInput): readonly UninstallItem
         target: input.manifest.neo4jHome,
         action: 'keep',
         why: 'a shared tool, and other things on this machine may use it',
-        commands: sharedToolCommands(),
+        commands: sharedToolCommands(input.models),
       });
     }
   } else {

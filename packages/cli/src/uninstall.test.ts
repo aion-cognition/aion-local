@@ -1,3 +1,4 @@
+import { DEFAULTS } from '@aion/core';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { HostActions, HostResult } from './host-actions.js';
 import { INSTALL_MANIFEST_VERSION, type InstallManifest } from './install-manifest.js';
 import { NEO4J_SETTINGS } from './native-graph.js';
-import { planUninstall, sharedToolCommands } from './uninstall-plan.js';
+import { installedModelTags, planUninstall, sharedToolCommands } from './uninstall-plan.js';
 import { executeUninstall, stripOwnedSettings, writePlan } from './uninstall.js';
 
 /**
@@ -15,6 +16,9 @@ import { executeUninstall, stripOwnedSettings, writePlan } from './uninstall.js'
  */
 
 let dir: string;
+
+/** What a plain local install pulled, which is what the plan is told rather than asked to guess. */
+const MODELS = [DEFAULTS.models.cue, DEFAULTS.models.reflect, DEFAULTS.models.embed];
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'aion-uninstall-'));
@@ -62,6 +66,7 @@ describe('the plan', () => {
       manifest: manifest(),
       launchAgentPath: join(dir, 'absent.plist'),
       platform: 'darwin',
+      models: MODELS,
     });
 
     const root = items.find((item) => item.what === 'data root');
@@ -77,6 +82,7 @@ describe('the plan', () => {
       manifest: undefined,
       launchAgentPath: join(dir, 'absent.plist'),
       platform: 'darwin',
+      models: MODELS,
     });
 
     expect(items.filter((item) => item.action === 'remove')).toEqual([]);
@@ -92,6 +98,7 @@ describe('the plan', () => {
       manifest: manifest({ gdsJar: jar }),
       launchAgentPath: join(dir, 'absent.plist'),
       platform: 'darwin',
+      models: MODELS,
     });
     expect(ours.some((item) => item.what === 'graph-data-science jar')).toBe(true);
 
@@ -102,6 +109,7 @@ describe('the plan', () => {
       manifest: manifest(),
       launchAgentPath: join(dir, 'absent.plist'),
       platform: 'darwin',
+      models: MODELS,
     });
     expect(theirs.some((item) => item.what === 'graph-data-science jar')).toBe(false);
   });
@@ -113,12 +121,48 @@ describe('the plan', () => {
       manifest: manifest({ neo4jHome: '/opt/homebrew/opt/neo4j/libexec' }),
       launchAgentPath: join(dir, 'absent.plist'),
       platform: 'darwin',
+      models: MODELS,
     });
 
     const server = items.find((item) => item.what === 'neo4j server');
     expect(server?.action).toBe('keep');
-    expect(server?.commands).toEqual(sharedToolCommands());
-    expect(sharedToolCommands().join('\n')).toContain('ollama rm');
+    expect(server?.commands).toEqual(sharedToolCommands(MODELS));
+    expect(sharedToolCommands(MODELS).join('\n')).toContain('ollama rm');
+  });
+
+  /**
+   * The hint is a command an operator runs on their own machine, so it has to name the tags this
+   * install actually pulled. Typed against the defaults of the day, it names somebody else's
+   * models on every install that changed one and offers to remove them.
+   */
+  it('names the models this install configured rather than the defaults it shipped with', () => {
+    const items = planUninstall({
+      profile: 'native',
+      dataDir: join(dir, 'nothing'),
+      manifest: manifest({ neo4jHome: '/opt/homebrew/opt/neo4j/libexec' }),
+      launchAgentPath: join(dir, 'absent.plist'),
+      platform: 'darwin',
+      models: ['qwen3:14b', 'snowflake-arctic-embed2'],
+    });
+
+    const server = items.find((item) => item.what === 'neo4j server');
+    expect(server?.commands?.join('\n')).toContain('ollama rm qwen3:14b snowflake-arctic-embed2');
+    expect(server?.commands?.join('\n')).not.toContain('qwen3:1.7b');
+  });
+
+  it('reads them off config the way init does, so a remote role names no local tag', () => {
+    const local = { ...DEFAULTS, models: { ...DEFAULTS.models, reflect: 'qwen3:14b' } };
+
+    expect(installedModelTags(local)).toEqual([
+      DEFAULTS.models.cue,
+      'qwen3:14b',
+      DEFAULTS.models.embed,
+    ]);
+    // A keyed install pulled no chat model at all: naming one would offer to remove a tag this
+    // install never put on the machine.
+    expect(
+      installedModelTags({ ...local, anthropic: { ...DEFAULTS.anthropic, apiKey: 'sk-test' } }),
+    ).toEqual([DEFAULTS.models.embed]);
   });
 
   it('says what it cannot prove is ours when there is no manifest', () => {
@@ -130,6 +174,7 @@ describe('the plan', () => {
       manifest: undefined,
       launchAgentPath: join(dir, 'absent.plist'),
       platform: 'darwin',
+      models: MODELS,
     });
 
     expect(items.find((item) => item.action === 'manual')?.why).toContain('not provably ours');
@@ -142,6 +187,7 @@ describe('the plan', () => {
       manifest: undefined,
       launchAgentPath: join(dir, 'absent.plist'),
       platform: 'darwin',
+      models: MODELS,
     });
 
     const compose = items.find((item) => item.what === 'compose services and volumes');
@@ -189,6 +235,7 @@ describe('executing it', () => {
       manifest: manifest(),
       launchAgentPath: plist,
       platform: 'darwin',
+      models: MODELS,
     });
 
     const execution = await executeUninstall(
@@ -221,6 +268,7 @@ describe('executing it', () => {
         manifest: manifest(),
         launchAgentPath: plist,
         platform: 'darwin',
+        models: MODELS,
       }),
       manifest(),
       host.actions,
@@ -244,6 +292,7 @@ describe('executing it', () => {
         manifest: undefined,
         launchAgentPath: join(dir, 'absent.plist'),
         platform: 'darwin',
+        models: MODELS,
       }),
       undefined,
       scripted().actions,
