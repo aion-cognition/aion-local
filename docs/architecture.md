@@ -7,32 +7,36 @@ from the design it came from.
 
 ## Packages and dependency direction
 
-`protocol` is the leaf: Zod schemas for the two tool contracts (`recall-input`,
-`recall-output`, `reflection-input`, `reflection-output`) plus shared types
-(`IsoTimestampSchema`, `CurrencySchema`, `SupersededBySchema`). It imports nothing from
-the rest of the workspace.
+`protocol` is the leaf: Zod schemas for the four tool contracts, recall (`recall-input`,
+`recall-output`, `recall-result`), reflection (`reflection-input`, `reflection-output`), and the
+two read-only source tools, `source_search` and `source`, both held in `source-search`, plus
+`history-coverage` and shared types (`IsoTimestampSchema`, `CurrencySchema`,
+`SupersededBySchema`). It imports nothing from the rest of the workspace.
 
 `core` depends on `protocol` for wire schemas and nothing else in the workspace. `mcp` and
 `cli` both depend on `core` (and transitively on `protocol`). The dependency between the
 top two runs one way: `cli` imports a few operational constants from `mcp` (the health
-path, the container check, the usage protocol), and `mcp` imports nothing from `cli`.
+path, the container check, the usage protocol, and `reflectionStages`, the same pipeline stage
+list the service registers, so `aion replay` and `aion timeline` run the stages the worker runs),
+and `mcp` imports nothing from `cli`.
 
 ## Bounded contexts inside core
 
 Each context that has both pure logic and orchestration splits into `domain/` and
 `application/` (everything that touches the graph, SQLite, or a model). `domain/` is not free
-of infrastructure: twenty-three of its modules import from `infrastructure/`, most for type-only DI
+of infrastructure: thirty-nine of its modules import from `infrastructure/`, most for type-only DI
 contracts (`Config`, `Logger`, `Driver`, `SqliteHandle`, `Provider`, the shape `operation.ts`
 and `stage.ts` declare for what a stage or operation receives). Two cross into value coupling:
 `introspection/domain/proposal-hygiene.ts` imports the `DEFAULTS` config object and reads two
 of its fields as fallback horizons, and `introspection/domain/tier3.ts`'s `proposeOnlyAdvisor`
 takes a `Logger` and calls `logger.info`, I/O executed from inside domain code rather than
 merely typed against it. What still holds: `domain/` never imports `application/`;
-`application/` imports `domain/` and `infrastructure/`. `infrastructure/` reaches into one
-context, `reflection/domain/`, across nineteen files, for pure identity and content
-primitives only (name folding, claim keys, vector-input hashing, entity-extraction and
-entity-reconciliation helpers, two value types); it holds no application code and no notion
-of episodes, cues, or memory packs beyond those primitives.
+`application/` imports `domain/` and `infrastructure/`. `infrastructure/` reaches into two
+contexts. It takes pure identity and content primitives from `reflection/domain/` across
+twenty-two files (name folding, claim keys, vector-input hashing, entity-extraction and
+entity-reconciliation helpers, two value types), and one ownership-scope constant from
+`evidence/domain/ownership.ts` in `sqlite/probe-incidence.ts`; it holds no application code and
+no notion of episodes, cues, or memory packs beyond those primitives.
 
 - **`infrastructure/`**: `graph/` (every Cypher statement in the workspace), `sqlite/`
   (the reflection queue, the experience archive `aion replay` and `aion timeline` read,
@@ -41,8 +45,12 @@ of episodes, cues, or memory packs beyond those primitives.
   queues, whose reads share one `proposal-table.ts` because both are an id, the pair the
   proposal is about, and a `resolved_at` that is null while a person still owes the row a
   decision), `providers/` (the Ollama and Anthropic clients, the circuit breaker, the
-  per-role routing layer and the model reconciliation that follows it), `config/` (schema,
-  defaults, the `AION_*` registry, the loader), `logging/`.
+  per-role routing layer and the model reconciliation that follows it), `publication/` (the
+  coordinator every two-store write goes through: the guard a plan is prepared under, the
+  precondition and evidence-revision check, the short SQLite transaction, the graph apply, the
+  acknowledgment that completes the declared effects, and the crash recovery that finishes a
+  prepared attempt), `config/` (schema, defaults, the `AION_*` registry, the loader),
+  `logging/`.
 - **`recall/domain/`**: `activation.ts` (spreading activation over adjacency),
   `activation-weights.ts` (the per-relationship-type propagation table),
   `admission.ts` (the evidence rules and the floors), `arrival-scoring.ts` (cosines for what
@@ -90,6 +98,11 @@ of episodes, cues, or memory packs beyond those primitives.
   `fingerprint.ts`, `residue.ts`. Deterministic and rule-based by design: this is the one
   place inference is deliberately not used, because a credential leak cannot wait on a
   model's judgment.
+- **`evidence/`**: `domain/` (the scope vocabulary, the read budget, and the shape of a
+  resolved answer); `application/` (`resolver.ts`, the read that answers what a node's
+  provenance supports, plus `judgment.ts`, `lineage-walk.ts`, `node-support.ts`,
+  `narrative-support.ts`, `ownership.ts` and `merge-recovery.ts`). It is what recall's serving
+  view and the maintenance loop's provenance questions both read through.
 - **`session/`**: `session-manager.ts`, identity-to-session-id resolution, cached per
   process, backed by `infrastructure/graph/sessions.ts`.
 
@@ -122,16 +135,20 @@ and `session-dedup.ts`, and `weightedMeanVector` from `context-vector.ts` in `re
 `redactPayload` from `redaction/deep-walk.ts` and `SessionManager`'s type from `session/`.
 `reflection/application/` imports from `plasticity/domain/reinforcement.ts` (the
 co-extraction trigger and the clique discount), from `redaction/` (fingerprinting and the
-same `redactPayload`), and from `session/`. `infrastructure/` reaches only
-`reflection/domain/`, for the same primitives noted above.
+same `redactPayload`), and from `session/`. `infrastructure/` reaches `reflection/domain/` for
+the same primitives noted above, and `evidence/domain/ownership.ts` for one scope constant.
 
 ## Write path: reflection intake
 
 `handleReflection` (`reflection/application/intake.ts`) runs these steps in order:
 
 1. Parse the payload against `ReflectionInputSchema`; reject anything that fails.
-2. Split off `session_id`. It is routing, not content, so it never reaches the hash or
-   the redaction walk.
+2. Split off `session_id`, `lane`, `origin`, `provenance` and `feedback`. None of them is
+   content, so none reaches the hash or the redaction walk: identity and lane are routing,
+   `origin` is provenance about the call, and `provenance` and `feedback` are statements about
+   other memories. Folding any of them in would make the same experience pushed two ways into
+   two episodes. `provenance` and `feedback` are redacted on their own paths
+   (`redactProvenance`, `redactFeedback`).
 3. Redact the remaining payload (`redactPayload`): every string field in `turns`,
    `tool_executions`, and `observations` is walked and scanned against the rule set and an
    entropy threshold; matches are stripped and logged, never stored.
@@ -139,22 +156,30 @@ same `redactPayload`), and from `session/`. `infrastructure/` reaches only
    when one exists.
 5. Shape the payload into one episode and its turns (`prepareEpisode`), each carrying a
    sha256 content hash over a canonically key-sorted JSON encoding.
-6. Check for a duplicate by `(sessionId, contentHash)` outside any transaction. If found,
-   skip straight to step 8: no write, no new queue row.
-7. Otherwise open a single write transaction and commit the durable record first: lock the
-   session node (which serializes intake for that session and closes the race where two
-   concurrent identical payloads both miss the duplicate check), re-check the duplicate
-   under the lock, write the stamped `Episode` node and each stamped `Turn` node with no
-   vector properties, and link `Turn -[:PARTICIPATES_IN]-> Episode`,
-   `Episode -[:PARTICIPATES_IN]-> Session`, and `Turn -[:FOLLOWS]-> <previous Turn>`.
-8. Archive the redacted payload and find or create a pending `integrate` job in the SQLite
-   reflection queue, in one transaction: two synchronous writes, so the commit costs nothing
-   extra, and it buys the invariant that no job exists for an experience the archive does not
-   hold. The job is keyed by episode id and carries its lane; the check is against the queue,
-   not assumed from step 7's outcome, so a crash between the episode commit and the enqueue
-   self-heals on the next identical push. `aion replay` reads the archive back through the
-   pipeline, and `aion timeline` reads one episode across the archive, the graph, the queue,
-   and the ledger.
+6. Read the lane the arrival rate assigns and the interactive-lane depth, then publish one
+   `intake` operation through the publication coordinator (`publishIntake`,
+   `intake-transport.ts`). Every durable write the acceptance itself makes happens inside that
+   operation (`intake-publication.ts`): `handleReflection` no longer writes the episode, the
+   archive row or the queue row on its own. What it still writes outside the operation is the
+   session backbone from step 4, the caller's recall-feedback rows, and the content vectors in
+   step 11.
+7. Under the coordinator's guard, `prepare` decides which source this payload is, keyed on
+   `(experienceArchiveKey(identity, contentHash, ARCHIVE_SCHEMA_VERSION), sessionId)`. A new
+   occurrence mints a source id and one turn id per turn; a held one answers with the original
+   id and projects no episode; an ambiguous or state-uncertain key is pinned and refused
+   outright, because picking one of two live occurrences would record a decision nobody made.
+   The same pass classifies the references the push stated.
+8. The acceptance then runs in a fixed order. The SQLite prepare writes the source manifest,
+   the archive row, the turn ids and the reference acceptance. `applyGraph` projects the
+   stamped `Episode` and each stamped `Turn` under the ids already minted, with the session
+   node locked first, and links `Turn -[:PARTICIPATES_IN]-> Episode`,
+   `Episode -[:PARTICIPATES_IN]-> Session`, and `Turn -[:FOLLOWS]-> <previous Turn>`, plus the
+   reference edges. The SQLite acknowledgment activates the manifest, enqueues the `integrate`
+   job (`enqueueSourceWork`) and acknowledges the references. The enqueue is an acknowledgment
+   effect, so no worker can claim a job for an episode that does not exist. A rejection or a
+   deferral raises `ReflectionNotStoredError` rather than telling a client its reflection
+   queued. `aion replay` reads the archive back through the pipeline, and `aion timeline` reads
+   one episode across the archive, the graph, the queue, and the ledger.
 9. If a new job was enqueued, call the `onJobEnqueued` callback so the worker can start
    immediately. The service wires that callback to `worker.wake()`; the SQLite row is what a
    restart replays from regardless. A callback that throws is logged and swallowed, since by
@@ -167,16 +192,20 @@ same `redactPayload`), and from `session/`. `infrastructure/` reaches only
     without its `content_vec` property is the pending marker the worker's startup drain
     and the `vector_backfill` path complete when Ollama returns.
 
-A Neo4j outage in step 7 still refuses honestly with `ReflectionNotStoredError`: nothing is
-half-written, and the message says the experience was not kept. An Ollama outage no longer
-loses anything: the record commits, the job queues, and the vectors arrive when the model
-does. `docs/degradation.md` holds the live-verified behavior for both modes.
+A Neo4j outage during the publication still refuses honestly with `ReflectionNotStoredError`:
+nothing is half-written, and the message says the experience was not kept. An Ollama outage
+no longer loses anything: the record commits, the job queues, and the vectors arrive when the
+model does. `docs/degradation.md` holds the live-verified behavior for both modes.
 
-A caller's stated provenance (a source, a `CORRECTS` reference, a confirmation) attaches the
-same way vectors do: best-effort and last. `attachProvenance` validates every reference against
-the substrate, drops and counts what does not resolve, and writes idempotent edges; a reference
-the graph would not take at the time is archived anyway, and the worker replays it on every job
-it claims, so a transient outage repairs itself with no person. A caller's stated feedback splits
+A caller's stated provenance (a source, a `CORRECTS` reference, a confirmation) is part of the
+acceptance rather than a best-effort tail. `classifyStatedReferences` resolves every reference
+against the substrate under the same guard the occurrence is decided under, the acceptance
+records what did and did not resolve, `projectAcceptedReferences` writes the idempotent edges in
+the same graph phase as the episode, and the acknowledgment settles the batch. A reused
+occurrence still accepts the statements a later push carries, which is the point: a reference
+against a source that is already here, or already evicted, is what the contract exists for.
+`settleStatedReferences`, the worker-replay path this used to take, is retained as a shape and
+called by nothing. A caller's stated feedback splits
 in two, deliberately. Delivery and use are self-reports in the `feedback` block, appended
 idempotently to the same local database and best-effort: nothing acknowledges them, so a failed
 append is logged and swallowed rather than failing an experience that is already durable. A
@@ -204,8 +233,11 @@ into first-in-first-out after the first claim.
 
 ## Read path: recall
 
-`handleRecall` (`recall/application/recall.ts`) runs these stages, each timed
-independently for the pack's `stage_timings_ms`:
+`handleRecall` (`recall/application/recall.ts`) runs these stages in order. Only the first six
+are timed into the pack's `stage_timings_ms`: `cues`, `embed`, `seeds`, `activation`, `fusion`
+and `resonance`, which this version always times even on a run that declines to search and which
+the schema keeps optional only so packs written before the stage existed still parse. The
+intention pass, assembly, and the three subtractions below it carry no timing.
 
 1. **Cues.** One generation call (the cue model) turns the query, and optionally a summary
    and recent turns, into weighted cues: query text weighs 3x, summary and recent-turn text
@@ -247,9 +279,14 @@ independently for the pack's `stage_timings_ms`:
    Rank Fusion across the vector/bm25/graph_traversal legs by default (`rrf`, k=60), or
    MMR reranking when `AION_SEARCH_RERANKER=mmr`. Ranking and admission are separate:
    an item reaches the pack only on absolute evidence: a cosine at or above
-   `AION_VECTOR_ADMISSION_FLOOR`, a Lucene match on the verbatim cue, two independent
-   measurements at or above `AION_CORROBORATION_FLOOR`, or traversal from a pack something
-   else anchored, however well it ranks. One node several legs found merges into one candidate
+   `AION_VECTOR_ADMISSION_FLOOR`, a Lucene match on the verbatim cue or an exact entity name, or
+   two independent measurements at or above `AION_CORROBORATION_FLOOR`, however well it ranks.
+   Traversal is not one of them and no caller may make it one. A narrow fourth door runs only
+   after those three refuse: an activation-only arrival carrying a strong inbound `CONTRADICTS`,
+   `SUPERSEDES` or `CAUSES` edge above `AION_TYPED_ADMISSION_ACTIVATION_FLOOR` is judged at the
+   corroboration floor instead of the vector one (`AION_RECALL_TYPED_ADMISSION`, on by default).
+   `AION_BM25_ADMISSION_MODE=any` is the operator's escape hatch that lets a plain lexical hit
+   admit alone. One node several legs found merges into one candidate
    here, scored once and explained by its strongest leg; two different nodes carrying the same
    sentence both go through, because whether they are one claim is decided in assembly, at step
    11, where the provenance read has arrived. An item the spread reached and no strategy seeded is scored
@@ -276,8 +313,8 @@ independently for the pack's `stage_timings_ms`:
    off, and a time-traveled read evaluates no trigger at all, since asking what the substrate
    held last month is a question about the past and a trigger is the substrate acting now.
 8. **Pack assembly.** Fused items route to a bucket by node label (`pack-buckets.ts`):
-   `Episode`/`Turn` to `episodes`, `Narrative` to `narratives`, and `Entity` plus the nine
-   cognitive types (`Goal`, `Plan`, `Decision`, `Insight`, `Concept`, `Context`, `Event`,
+   `Episode`/`Turn` to `episodes`, `Narrative` to `narratives`, and `Entity`, `Bridge`, plus the
+   nine cognitive types (`Goal`, `Plan`, `Decision`, `Insight`, `Concept`, `Context`, `Event`,
    `Pattern`, `Trend`) to `facts`, since a Decision carries a fact the same way an entity
    does. `resonant` and `intentions` are not in that table and never will be: every other
    bucket answers what kind of memory this is, which a label decides, and those two answer how
@@ -425,17 +462,22 @@ does, and one tick runs four phases: observe, decide, act, learn.
    exhausted attempts, enrichment lag, the share of recent recalls that answered without the
    cue model, and the reinforcement rows the queue cap threw away), enrichment (episodes with
    no orchestrator ledger key), plasticity, proposals, entities (identities the deterministic
-   tier-0 sweep could still absorb), redaction residue. The cue-degradation share reads as
-   unmeasured rather than as healthy until the first recall lands. Every collector is caught
+   tier-0 sweep could still absorb), redaction residue, the narrative-seal backlog, the eviction
+   census, generation health, and the per-operation effectiveness record tier 2 scores on. The
+   cue-degradation share reads as unmeasured rather than as healthy until the first recall
+   lands. Every collector is caught
    independently; one that throws names itself in `degraded` and costs its own metrics rather
    than the reading.
 2. **Decide.** `decide` (`introspection/domain/decide.ts`) is pure: the same snapshot always
    produces the same answer, so a decision is arguable from the numbers. Tier is a property of
    the cycle rather than of the operation: an operation names the critical condition it repairs
    in `answers`, and it preempts the whole catalog unweighted on the cycles the snapshot meets
-   that condition. Three conditions, each with a responder: vector parity under 0.8
-   (`vector_backfill`), orphan share over 0.3 (`orphan_cleanup`), episodes with no session link
-   (`emergency_relationship_repair`). Preemption is not open-ended. Past a grace of three
+   that condition. Two conditions, each with a responder: episodes with no session link
+   (`emergency_relationship_repair`), and vector parity under 0.8 measured over at least twenty
+   expected vectors (`vector_backfill`), since parity says nothing about a substrate smaller than
+   that. `orphan_cleanup` answers no condition: disconnection is a diagnostic scored on demand in
+   tier 2, never a preemption. A graph collector that failed reports no critical condition at
+   all. Preemption is not open-ended. Past a grace of three
    resolved runs, an operation keeps preempting only while it is still moving the metric it
    declared, because a condition can stand for weeks and nothing else may wait that long. Tier
    2 scores the rest by each operation's own `relevance`, halved for an operation whose runs
@@ -461,28 +503,32 @@ does, and one tick runs four phases: observe, decide, act, learn.
    too, whatever it did, which is what makes the cheapest way to answer a reading a fact.
 
 The catalog is one ordered list (`introspection/application/catalog.ts`), which is the only
-place an operation joins maintenance. Twenty-eight are registered, in eight groups: substrate
+place an operation joins maintenance. Thirty-one are registered, in eleven groups: substrate
 hygiene (`vector_backfill`, `reconcile_reenqueue`, `dead_letter`,
 `redaction_residue_purge`), plasticity (`reinforcement_flush`, `memory_decay`, `edge_prune`,
-`identifier_decay`), content maintenance (`narrative_cleanup`, `narrative_regrounding`,
+`identifier_decay`), the chunk lifecycle (`narrative_seal`), the raw projection's end
+(`episode_evict`), content maintenance (`narrative_cleanup`, `narrative_regrounding`,
 `retro_judgment_sweep`, `description_freshness`, `intention_upkeep`, `curiosity`), compression
 (`narrative_rollup_day`, `narrative_rollup_week`, `claim_consolidation`), topology
 (`emergency_relationship_repair`, `orphan_cleanup`, `community_refresh`, `symbiosis_bridge`,
 `structural_discovery`), entity and claim-merge policy (`merge_auto`, `claim_dedup`,
-`merge_decision_reconcile`), the self-probe (`recall_probe`), and the proposal queues
-(`proposal_resolution`, `proposal_hygiene`). List order is
-documentation: selection is by tier and urgency, and ties break on waiting time and then on
-name.
+`merge_decision_reconcile`), the self-probe (`recall_probe`), the proposal queues
+(`proposal_resolution`, `proposal_hygiene`), and the confirmation signal's two-store seam
+(`confirmation_signal_completion`). List order is documentation: selection is by tier and
+urgency, and ties break on waiting time and then on name.
 
-Twelve declare a `measure`, the health-snapshot number their run is scored on moving. The
-other sixteen record `unmeasured` instead. Fourteen of those wait on a gauge the snapshot does
-not carry yet; the last two decline one on purpose. `proposal_resolution` moves the
+Ten declare a `measure`, the health-snapshot number their run is scored on moving. The
+other twenty-one record `unmeasured` instead. Seventeen of those wait on a gauge the snapshot
+does not carry yet; the last four decline one on purpose. `proposal_resolution` moves the
 open-proposal count, and scoring it on lowering that would reward an applied correction and a
 dismissed one alike, which rewards emptying the queue rather than deciding it. `recall_probe`
 produces numbers instead of moving them, so a run that scored a miss did its job exactly as
-well as one that scored a hit.
+well as one that scored a hit. `narrative_seal` and `episode_evict` refuse for the same reason
+one step further: each would be scored on lowering its own backlog, which credits a chunk
+blocked the same as one published, and rewards a destructive pass for removing more of the
+resident population.
 
-One of the twenty-eight adds to memory rather than tidying it. `curiosity` files a question
+One of the thirty-one adds to memory rather than tidying it. `curiosity` files a question
 about an entity the substrate keeps meeting and cannot describe, as a Goal marked `origin_kind:
 substrate` keyed to that entity, which the entity itself brings back through the intention
 triggers above. It writes through reflection intake like any other experience, which is also
@@ -564,9 +610,12 @@ since an opinion, a wider scope, and a different attribute of one subject all su
 whether the newer claim is coherent at all, since a garbled extraction can win a same-subject
 comparison while asserting nothing. Only a unanimous pair closes, through the same
 `applySupersessionProposal` path a review takes, stamped `supersession_unanimous_auto`. A veto
-becomes a proposal row carrying the reason. The stage reports three outcomes rather than two,
-read off the graph: closed, vetoed or proposed, and target-already-gone, the last being a
-judgment whose losing side had already lost currency and which therefore closed nothing.
+becomes a proposal row carrying the reason. The stage reports six outcomes rather than two.
+`closed`, `vetoed` and `proposed` are the ordinary three. `stale` is a judgment whose losing side
+had already lost currency, so it closed nothing and its row is resolved rather than left asking a
+person to apply a correction that already happened. `withheld` is a judgment whose evidence moved
+between the answer and the write, so the pair goes back to being owed. `already_decided` is a
+pair carrying a person's ruling, which no mode may reopen and which writes no counter at all.
 Confidence was the earlier gate and is not one: the judge answers 0.95 to every affirmative it
 makes, and a threshold over one value gates nothing.
 
@@ -623,7 +672,7 @@ provenance the episode carries. It is also what one session links `INITIATED_BY`
 Session points at the Member, and the standing `aion-system` session the lifecycle events chain
 in points here instead, because nobody typed them.
 
-**Indexes and constraints** (migrations 001 through 005,
+**Indexes and constraints** (migrations 001 through 006,
 `infrastructure/graph/migrations.ts`):
 
 - Uniqueness constraints on `AionNode.id`, and on `.id` for every primary label except
@@ -653,6 +702,10 @@ in points here instead, because nobody typed them.
   narrower `content_fts` under a new name rather than
   by a drop-and-recreate: `runGraphMigrations` replays every statement on every `aion init`,
   so a rename is what keeps a re-init from destroying and repopulating a healthy index.
+- One more uniqueness constraint, on the publication guard's id (migration 006,
+  `publication-guard.ts`). Only the constraint is declared here; the guard node itself is
+  created under the substrate's bootstrap marker, so a guard that goes missing after init is
+  reported rather than silently replaced.
 
 **Edge merge policy** (`infrastructure/graph/edges.ts`). Every relationship write goes
 through one `MERGE`, matched on endpoint ids resolved through `AionNode`: on create it

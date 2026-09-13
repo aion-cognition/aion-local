@@ -15,12 +15,13 @@ substrate: the hooks are a client that speaks the same MCP wire an agent does.
 
 ## The two profiles
 
-`aion init local` provisions the substrate and installs no hooks. Generation runs on Ollama.
-This is what `aion init` has always done, now named.
+`aion init local` and `aion init full` both install the hooks. What differs is where
+generation runs.
 
-`aion init full` asks for an Anthropic key, records it in `.env`, and installs the hooks. The
-two go together. The shims push a lot of small capture work, and capture is Haiku-grade: read
-a turn, shape it, store it. On the local path that same volume queues behind the one reflect
+`aion init local` runs every role on Ollama. This is what `aion init` has always done, now
+named. `aion init full` asks for an Anthropic key, records it in `.env`, and routes generation
+there instead. The shims push a lot of small capture work, and capture is Haiku-grade: read
+a turn, shape it, store it. On the local route that same volume queues behind the one reflect
 model every other caller is already waiting on. Routing generation to `claude-haiku-4-5` is
 what makes the cadence affordable. Embeddings stay local either way, because the vector space
 is the substrate.
@@ -116,10 +117,11 @@ frame omits `permissionDecision`, so approval stays with the normal permission f
 
 ## Research capture
 
-The full profile installs a PostToolUse hook matching Slack, Linear, and Notion tool calls.
-It buffers the tool name, a summary of the arguments, and up to 2000 characters of the
-result, and the next flush folds them into the reflection as tool executions. Research a
-session did once then survives the session. `--no-research-capture` leaves it out.
+`--with-research-capture`, on by default on either hook profile, installs a PostToolUse hook
+matching Slack, Linear, and Notion tool calls. It buffers the tool name, a summary of the
+arguments, and up to 2000 characters of the result, and the next flush folds them into the
+reflection as tool executions. Research a session did once then survives the session.
+`--no-research-capture` leaves it out, on full or lite alike.
 
 One caution stands. Redaction is deterministic and it targets credentials: keys, tokens,
 connection strings. It does not detect patient data or other regulated content, so the
@@ -135,7 +137,9 @@ preserving every key and every hook that is not ours. Aion entries are recognize
 
 Run through `./bin/aion`, the CLI sits inside a container that can reach neither the host repo
 nor the host's Claude settings. It prints the block to merge by hand instead of failing. The
-block looks like this, with the absolute path to your own checkout:
+block looks like this, with the absolute path to your own checkout. Research capture is on by
+default, so the eighth entry, PostToolUse, is part of it; pass `--no-research-capture` and merge
+only the first seven.
 
 ```json
 {
@@ -199,6 +203,18 @@ block looks like this, with the absolute path to your own checkout:
           {
             "type": "command",
             "command": "node /path/to/aion-local/packages/cli/dist/hook-main.js session-end"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__slack__.*|mcp__linear-mcp-server__.*|mcp__Notion__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /path/to/aion-local/packages/cli/dist/hook-main.js post-tool-use",
+            "async": true
           }
         ]
       }
@@ -325,3 +341,7 @@ offset was measured against. `session-end` deletes the file.
 
 State is a convenience, never a dependency. Missing or corrupt, the next read starts 64KB from
 the end of the transcript rather than at the beginning, and the session continues.
+
+`~/.aion/hook-state/hooks.log` holds one JSON line per fire: event, session, exit code, and
+duration, plus an error field on a caught exception. It is the only record of what a fire did,
+since every hook fails open with nothing on stdout. It rotates once past 5MB to `hooks.log.1`.

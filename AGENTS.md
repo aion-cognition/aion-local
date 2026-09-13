@@ -63,15 +63,18 @@ packages/core/src/
   redaction/                            deterministic secret detection
   reflection/domain/                    pure: episode/turn shaping, content hashing, stage contract
   reflection/application/               intake (the write path), orchestrator, worker, lanes
-  reflection/application/stages/        the pipeline, in the order bootstrap.ts registers them
+  reflection/application/stages/        the pipeline, in the order pipeline.ts's
+                                        reflectionStages() registers them
   session/                              identity-to-session-id resolution
   prompts/                              every generation system prompt, one file per surface,
                                         exported as LOCAL and KEYED, forks named in
                                         fork-registry.test.ts
 packages/mcp/src/                       MCP server: tool definitions, HTTP transport
 packages/cli/src/                       aion command: init, status, doctor, stats, last, why,
-                                        timeline, search, forget, unsupersede, queue, replay,
-                                        proposals, maintain, unmerge, hooks, help
+                                        timeline, search, source-search, source, forget,
+                                        unforget, unsupersede, queue, replay, proposals,
+                                        maintain, unmerge, consolidate, costs, logs, uninstall,
+                                        evict, hooks, help
 packages/cli/src/hook/                  the harness hook client: codex-rollout.ts reads the codex
                                         rollout, codex-settings.ts shapes its hooks file
 bin/aion                                host wrapper: rebuilds the image, runs the CLI container
@@ -81,7 +84,7 @@ bin/aion                                host wrapper: rebuilds the image, runs t
 
 ```
 npm run build              # tsc -b, whole workspace
-npm test                   # both vitest projects: unit, then integration
+npm test                   # all vitest projects: unit, then integration, then integration-ollama
 npm run test:unit          # packages/*/src/**/*.test.ts, no external services
 npm run test:integration   # packages/*/src/**/*.int.test.ts, needs Docker + host Ollama
 npm run test:watch         # unit project, watch mode
@@ -192,7 +195,7 @@ Batteries: 1 unrelated queries come back thin or empty; 2 the paired on-topic se
 3 an applied correction changes the answer; 4 the six-case contradiction set closes nothing on one
 judgment alone; 5 narratives stay grounded in their session's own nodes; 6 the leaked-shape
 corpus reaches no stored node; 7 a live turn enriches ahead of a bulk flood. Battery fixtures
-are shared with the workstream that owns each area (`floors.fixtures.ts`,
+are shared with the workstream that owns each area (`floors.data.ts`,
 `leaked-shapes.fixture.ts`) rather than copied.
 
 ## Live-stack cautions

@@ -197,12 +197,19 @@ aion queue ls [--session <id>] [--lane <l>] [--limit <n>]   # depth, age, attemp
 aion queue promote --session <id>                           # move a session's bulk jobs to interactive
 aion queue drop --session <id> [--yes]                      # unclaimed rows only; prints the count first
 aion queue reconcile [--re-enqueue --yes]                   # episodes with no ledger key and no queue row
+aion queue index [--limit <n>]                              # drain the archive-index rows intake wrote
 ```
 
 `drop` and `reconcile --re-enqueue` report what they would do and stop unless `--yes` is
 passed. `drop` never touches a claimed row: that job is running, and deleting it under its
 worker produces exactly the orphan `reconcile` exists to repair. `aion doctor` runs the same
 reconcile count as an informational check and warns past `AION_RECONCILE_WARN_THRESHOLD`.
+
+`--job-type <integrate | source_index>` narrows `ls`, `drop` and `promote` to one job type;
+`reconcile` and `index` do not take it. `drop` and `promote` default to `integrate` when it is
+omitted, so a plain `drop` leaves `source_index` rows alone and reports how many it skipped;
+pass `--job-type source_index` to drop those too. `promote` refuses `source_index` outright,
+since the index drainer claims those rows by job type rather than by lane.
 
 ## Reviewing proposals
 
@@ -404,6 +411,30 @@ capture exceeds a bound fixed at freeze time, and `--refresh` cannot raise it: a
 the reservation so a smaller cohort can be frozen in its place. `status` prints the exact command
 when it reports that block.
 
+## Replaying the archive
+
+```
+aion replay ls                                    # archived experiences, usage events, by pipeline version
+aion replay run [--all | --stale] [--live --yes]  # re-enters reflection for the selected experiences
+aion replay usage [--live --yes]                  # re-applies access, reinforcement, decay events
+```
+
+`run` re-enters every reflection stage for the experiences it selects: the archive rather than a
+live transport, so a prompt or extraction change is re-derived from what the substrate was
+actually told instead of migrated in place. `usage` is the second half. It re-applies the
+access, reinforcement and decay events the usage stream recorded, on a graph `run` already
+rebuilt, in that order, since those events name nodes and edges the pipeline has to write first.
+
+Neither writes to the shipped substrate — the default `AION_SQLITE_PATH` or a managed
+`AION_NEO4J_URI` — unless `--live --yes` are both passed. Re-entering the pipeline inflates two
+counters that record real observations rather than converge on one value (the MENTIONS salience
+bump and the co-occurrence edge count), and a replay's clock also feeds identifier decay. That is
+why the target is a scratch substrate by default.
+
+`--stale` is the default selection, everything archived under some other pipeline version;
+`--all` replays every experience regardless of version, and `--episode`/`--session` narrow
+further. `--limit` and `--batch` bound one run the way `--steps` bounds a `consolidate` run.
+
 ## Reading a captured source
 
 ```
@@ -413,6 +444,17 @@ aion source <id | source:kind:ordinal> [--limit <n>] [--cursor <c>] [--json]
 `source` prints the parts behind one source id, one turn id, or one part address, from the archive
 rather than from the graph. It answers after an eviction has taken the projection away, which is
 the case it exists for: the records outlive the nodes.
+
+## Searching captured text
+
+```
+aion source-search <query> [--limit <n>] [--cursor <c>] [--as-of <ts>] [--knew-at <ts>] [--json]
+```
+
+`source-search` finds a literal phrase in the archive rather than the seed layer `aion search`
+reads: it answers whether the phrase was said, whether or not anything was ever extracted from it
+or its graph projection still exists. A refusal or a bad request exits non-zero, so a script never
+reads "cannot search here" as "no match".
 
 ## Unmerging entities
 
@@ -454,7 +496,8 @@ situation resembles the one it was formed in. Provenance decides the bucket rath
 label, so a Goal the query itself found still answers in `facts`.
 
 ```
-AION_RECALL_INTENTIONS=true                # the kill switch: no intention comes back on a trigger
+AION_RECALL_INTENTIONS=true                # the default: an intention can come back on a trigger
+AION_RECALL_INTENTIONS=false               # the kill switch: no intention comes back on a trigger
 AION_RECALL_INTENTION_SITUATION_FLOOR=0.5  # the cosine a situation match has to clear
 AION_RECALL_MAX_INTENTIONS=3               # how many the bucket may hold
 ```
@@ -561,9 +604,11 @@ plan in three groups, and asks twice.
 - **remove** is what this install put there and can prove it: the launchd job, the config lines
   still carrying the values init wrote, a plugin jar init downloaded, and the data root. On the
   docker profile it is `compose down --volumes` instead.
-- **manual** is something present that nothing proves is ours — a Neo4j that was already running,
-  a plugin jar somebody placed, a config file they maintain. It prints the command rather than
-  taking the decision.
+- **manual** fires only when there is no install record at all — a native install from before
+  the manifest, or one assembled by hand. It prints one instruction: check the plugins
+  directory and `neo4j.conf` by hand before removing anything there. When a manifest exists,
+  anything this install did not set up — a Neo4j already running, a plugin jar somebody placed
+  — is left out of the plan rather than listed here.
 - **keep** is the shared tools. Homebrew's Neo4j, Ollama and the models are never removed as a
   side effect; the commands to remove them yourself are printed in a block at the end.
 
@@ -636,10 +681,20 @@ Both surfaces also carry `eviction_gate` (`unarmed`, `armed` or `disarmed`),
 stays closed until an operator arms it, an active coverage contract does not arm it, and a
 substrate somebody stopped reads apart from one nobody ever opened.
 
+`GET /health` also carries the queue and plasticity counters `aion status` reads: `queue_depth`,
+`queue_oldest_unclaimed_ms`, `queue_exhausted`, `queue_index_depth`, `reinforcement_dropped`,
+`enrichment_lag_p95_ms`, `cue_degraded_rate`, `supersession_proposals_open` and
+`entity_merge_proposals_open`, then `reinforcement_signals_applied`,
+`reinforcement_pairs_applied`, `reinforcement_edges_updated`, `reinforcement_last_run_at`,
+`reinforcement_queue_depth`, `decay_edges_scanned`, `decay_edges_decayed` and
+`decay_last_run_at`. `eviction_stop_requested_by` joins the eviction keys above: it names the
+operation that owes an unrecorded stop (below). The rest is base liveness: `status`, `sessions`,
+`descriptions_version` and `build_sha`.
+
 ## The eviction fence
 
 ```
-aion evict [status | disarm] [--yes]
+aion evict [status | disarm | rearm] [--yes]
 ```
 
 Eviction is built and fenced on every substrate. While the fence is closed, eligibility answers

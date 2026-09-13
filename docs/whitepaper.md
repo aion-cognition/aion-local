@@ -57,8 +57,11 @@ that absence shows.
 A fact that turns out to be wrong is still something the substrate believed, and that record is
 how an agent explains why it once reasoned the way it did. So correcting a fact supersedes it:
 the old node's intervals close and `(new)-[:SUPERSEDES]->(old)` is written in the same
-transaction. Nothing is hard-deleted here, and a repo-wide test fails the build on any Cypher
-delete.
+transaction. Interpretation is never deleted, and a repo-wide test fails the build on any Cypher
+delete outside the three files it pins by name. One of those three is the exception, and it is
+bounded to the raw layer: `episode_evict` removes an Episode or Turn projection once a published
+narrative covers it and the experience archive still holds the captured parts, so the record
+outlives the projection. `aion evict status | disarm | rearm` is the operator's fence over it.
 
 That is also why every node carries two time intervals rather than one. World time
 (`valid_from` / `valid_until`) is when the fact was true. System time (`tx_from` / `tx_until`)
@@ -67,16 +70,29 @@ what this system thought last month. One interval cannot answer both, and the ga
 two answers is where a correction lives.
 
 Default recall does not filter superseded knowledge out. It labels it. Every returned item
-carries `current`, `superseded`, or `expired`; a superseded item carries a pointer to what
-replaced it and when, and an expired one has aged past the `valid_horizon` it was written
-with, down-ranked rather than dropped. Filtering it would make the substrate look like it had
-always been right. `aion forget` is the one suppression and still not a deletion: it sets
-`forgotten_at`, default recall stops serving the node, and a time-travel read still returns
-it.
+carries `current`, `superseded`, or `expired`. A superseded item carries a pointer to what
+replaced it and when, and ranks at half weight wherever it competes with the current fact. An
+expired one has aged past the `valid_horizon` it was written with; on the read path the horizon
+only changes the label, so an aged-out reading ranks normally and still says what it measured. A
+standing intention is the one exception: once its horizon passes it stops triggering, because
+volunteering a plan whose own date has gone by is where a label arrives too late. Filtering
+superseded knowledge out would make the substrate look like it had always been right.
+`aion forget` is the one suppression and still not a deletion: it sets `forgotten_at`, default
+recall stops serving the node, and a time-travel read still returns it.
 
 An empty pack is an honest answer. Nothing relevant is stored, and that is not a failure. The
 admission floors exist so a pack can come back empty rather than padded with weak matches the
 agent then reasons from.
+
+A refusal is the other honest answer, and it is not an empty pack. A time-travel read pinned
+before the substrate's history floor, or a `knew_at` later than the request clock, comes back as
+`coverage_refusal` rather than as a pack, naming one of four reasons: `before_horizon`,
+`future_knowledge`, `coverage_store_unavailable`, `coverage_changed`. It carries what was asked
+and the bounds it was judged against, so the caller can correct the request without a second
+round trip. The first two are settled before a session is resolved and before any provider call,
+so such a request costs nothing; the other two can also arrive at the end of a read that already
+did its work, and a refusal never says the work did not happen. A pack with no items says the
+opposite thing, which is why the two are separate shapes.
 
 ## The three loops
 
@@ -84,8 +100,9 @@ Three loops run over one graph, and their separation is a correctness requiremen
 
 **Recall constructs.** It is synchronous and sits inside the agent's reasoning cycle: cue
 extraction, seed selection, spreading activation, fusion, resonance, pack assembly, all inside
-a time and token budget. As a side effect it nominates the pairs that co-activated, off the
-latency path. Remembering strengthens the pathways that made remembering possible.
+a time and token budget. As a side effect it nominates the pairs that fired together and whose
+ends both reached the pack the caller was handed, off the latency path. Remembering strengthens
+the pathways that made remembering possible.
 
 **Reflection distills.** It is asynchronous and runs after an episode is durably stored, from a
 queue row. It extracts entities, deduplicates them against the graph, infers associations,
@@ -115,9 +132,12 @@ embedding of its text. The context vector encodes what it connects to, a strengt
 of its neighbors' content vectors, recomputed when the neighborhood changes.
 
 Resonance is a second retrieval pass over that second index. After the first pass anchors, the
-activation-weighted mean of the activated set's context vectors becomes a query against the
-context index, excluding everything the first pass already produced. What comes back lives in a
-similar relational neighborhood while its words may share nothing with the query.
+activation-weighted mean of the context vectors of the items it actually admitted becomes a
+query against the context index, excluding everything the first pass already produced. Averaging
+the whole activated set instead lands near the substrate's center of mass and answers a nonsense
+query as readily as a real one, so the centroid is built from the anchors and nothing else. What
+comes back lives in a similar relational neighborhood while its words may share nothing with the
+query.
 
 The mechanism models a familiar experience. You think about a project deadline, and a memory of
 a different project surfaces, one with similar team structure and similar pressure. The content
@@ -200,7 +220,9 @@ it.
 That is a rule. Degradation here means doing less inference, never switching to heuristics. A
 keyword fallback looks like resilience and is not: it silently answers a different question
 from the one the pipeline was built around, at the moment the caller can least tell. So the
-fallback is a single raw-query cue, and the pack records that it degraded.
+fallback is the caller's own text verbatim: a raw-query cue, plus the summary at its damped
+weight when one was sent. Nothing derives terms from either, and the pack records that it
+degraded.
 
 Redaction is the one place inference is deliberately not used: credential detection is
 deterministic and rule-based, because a leak cannot wait on a model's judgment.
@@ -227,10 +249,13 @@ context resonance, bounded reinforcement and bell-curve decay with a floor, the 
 maintenance loop, idempotent consolidation through an operations ledger, and the MemoryPack
 contract all carry over.
 
-The surface is two MCP tools, `recall` and `reflection`. Neo4j holds the graph and its vector
-indexes. SQLite holds the reflection queue, the append-only experience archive `aion replay`
-and `aion timeline` read back, the insert-only usage stream that records what recall and the
-weight sweeps did, the operations ledger, the proposal queues, and the last-pack cache.
+The surface is four MCP tools. `recall` and `reflection` are the memory contract; `source_search`
+and `source` read the captured record behind it, which is what stays answerable after a graph
+projection is gone. Neo4j holds the graph and its vector and full-text indexes. SQLite holds the
+reflection queue, the append-only experience archive `aion replay` and `aion timeline` read back,
+the full-text index over captured parts that `source_search` queries, the insert-only usage
+stream that records what recall and the weight sweeps did, the operations ledger, the proposal
+queues, and the last-pack cache.
 Generation runs on Ollama on the host. Set an Anthropic key and the two
 generation roles, cue extraction and reflection, route to Haiku instead of the local instruct
 model. Embeddings stay local either way, because the vector space is the substrate.
@@ -253,7 +278,7 @@ Where this build differs from the paper:
   They are the section above.
 - **Some tuned values disagree with the paper's appendix** (the episode cap, the summary cue
   weight, the cue-call budget), each on a measurement `architecture.md` records.
-- **Twenty-eight maintenance operations are registered**, and two the paper names are not,
+- **Thirty-one maintenance operations are registered**, and two the paper names are not,
   each for a reason `architecture.md` gives. Entity unmerge sits outside the catalog on
   purpose, since a bad merge and a correct one have the same shape in the graph.
 - **A third implementation.** The paper describes two, TypeScript and Go, both multi-tenant

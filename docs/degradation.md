@@ -32,7 +32,7 @@ keyed to `AION_CUE_BUDGET_MS`; an abort is classified `timeout`, anything else
 `CueModelOutputSchema.safeParse` is `invalid_output` (`cues.ts:321-325`). All three call
 `degradedResult`, which builds cues from the caller's own query and summary text verbatim
 (query at weight 3, summary at weight 1) and never derives terms from it (`cues.ts:242-256`).
-Only a successful extraction is cached (`cues.ts:334`), so a degraded call never poisons a
+Only a successful extraction is cached (`cues.ts:326`), so a degraded call never poisons a
 later one for the same input.
 
 **What the caller sees.** A normal `MemoryPack`. `metadata.degraded` carries one entry:
@@ -49,8 +49,8 @@ introspection loop reads the same number off the health snapshot.
 
 **Recovers.** Automatically, next call. No state to reset.
 
-Verified by the unit suite, not live-induced: `cues.test.ts:154` (a degraded result is
-never cached), `:225` and `:234` (both `invalid_output` shapes), `:247` (timeout). 37/37
+Verified by the unit suite, not live-induced: `cues.test.ts:202` (a degraded result is
+never cached), `:292` and `:305` (both `invalid_output` shapes), `:326` (timeout). 43/43
 pass (`npx vitest run --project unit packages/core/src/recall/application/cues.test.ts`).
 
 ### Full Ollama outage: recall
@@ -62,7 +62,7 @@ the embedding call fail.
 (`packages/core/src/recall/application/stage-reads.ts:50-69`) then tries to embed the
 degraded cues, fails, and returns them without vectors, logging `cue embedding failed`
 (`stage-reads.ts:58`). `handleRecall` collects every rung that fired, in stage order, into
-one list (`recall.ts:279-291`). With no vectors, BM25, entity resolution, recency, and
+one list (`recall.ts:208-217`). With no vectors, BM25, entity resolution, recency, and
 graph traversal carry the recall alone.
 
 **What the caller sees.** A `MemoryPack` with `metadata.degraded` holding **two** entries:
@@ -86,15 +86,20 @@ in the same request. `aion last` prints two `degraded` lines.
 it after the write transaction has already committed (`intake.ts:291`, the `attachVectors`
 call).
 
-**What happens.** Nothing, to the experience. `storeEpisode` commits the `Episode`, its
-`Turn` nodes, and every backbone edge with no `content_vec` property at all, inside one
-write transaction (`reflection/application/experience-store.ts:125-172`); `archiveAndQueue`
-inserts the integrate job and `notifyEnqueued` wakes the worker (`intake.ts:261-275`); only
-then does `attachVectors` embed (`intake.ts:291`). The call throws, is caught inside
-`attachVectors` itself, logged as `content vectors deferred; the episode is stored and
-queued`, and intake returns normally (`intake.ts:199-211`). A `:Memory` node without
-`content_vec` is itself the pending marker; there is no flag property to keep in sync with
-it (`packages/core/src/infrastructure/graph/pending-vectors.ts`).
+**What happens.** Nothing, to the experience. `projectEpisodeInTransaction` commits the
+`Episode`, its `Turn` nodes, and every backbone edge with no `content_vec` property at all,
+run from the publication's graph-apply phase
+(`reflection/application/experience-store.ts:126-168`, called from `applyGraph` at
+`reflection/application/intake-publication.ts:396`); `enqueueSourceWork`, inside the
+publication's `acknowledgeSqlite` phase, inserts the integrate job
+(`reflection/application/intake-publication.ts:481`), and `notifyEnqueued` wakes the worker
+(`intake.ts:113-127`, called at `intake.ts:329`); only then does `attachVectors` embed
+(`intake.ts:291`). The call throws, is caught inside `attachVectors` itself, logged as
+`content vectors deferred; the episode is stored and queued`, and intake returns normally
+(`intake.ts:199-211`). A `:Memory` node without `content_vec` is itself the pending marker;
+there is no flag property to keep in sync with it
+(`packages/core/src/infrastructure/graph/pending-vectors.ts`). The older `storeEpisode` path
+in `experience-store.ts` still exists, but now serves only `aion replay`, not live intake.
 
 **What the caller sees.** The ordinary ack, `{episode_id, queued: true}`. No MCP error.
 `ReflectionNotStoredError` no longer has an `embed` stage at all: the only way intake can
@@ -211,16 +216,16 @@ the service: routing is resolved once, at boot.
 **Trigger.** The graph is unreachable mid-service: stopped, network-partitioned, or
 otherwise not answering Bolt.
 
-**What happens.** All four seed strategies (`vector`, `bm25`, `entity_resolution`,
-`recency`) issue their Cypher independently and in parallel; each per-strategy failure is
-isolated by `settle()`, which contributes nothing rather than failing the call
+**What happens.** All five seed strategies (`vector`, `context_vector`, `bm25`,
+`entity_resolution`, `recency`) issue their Cypher independently and in parallel; each
+per-strategy failure is isolated by `settle()`, which contributes nothing rather than failing the call
 (`packages/core/src/recall/application/seeds.ts:186-203`). `selectSeeds` also counts
 attempts and rejections across every leg: when every query issued was rejected, it sets
 `graphUnavailable: true` and logs `every seed query failed; treating the graph as
 unavailable` (`seeds.ts:411-414`). The recency leg always issues exactly one query, which
 is what makes "nothing attempted" distinguishable from "everything rejected."
 `handleRecall` turns that flag into `{stage: "graph", reason: "unavailable"}`
-(`recall.ts:284`). With zero seeds, activation short-circuits
+(`recall.ts:215-216`). With zero seeds, activation short-circuits
 (`recall.ts:294-296`) and the pack assembles empty.
 
 **What the caller sees.** `metadata.degraded: [{stage: "graph", reason: "unavailable"}]`.

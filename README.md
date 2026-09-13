@@ -1,8 +1,9 @@
 # Aion Local
 
-Aion Local is a local-first cognitive memory substrate for AI coding agents. It exposes two
-MCP tools, `recall` and `reflection`, backed by a Neo4j graph, a SQLite queue, and Ollama
-models running on the host. Agents that use it remember: what a session stored, a later
+Aion Local is a local-first cognitive memory substrate for AI coding agents. It exposes four
+MCP tools, `recall` and `reflection` for memory, `source_search` and `source` for reading the
+captured archive directly, backed by a Neo4j graph, a SQLite queue, and Ollama models running
+on the host. Agents that use it remember: what a session stored, a later
 session recalls, with the decisions, the reasons, and the corrections intact.
 
 Memory here is a process, not storage. Recall constructs context instead of searching for
@@ -114,7 +115,7 @@ block in the `config.toml` beside it. The hook client runs on host Node from
 cannot read exits 0 and the turn proceeds. See [docs/harness.md](docs/harness.md) for what
 each hook does, what codex does differently, and the settings JSON for a manual install.
 
-## The two tools
+## The memory tools
 
 **recall** searches persistent memory and returns a `MemoryPack`: facts, episodes,
 narratives, standing intentions a trigger condition brought back, and resonant associations,
@@ -129,6 +130,9 @@ executions, and observations; credentials are redacted before anything is writte
 resending the same payload returns the original episode instead of a duplicate. The call
 returns as soon as the episode is durably stored... enrichment runs behind it, interactive
 work first, bulk imports behind that.
+
+The other two tools, `source_search` and `source`, read the captured archive directly rather
+than the graph: the same two jobs as the CLI's `source-search` and `source` commands below.
 
 ## CLI
 
@@ -151,12 +155,15 @@ does not work and says so: the CLI orchestrates the repo it lives in.
 - `last`: the last MemoryPack served per session, with rationale
 - `why`: provenance, lineage, and open proposals for one node
 - `search`: direct hybrid search through the seed layer, bypassing pack assembly
+- `source-search`: literal text against the captured archive, not the seed layer
+- `source`: the captured parts behind one source id, turn id, or part address
 - `forget`: bitemporal close of a node, by id or by query
 - `unforget`: take back a forget; the statement chain keeps both and the node serves again
 - `evict`: the destructive fence, what it reads, the stop an operator can put on it, and the lift
 - `unsupersede`: reopen a claim a supersession closed, whatever made the close
 - `queue`: inspect and triage the reflection queue
 - `replay`: put archived experiences back through the pipeline, and the usage stream back on top
+- `consolidate`: resume, inspect, or abandon a cohort's narrative migration
 - `proposals`: review judged contradictions and duplicate entities
 - `maintain`: the maintenance catalog, and forcing one operation to run now
 - `unmerge`: split an identity back out of the entity dedup absorbed it into
@@ -204,7 +211,7 @@ Where to read deeper:
 
 ```
 npm ci
-npm test                  # both vitest projects: unit, then integration
+npm test                  # three vitest projects: unit, then integration, then integration-ollama
 npm run test:unit         # no external services required
 npm run test:integration  # needs Docker (one throwaway Neo4j per run) and host Ollama
 npm run build             # tsc -b across the workspace
@@ -238,7 +245,7 @@ it scores either route and only its assertion about the shipped default stays ke
 
 The substrate is complete and in daily use: provisioning, capture, recall with the full MCP
 surface, the reflection pipeline, Hebbian reinforcement and decay, the introspection loop
-scheduling twenty-eight maintenance operations, per-role Anthropic routing with model
+scheduling thirty-one maintenance operations, per-role Anthropic routing with model
 reconciliation, the harness hooks, and the CLI above. Unit tests pass deterministically; the
 integration suite runs against a live Neo4j and host Ollama. Engrams, described in the
 whitepaper, are designed and not yet built, and the `preferences` pack bucket has no producer
