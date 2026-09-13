@@ -156,7 +156,7 @@ describe('readGeneration', () => {
     });
     recordGenerationOutcome(store.db, {
       role: 'cue',
-      provider: 'ollama',
+      provider: 'anthropic',
       ok: true,
       durationMs: 300,
     });

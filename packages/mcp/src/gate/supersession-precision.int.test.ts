@@ -46,27 +46,18 @@ import {
  * not deterministic, so a measurement that lands on the bar can flap; that is the cost of a
  * gate that measures rather than remembers.
  *
- * The route is named in the output rather than assumed. With a key in the environment the
- * reflect role routes to Anthropic, which is the route the service runs on; setting
- * `TEST_AION_GENERATION=local` pins the role to Ollama here so the same pairs can be read
- * against the local model for the comparison.
+ * The route is named in the output rather than assumed: with a key in the environment the
+ * reflect role reaches the model the service runs on, and with none it reaches nothing.
  *
  * What this measures is the judge, on well-formed pairs. It is an upper bound on what the
  * stage can do: candidate generation hands the judge pairs that no ground truth covers, and
  * those only ever add false positives.
  */
 
-/**
- * The local route measures the same pairs against the small model. It needs no key, so the
- * absent-key skip does not apply to it, and the shipped default it would call for is not a
- * statement about the route the service runs on.
- */
-const LOCAL_ROUTE = process.env.TEST_AION_GENERATION === 'local';
-
 const JUDGE_TIMEOUT_MS = 120_000;
 
-/** Both passes over both sets, at roughly a second or two per remote call and ten times that locally. */
-const BATTERY_DEADLINE_MS = LOCAL_ROUTE ? 3_600_000 : 900_000;
+/** Both passes over both sets, at roughly a second or two a call. */
+const BATTERY_DEADLINE_MS = 900_000;
 
 /** The pre-registered bar, on both halves. */
 const PRECISION_BAR = 0.9;
@@ -116,7 +107,6 @@ let retro: RetroScore[] = [];
 
 function batteryConfig(): Config {
   const apiKey = process.env.AION_ANTHROPIC_API_KEY ?? '';
-  const local = process.env.TEST_AION_GENERATION === 'local';
   return {
     ...DEFAULTS,
     ollama: {
@@ -124,7 +114,6 @@ function batteryConfig(): Config {
       url: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
     },
     anthropic: { ...DEFAULTS.anthropic, apiKey },
-    routing: { ...DEFAULTS.routing, reflect: local ? 'ollama' : DEFAULTS.routing.reflect },
   };
 }
 
@@ -268,14 +257,13 @@ beforeAll(async () => {
   retro = retroRows;
 }, BATTERY_DEADLINE_MS);
 
-describe.skipIf(REMOTE_JUDGE_ABSENT && !LOCAL_ROUTE)('the 24-case supersession battery', () => {
+describe.skipIf(REMOTE_JUDGE_ABSENT)('the 24-case supersession battery', () => {
   it('names the route it measured, so the number belongs to a model', () => {
     const route = router.routing.roles.reflect;
     const resolved = resolveProviderRouting(config).roles.reflect;
 
     console.log(
-      `supersession battery route: provider ${route.provider}, model ${route.model}, ` +
-        `reason ${route.reason}, local tag ${route.localModel}`,
+      `supersession battery route: model ${route.model}, available ${String(route.available)}`,
     );
 
     expect(route).toEqual(resolved);
@@ -410,11 +398,8 @@ describe.skipIf(REMOTE_JUDGE_ABSENT && !LOCAL_ROUTE)('the 24-case supersession b
    * The pre-registered rule, asserted rather than described. It fails in both directions: a
    * judge that drops under either bar while the shipped default is still `unanimous` fails
    * here, and so does a judge that clears both while the default stays `propose`.
-   *
-   * The shipped default belongs to the route the service runs on, so a local-route run reports
-   * its numbers above and decides nothing here.
    */
-  it.skipIf(LOCAL_ROUTE)('ships the default the measurement calls for', () => {
+  it('ships the default the measurement calls for', () => {
     const two = count(scored, closes);
     const meets = two.precision >= PRECISION_BAR && two.recall >= RECALL_BAR;
     const expected = meets ? 'unanimous' : 'propose';

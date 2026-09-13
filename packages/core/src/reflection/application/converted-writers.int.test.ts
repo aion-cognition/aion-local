@@ -36,6 +36,12 @@ import {
 import { readGenerationWork } from '../../infrastructure/sqlite/source-readiness.js';
 import { SessionManager } from '../../session/session-manager.js';
 
+/** Nothing in this battery generates or embeds; a call that reaches it is a fault the test wants to see. */
+const batteryEmbedder = {
+  embed: (): Promise<never[]> => Promise.reject(new Error('no embedding in this battery')),
+  generate: (): Promise<never> => Promise.reject(new Error('no generation in this battery')),
+};
+
 /**
  * The two converted writers, driven through a real coordinator against real stores.
  *
@@ -133,17 +139,11 @@ beforeAll(async () => {
       memberId: backbone.member.id,
       workspaceId: backbone.workspace.id,
     }),
-    // Never called: intake embeds after acknowledgment and every case here asserts before that.
-    provider: {
-      embed: () => Promise.reject(new Error('no embedding in this battery')),
-      generate: () => Promise.reject(new Error('no generation in this battery')),
-    },
     publications: coordinator,
     logger,
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
-    acceptHookCapture: true,
   };
 }, 120_000);
 
@@ -220,7 +220,7 @@ it('settles a finished run through the coordinator and clears its queue row', as
     {
       driver: substrate.harness.driver,
       db: store.db,
-      provider: intake.provider,
+      provider: batteryEmbedder,
       runner: new StubRunner(),
       logger: intake.logger,
       publications: coordinator,
@@ -292,7 +292,7 @@ it('drains the source-index rows nothing else claims, and settles their obligati
     {
       driver: substrate.harness.driver,
       db: store.db,
-      provider: intake.provider,
+      provider: batteryEmbedder,
       runner: new StubRunner(),
       logger: intake.logger,
       publications: coordinator,
@@ -333,7 +333,7 @@ it('leaves a run claimable when its completion is interrupted before the acknowl
     {
       driver: substrate.harness.driver,
       db: store.db,
-      provider: intake.provider,
+      provider: batteryEmbedder,
       runner: new StubRunner(),
       logger: intake.logger,
       publications: coordinator,

@@ -5,6 +5,7 @@ import {
   checkedRecallDeps,
   CueCache,
   deleteServedItems,
+  GenerationSpendGuard,
   GraphConnection,
   handleReflection,
   IdleNarrativeSweeper,
@@ -34,7 +35,6 @@ import {
   readMemberName,
   RecallSideEffects,
   recordGenerationOutcome,
-  recordLifecycleEvent,
   ReflectionOrchestrator,
   reflectionStages,
   ReflectionWorker,
@@ -43,7 +43,6 @@ import {
   SessionManager,
   SessionNarrativeCloser,
   SqliteStore,
-  unbackedPins,
   workerOptions,
   type Config,
   type Logger,
@@ -200,8 +199,16 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       workspaceId: backbone.workspace.id,
     });
 
+    // One guard for the process, over the substrate's own store: the reflect role, the cue role
+    // and the batch pump all hold against the same day. It is the store rather than the instance
+    // that shares it, so a second process and a restart read the same committed total.
+    const spending = new GenerationSpendGuard({
+      db: store.db,
+      ceilingUsd: config.anthropic.dailyCeilingUsd,
+    });
     const router = new ProviderRouter({
       config,
+      spending,
       recordApiCall: new ApiUsageRecorder(store.db, logger).recordApiCall,
       onGeneration: (event) => {
         logger.debug({ generation: event }, 'generation routed');
@@ -222,13 +229,13 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       { routing: router.routing.roles },
       `provider routing: ${routingSummary(router.routing)}`,
     );
-    for (const route of unbackedPins(router.routing)) {
+    if (!router.routing.keyPresent) {
       logger.warn(
-        { role: route.role },
-        `${route.role} is pinned to anthropic with no AION_ANTHROPIC_API_KEY set; routing it to ${route.localModel} instead`,
+        'no AION_ANTHROPIC_API_KEY is set: capture, embedding and recall run, and every ' +
+          'generation stays queued until a key is set',
       );
     }
-    const reconciliation = await reconcileModels(config, router, logger);
+    await reconcileModels(config, logger);
     // Deliberately not awaited: binding the port never waits on Ollama, and an early recall
     // queues behind the same model load either way.
     void warmEmbedModel(router.embedder, logger);
@@ -303,8 +310,6 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       sessions,
       // The one path an accepted payload reaches either store by.
       publications,
-      // Intake only embeds, so the role it borrows changes nothing about where its calls go.
-      provider: reflectProvider,
       onJobEnqueued: () => {
         reflectionWorker.wake();
       },
@@ -317,21 +322,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       // Hooks are route-agnostic: the local route digests a capture, slower and free. The gate
       // stays in the intake type for a deployment that wants to shut hook capture off on its own
       // terms, and the service no longer decides it from the routing.
-      acceptHookCapture: true,
     };
-    // A boot that unloaded a model changed what the substrate runs on, which is worth
-    // remembering; a boot that found nothing resident changed nothing. Recorded through the
-    // intake deps above, and not awaited for the reason the embed warm-up is not: binding the
-    // port never waits on Ollama.
-    if (reconciliation !== undefined && reconciliation.evicted.length > 0) {
-      void recordLifecycleEvent(intake, {
-        event: 'models_reconciled',
-        text:
-          `boot reconciled resident models: ${reconciliation.detail}. ` +
-          `Routing is now ${routingSummary(router.routing)}`,
-      });
-    }
-
     if (stages.length > 0) {
       // The drain runs alongside the first tool calls rather than in front of them: a long
       // backlog would otherwise hold the service off the port it is supposed to be answering.

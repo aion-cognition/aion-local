@@ -27,7 +27,10 @@ import type { Provider } from '../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { handleReflection } from '../../reflection/application/intake.js';
 import { LaneAssigner } from '../../reflection/application/lanes.js';
-import { directIntakePublisher } from '../../reflection/test-support/direct-intake.fixture.js';
+import {
+  directIntakePublisher,
+  drainAcceptedVectors,
+} from '../../reflection/test-support/direct-intake.fixture.js';
 import { SessionManager } from '../../session/session-manager.js';
 
 /**
@@ -153,19 +156,20 @@ beforeAll(async () => {
         driver: harness.driver,
         db,
         sessions,
-        provider,
         logger,
         entropyThreshold: DEFAULTS.redaction.entropyThreshold,
         lanes: new LaneAssigner(DEFAULTS.lanes),
         workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
         publications: directIntakePublisher(harness.driver, db),
-        acceptHookCapture: true,
       },
       { observations: [episode.observation] },
       { identity: WRITE_SESSION, now: new Date(STORED_AT.getTime() + index * 60_000) },
     );
     storedIds.set(episode.id, result.episode_id);
   }
+  // Intake queues the embedding rather than performing it, so the fixture runs the row the
+  // worker would run: this battery measures the vector floors, which need the vectors.
+  await drainAcceptedVectors(harness.driver, provider);
 
   // Both indexes are eventually consistent, and a probe that runs while one is still catching
   // up measures index lag rather than the floor. Every episode is checked, not a sample:

@@ -340,12 +340,7 @@ describe('the disclosed path-strength lane', () => {
 
   it('bounds the lane to its own slot count, strongest activation first', () => {
     const result = fuse(
-      [
-        list('graph_traversal', [
-          pathOnlyArrival('weaker', 0.3),
-          pathOnlyArrival('stronger', 0.5),
-        ]),
-      ],
+      [list('graph_traversal', [pathOnlyArrival('weaker', 0.3), pathOnlyArrival('stronger', 0.5)])],
       { ...RRF, admission: CALIBRATED, pathStrengthSlots: 1 },
     );
 

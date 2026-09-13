@@ -142,7 +142,7 @@ function settingsOf(options: ConsolidationOptions, provider: Provider): Consolid
     options.reflection ?? DEFAULTS.reflection,
   );
   return {
-    model: options.model ?? DEFAULTS.models.reflect,
+    model: options.model ?? DEFAULTS.anthropic.model,
     timeoutMs: options.timeoutMs ?? DEFAULTS.reflection.stageTimeoutMs,
     subjectLimit: options.subjectLimit ?? DEFAULT_CONSOLIDATION_SUBJECTS,
     memberLimit: options.memberLimit ?? DEFAULT_CONSOLIDATION_MEMBERS,

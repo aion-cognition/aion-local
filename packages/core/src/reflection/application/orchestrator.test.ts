@@ -76,12 +76,16 @@ describe('ReflectionOrchestrator', () => {
 
     expect(episodeReads()).toBe(1);
     expect(contexts).toHaveLength(2);
-    expect(contexts[0]).toBe(contexts[1]);
+    // One reading of the episode, shared whole. The provider is the one field that is per stage:
+    // each gets a watcher over the same backend, so a refusal one stage was given is recorded
+    // against that stage rather than against whichever ran next.
+    expect(contexts[0]?.episode).toBe(contexts[1]?.episode);
+    expect(contexts[0]?.provider).not.toBe(contexts[1]?.provider);
 
     const context = contexts[0]!;
     expect(context.episodeId).toBe(EPISODE_ID);
     expect(context.now).toBe(NOW);
-    expect(context.provider).toBe(provider);
+    expect(context.provider.route).toBe(provider.route);
     expect(context.db).toBe(store.db);
     expect(context.episode.sessionId).toBe(SESSION_ID);
     expect(context.episode.summary).toBe('shipping the worker');

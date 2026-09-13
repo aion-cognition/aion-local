@@ -72,7 +72,7 @@ describe('the sampling the harness extractors ask for', () => {
  */
 describe('the system prompt each harness route sends', () => {
   it('sends the local entity prompt on the Ollama route', async () => {
-    const { deps, requests } = recording({ entities: [] }, { provider: 'ollama' });
+    const { deps, requests } = recording({ entities: [] }, { provider: 'anthropic' });
 
     await extractEntitiesViaProvider(deps, TEXT);
 
@@ -88,7 +88,7 @@ describe('the system prompt each harness route sends', () => {
   });
 
   it('sends the local cognitive prompt on the Ollama route', async () => {
-    const { deps, requests } = recording({ nodes: [] }, { provider: 'ollama' });
+    const { deps, requests } = recording({ nodes: [] }, { provider: 'anthropic' });
 
     await extractCognitiveViaProvider(deps, TEXT);
 

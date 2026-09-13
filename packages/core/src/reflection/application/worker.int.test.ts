@@ -188,22 +188,30 @@ let db: SqliteHandle;
 let dataDir: string;
 let logger: Logger;
 let live: ReflectionIntakeDeps;
-let deadOllama: ReflectionIntakeDeps;
+let embedder: OllamaProvider;
+let deadEmbedder: OllamaProvider;
 let worker: ReflectionWorker | undefined;
+
+/** The recording stage generates nothing, so the pipeline's provider only has to exist. */
+const stageProvider = {
+  embed: (): Promise<never[]> => Promise.reject(new Error('no embedding in the pipeline')),
+  generate: (): Promise<never> => Promise.reject(new Error('no generation in this battery')),
+};
 
 function buildWorker(
   stage: ReflectionStage,
   options: ReflectionWorkerOptions = {},
+  workerEmbedder: OllamaProvider = embedder,
 ): ReflectionWorker {
   const runner = new ReflectionOrchestrator(
-    { driver: harness.driver, db, provider: live.provider, logger },
+    { driver: harness.driver, db, provider: stageProvider, logger },
     [stage],
   );
   worker = new ReflectionWorker(
     {
       driver: harness.driver,
       db,
-      provider: live.provider,
+      provider: workerEmbedder,
       runner,
       logger,
       publications: directCompletionPublisher(harness.driver, db),
@@ -242,7 +250,6 @@ beforeAll(async () => {
       memberId: backbone.member.id,
       workspaceId: backbone.workspace.id,
     }),
-    provider: new OllamaProvider({ baseUrl: OLLAMA_URL, embedModel: DEFAULTS.models.embed }),
     // Late-bound on purpose: the worker under test is rebuilt per case, and intake wakes
     // whichever one is current.
     onJobEnqueued: () => {
@@ -253,12 +260,12 @@ beforeAll(async () => {
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
     publications: directIntakePublisher(harness.driver, db),
-    acceptHookCapture: true,
   };
-  deadOllama = {
-    ...live,
-    provider: new OllamaProvider({ baseUrl: DEAD_OLLAMA_URL, embedModel: DEFAULTS.models.embed }),
-  };
+  embedder = new OllamaProvider({ baseUrl: OLLAMA_URL, embedModel: DEFAULTS.models.embed });
+  deadEmbedder = new OllamaProvider({
+    baseUrl: DEAD_OLLAMA_URL,
+    embedModel: DEFAULTS.models.embed,
+  });
 }, 300_000);
 
 afterEach(async () => {
@@ -292,17 +299,25 @@ describe('a reflection signalled while the worker is listening', () => {
 });
 
 describe('a start after an outage and a crash', () => {
-  it('embeds what was left pending and runs the row nothing ever claimed', async () => {
-    const stored = await handleReflection(deadOllama, DRAIN_PAYLOAD, { identity: DRAIN_IDENTITY });
+  it('embeds what an outage left pending and runs the row nothing ever claimed', async () => {
+    const stored = await handleReflection(live, DRAIN_PAYLOAD, { identity: DRAIN_IDENTITY });
+
+    // The outage is at the embedder. The first start enriches the episode and cannot vector it,
+    // so the pending markers survive and the vector row goes back on its backoff.
+    const first = new RecordingStage();
+    const outage = await buildWorker(first, {}, deadEmbedder).start();
+    expect(outage.ran).toBe(1);
+    expect(outage.vectored).toBe(0);
+    expect(first.episodes).toEqual([stored.episode_id]);
+    await worker?.stop();
+
     const pendingBefore = await findPendingVectorNodes(harness.driver, 50);
     expect(pendingBefore.map((node) => node.id)).toContain(stored.episode_id);
 
-    const stage = new RecordingStage();
-    const drain = await buildWorker(stage).start();
+    // The second start finds the backlog on its way up and clears it.
+    const drain = await buildWorker(new RecordingStage()).start();
 
     expect(drain.vectored).toBe(pendingBefore.length);
-    expect(drain.ran).toBe(1);
-    expect(stage.episodes).toEqual([stored.episode_id]);
     expect(await findPendingVectorNodes(harness.driver, 50)).toEqual([]);
 
     const vector = (await nodeProperties(harness.driver, stored.episode_id)).content_vec;
@@ -387,6 +402,8 @@ describe('workerCount above 1', () => {
     expect(stage.entries.slice().sort()).toEqual([storedA.episode_id, storedB.episode_id].sort());
 
     stage.release();
+    await started.whenIdle();
+    // Twice: the vector rows are claimed from the settle of the runs this just awaited.
     await started.whenIdle();
 
     expect(stage.entries).toHaveLength(2);

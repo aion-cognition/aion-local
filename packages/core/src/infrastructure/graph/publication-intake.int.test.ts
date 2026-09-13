@@ -141,7 +141,11 @@ it('mints one source, projects it, and only then makes its work claimable', asyn
   expect(listReferenceBatches(store.db, sourceId)).toHaveLength(1);
   expect(readSessionRemainder(store.db, sessionId)).toBeDefined();
   const jobs = listReflectionJobs(store.db).filter((job) => job.episodeId === sourceId);
-  expect(jobs.map((job) => job.jobType).sort()).toEqual(['integrate', 'source_index']);
+  expect(jobs.map((job) => job.jobType).sort()).toEqual([
+    'attach_vectors',
+    'integrate',
+    'source_index',
+  ]);
 });
 
 it('keeps the queue empty and the generation inactive until the acknowledgment runs', async () => {
@@ -184,7 +188,7 @@ it('resumes the ids it already minted when the graph write never happened', asyn
   const sourceId = beforeRetry[0] ?? '';
   expect(await episodeIdsInSession(substrate.harness.driver, sessionId)).toContain(sourceId);
   expect(listReferenceBatches(store.db, sourceId)).toHaveLength(1);
-  expect(listReflectionJobs(store.db).filter((job) => job.episodeId === sourceId)).toHaveLength(2);
+  expect(listReflectionJobs(store.db).filter((job) => job.episodeId === sourceId)).toHaveLength(3);
 });
 
 it('converges two identical first acceptances on one source and one part set', async () => {

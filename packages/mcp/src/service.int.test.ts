@@ -31,15 +31,11 @@ import { bootstrapService, type AionService } from './bootstrap.js';
 import { HEALTH_PATH, MCP_PATH } from './http.js';
 
 /**
- * The authorized key, read the way `testGenerationProvider` reads it, including its
- * `TEST_AION_GENERATION=local` kill switch. Passed only into the service environment this
- * fixture builds: the literal it used to build had no key field at all, so a keyed run of this
- * root silently generated on the local route and discharged nothing.
+ * The authorized key, read the way `testGenerationProvider` reads it. Passed only into the
+ * service environment this fixture builds: the literal it used to build had no key field at
+ * all, so a keyed run of this root generated nothing and discharged nothing.
  */
-const ANTHROPIC_API_KEY =
-  process.env.TEST_AION_GENERATION === 'local'
-    ? undefined
-    : (process.env.AION_ANTHROPIC_API_KEY ?? '').trim() || undefined;
+const ANTHROPIC_API_KEY = (process.env.AION_ANTHROPIC_API_KEY ?? '').trim() || undefined;
 
 /**
  * The whole surface at once: the real assembly from `bootstrapService`, a throwaway Neo4j,

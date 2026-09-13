@@ -311,14 +311,14 @@ export const StageTimingsMsSchema = z.strictObject({
 export type StageTimingsMs = z.infer<typeof StageTimingsMsSchema>;
 
 /**
- * Recall has three legs that can drop out without failing the call: the cue model,
- * the embedding call, and the graph. A consumer cannot tell any of them from the items
- * alone because a pack thinned by an outage reads exactly like a pack thinned by a
- * query nothing matches. Each rung that fired names itself here. The field stays absent
- * on a normal run.
+ * Recall has three legs that can drop out without failing the call: the cue model, the embedding
+ * call, and the graph. A consumer cannot tell any of them from the items alone, because a pack
+ * thinned by an outage reads exactly like a pack thinned by a query nothing matches. Each rung
+ * that fired names itself here, and the field stays absent on a normal run.
  *
- * `timeout`, `model_error`, and `invalid_output` are the inference stages' reasons.
- * `unavailable` is the graph's reason and means no seed strategy could reach it.
+ * `timeout`, `model_error` and `invalid_output` are the inference stages' reasons. `unavailable`
+ * means the leg could not run: no seed strategy reached the graph, or no key backs cue
+ * extraction, which makes the pack a raw-query pack.
  */
 export const DegradationSchema = z.strictObject({
   stage: z.enum(['cues', 'embed', 'graph']),

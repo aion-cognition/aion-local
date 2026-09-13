@@ -15,10 +15,10 @@ const OPTIONS = { model: 'test-model', timeoutMs: 5_000 };
 
 function providerReturning(
   answer: unknown,
-  route?: { readonly provider: 'ollama' | 'anthropic' },
+  route?: { readonly provider: 'anthropic' },
 ): {
   readonly generate: (request: StructuredRequest) => Promise<unknown>;
-  readonly route?: { readonly provider: 'ollama' | 'anthropic' };
+  readonly route?: { readonly provider: 'anthropic' };
   readonly requests: StructuredRequest[];
 } {
   const requests: StructuredRequest[] = [];

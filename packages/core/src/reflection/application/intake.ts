@@ -1,8 +1,4 @@
-import {
-  ReflectionInputSchema,
-  ReflectionOriginSchema,
-  type ReflectionOutput,
-} from '@aion/protocol';
+import { ReflectionInputSchema, type ReflectionOutput } from '@aion/protocol';
 
 import { ReflectionNotStoredError } from './errors.js';
 import type { ExperienceStoreDeps } from './experience-store.js';
@@ -15,11 +11,8 @@ import {
 import type { LaneAssigner, LaneDecision } from './lanes.js';
 import { recordRecallFeedback, redactFeedback } from './recall-feedback.js';
 import { redactProvenance } from './stated-references.js';
-import { attachContentVectors } from './vectors.js';
 import { isGraphUnavailable } from '../../infrastructure/graph/errors.js';
-import type { PendingVectorNode } from '../../infrastructure/graph/pending-vectors.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
-import type { Provider } from '../../infrastructure/providers/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   ARCHIVE_SCHEMA_VERSION,
@@ -34,14 +27,13 @@ import {
 } from '../../infrastructure/sqlite/reflection-queue.js';
 import { resolveSourceOccurrence } from '../../infrastructure/sqlite/source-occurrence.js';
 import { redactPayload } from '../../redaction/deep-walk.js';
-import { prepareEpisode, type PreparedEpisode } from '../domain/content.js';
+import { prepareEpisode } from '../domain/content.js';
 
 /** The one job intake enqueues. The reflection pipeline's stages fan out from it; intake never runs them. */
 export const INTEGRATE_JOB_TYPE = 'integrate';
 
 export type ReflectionIntakeDeps = ExperienceStoreDeps & {
   readonly db: SqliteHandle;
-  readonly provider: Provider;
   /**
    * The one path an accepted payload reaches either store by. Every write an acceptance makes
    * happens inside the operation this publishes, so there is no second, unfenced way in.
@@ -61,30 +53,7 @@ export type ReflectionIntakeDeps = ExperienceStoreDeps & {
   readonly lanes: LaneAssigner;
   /** `operational.workerMaxAttempts`, so `pending_ahead` counts only rows a worker will claim. */
   readonly workerMaxAttempts: number;
-  /**
-   * Whether a hook may push raw transcript windows at this service.
-   *
-   * It used to be true only on the remote route, on the reasoning that the local model spent tens
-   * of seconds an episode and a hook firing every turn would bury the queue. Local reflection
-   * measured 18.5s a call, the lane backstop is what bounds a flood, and a capture is worth
-   * storing on either route: the service passes true and the switch stays for a deployment that
-   * wants to shut hook capture off on its own terms.
-   */
-  readonly acceptHookCapture: boolean;
 };
-
-/**
- * A hook payload the service will not take is the caller's error, so it travels the path an
- * invalid payload takes and arrives as invalid params carrying its own reason. Origins the
- * client chooses deliberately (`mcp`, `cli`) and a payload naming none are untouched.
- */
-const CapturableOriginSchema = ReflectionOriginSchema.optional().refine(
-  (origin) => origin?.channel !== 'hook',
-  {
-    message:
-      'hook capture needs the keyed profile: reflection is routed to a local model. Set AION_ANTHROPIC_API_KEY and restart, or run aion hooks uninstall.',
-  },
-);
 
 export type ReflectionIntakeOptions = {
   /** The transport's session identity. `session_id` in the payload overrides it. */
@@ -127,17 +96,25 @@ function notifyEnqueued(deps: ReflectionIntakeDeps, jobId: string): void {
 }
 
 /**
- * Claimable interactive-lane rows already in the queue, measured before this call's own job
- * lands. Interactive is served strictly first (the lanes pin), so this is exactly how many
- * jobs sit ahead of a fresh interactive enqueue and, for a caller demoted to bulk, how many
- * interactive jobs it queues behind either way.
+ * Claimable interactive-lane enrichments already in the queue, measured before this call's own
+ * job lands. Interactive is served strictly first (the lanes pin), so this is exactly how many
+ * enrichments sit ahead of a fresh interactive enqueue and, for a caller demoted to bulk, how
+ * many it queues behind either way.
+ *
+ * Integrate rows only. The vector row an acceptance also writes rides the same lane and is one
+ * embed call, so adding it would double the figure without telling the caller anything about
+ * when their experience is enriched.
  *
  * Bounded by the attempt limit, so a row the claim path will never take again is not reported
  * as something to wait for: one exhausted job once made every ack say "1 job ahead" against an
  * empty queue.
  */
 function pendingAhead(db: SqliteHandle, maxAttempts: number): number {
-  return countQueueJobs(db, { lane: DEFAULT_REFLECTION_LANE }, maxAttempts).pending;
+  return countQueueJobs(
+    db,
+    { lane: DEFAULT_REFLECTION_LANE, jobType: INTEGRATE_JOB_TYPE },
+    maxAttempts,
+  ).pending;
 }
 
 /**
@@ -170,49 +147,6 @@ function queuedJob(
   };
 }
 
-/** The nodes the projection committed without a content vector, from the ids it answered with. */
-function pendingVectorNodes(
-  prepared: PreparedEpisode,
-  accepted: AcceptedSource,
-): readonly PendingVectorNode[] {
-  if (!accepted.created) {
-    return [];
-  }
-  const turns = prepared.turns.map((turn, index) => ({
-    id: accepted.turnIds[index] ?? '',
-    text: turn.text,
-  }));
-  return [{ id: accepted.sourceId, text: prepared.text }, ...turns].filter(
-    (node) => node.id !== '',
-  );
-}
-
-/**
- * The last step, and the only one allowed to fail without failing the call. Everything the
- * caller was promised is already durable: a node that ends this function without its
- * `content_vec` is a pending-vector marker the worker's drain resolves later, and until it
- * does, the episode is reachable by BM25, entity resolution, recency, and traversal: it is
- * ranking that is missing, not the memory.
- */
-async function attachVectors(
-  deps: ReflectionIntakeDeps,
-  nodes: readonly PendingVectorNode[],
-  accepted: AcceptedSource,
-  sessionId: string,
-): Promise<void> {
-  if (nodes.length === 0) {
-    return;
-  }
-  try {
-    await attachContentVectors(deps.driver, deps.provider, nodes);
-  } catch (err) {
-    deps.logger.warn(
-      { err, episodeId: accepted.sourceId, sessionId, pending: nodes.length },
-      'content vectors deferred; the episode is stored and queued',
-    );
-  }
-}
-
 /**
  * The write path. Validate, redact, resolve the session, and publish the acceptance.
  *
@@ -227,13 +161,13 @@ async function attachVectors(
  * credential reaches the hash, the embedder, the graph, or the archive: what the archive holds
  * is what the substrate holds.
  *
- * Embedding comes last on purpose: the episode and its queue row are durable before anything
- * embeds, so reflection jobs still queue while the embedding service is down. Vectors are an
- * enrichment, so an inference outage costs ranking signal until the backfill runs, never the
- * experience.
+ * Nothing here embeds. The acceptance enqueues the source's vector work beside its integrate
+ * row, so the call returns as soon as the experience is durable rather than holding the caller
+ * through a round trip to the embedding service. Until that row runs, the episode is reachable
+ * by BM25, entity resolution, recency and traversal, and recall labels what it serves.
  *
- * No generation call happens anywhere here. Extraction is the pipeline's job, and intake is
- * what makes the experience durable.
+ * No generation call happens anywhere here either. Extraction is the pipeline's job, and intake
+ * is what makes the experience durable.
  */
 export async function handleReflection(
   deps: ReflectionIntakeDeps,
@@ -242,9 +176,6 @@ export async function handleReflection(
 ): Promise<ReflectionOutput> {
   const now = options.now ?? new Date();
   const payload = ReflectionInputSchema.parse(input);
-  if (!deps.acceptHookCapture) {
-    CapturableOriginSchema.parse(payload.origin);
-  }
 
   // `session_id` and `lane` are routing, not content. Redacting an identity would fork the
   // session and break the FOLLOWS chain; leaving either in would put scheduling metadata in
@@ -344,8 +275,6 @@ export async function handleReflection(
       deps.logger.warn(laneFields, 'reflection queued in the bulk lane');
     }
   }
-
-  await attachVectors(deps, pendingVectorNodes(prepared, accepted), accepted, sessionId);
 
   if (!accepted.created) {
     // Info, not debug: a caller re-pushing an experience the substrate already holds is what

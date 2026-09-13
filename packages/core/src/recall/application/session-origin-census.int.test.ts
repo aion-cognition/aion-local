@@ -29,6 +29,7 @@ import { INSTALLED_PUBLICATION_HANDLERS } from '../../reflection/application/ins
 import { handleReflection } from '../../reflection/application/intake.js';
 import { LaneAssigner } from '../../reflection/application/lanes.js';
 import { PIPELINE_VERSION } from '../../reflection/domain/version.js';
+import { drainAcceptedVectors } from '../../reflection/test-support/direct-intake.fixture.js';
 import { SessionManager } from '../../session/session-manager.js';
 
 /**
@@ -156,17 +157,18 @@ async function push(payload: unknown, identity: string, now: Date): Promise<stri
       driver: harness.driver,
       db,
       sessions,
-      provider,
       logger,
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),
       workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
       publications: coordinator,
-      acceptHookCapture: true,
     },
     payload,
     { identity, now },
   );
+  // Intake queues the embedding rather than performing it, so the fixture runs the row the
+  // worker would run: what this file asserts on is vector search, which needs the vectors.
+  await drainAcceptedVectors(harness.driver, provider);
   return result.episode_id;
 }
 

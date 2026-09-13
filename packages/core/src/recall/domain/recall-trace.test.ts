@@ -31,9 +31,9 @@ function input(overrides: Partial<RecallTraceInput> = {}): RecallTraceInput {
     queryDigest: 'q',
     configDigest: 'c',
     route: {
-      cueProvider: 'ollama',
+      cueProvider: 'anthropic',
       cueModel: 'qwen3:8b',
-      cueReason: 'local-default',
+      cueReason: 'key',
       embedModel: 'snowflake',
     },
     seedLegs: [
@@ -141,7 +141,7 @@ describe('the stage trace', () => {
   });
 
   it('carries the route the run resolved rather than a configured alias', () => {
-    expect(buildRecallTrace(input()).route.cueReason).toBe('local-default');
+    expect(buildRecallTrace(input()).route.cueReason).toBe('key');
   });
 
   it('holds no query text, only its digest', () => {

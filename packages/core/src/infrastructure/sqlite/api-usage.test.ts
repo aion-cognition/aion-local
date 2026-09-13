@@ -61,7 +61,7 @@ afterEach(() => {
 });
 
 describe('the API call ledger', () => {
-  it('receives keyed usage through the production router without metering local calls', async () => {
+  it('receives usage through the production router, and nothing at all with no key', async () => {
     const recorder = new ApiUsageRecorder(store.db, { warn: vi.fn(), error: vi.fn() });
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response(
@@ -77,7 +77,7 @@ describe('the API call ledger', () => {
       recordApiCall: recorder.recordApiCall,
     });
     await keyed.forRole('reflect').generate({
-      model: DEFAULTS.models.reflect,
+      model: DEFAULTS.anthropic.model,
       surface: 'cognitive',
       messages: [{ role: 'user', content: 'test' }],
       schema: { type: 'object' },
@@ -90,18 +90,20 @@ describe('the API call ledger', () => {
         outputTokens: 3,
       }),
     ]);
-    fetchImpl.mockResolvedValue(new Response(JSON.stringify({ message: { content: '{}' } })));
-    const local = new ProviderRouter({
+    // A substrate with no key never reaches a billed endpoint, so the ledger stays as it was.
+    const keyless = new ProviderRouter({
       config: DEFAULTS,
       fetchImpl,
       recordApiCall: recorder.recordApiCall,
     });
-    await local.forRole('cue').generate({
-      model: DEFAULTS.models.cue,
-      surface: 'cues',
-      messages: [{ role: 'user', content: 'test' }],
-      schema: { type: 'object' },
-    });
+    await expect(
+      keyless.forRole('cue').generate({
+        model: DEFAULTS.anthropic.model,
+        surface: 'cues',
+        messages: [{ role: 'user', content: 'test' }],
+        schema: { type: 'object' },
+      }),
+    ).rejects.toThrow();
     expect(storedApiCalls(store.db)).toHaveLength(1);
   });
   it('keeps repeated calls as separate rows with all usage fields intact', () => {
@@ -111,6 +113,22 @@ describe('the API call ledger', () => {
       { id: 1, ...CALL },
       { id: 2, ...CALL },
     ]);
+  });
+
+  it('records one charge per remote request however often that request is read back', () => {
+    const batched = { ...CALL, requestId: 'msgbatch_1:pair-a', pricingTier: 'batch' as const };
+
+    expect(appendApiCall(store.db, batched)).toBe(true);
+    // The second reading is the same paid response, handed over again by a settlement pass that
+    // found the batch still holding rows.
+    expect(appendApiCall(store.db, batched)).toBe(false);
+
+    const bill = summarizeApiCalls(
+      store.db,
+      new Date('2026-09-06T00:00:00Z'),
+      new Date('2026-09-07T00:00:00Z'),
+    );
+    expect(bill.days.map((row) => [row.calls, row.pricingTier])).toEqual([[1, 'batch']]);
   });
 
   it('groups by UTC day and surface within a half-open date window', () => {
@@ -127,6 +145,9 @@ describe('the API call ledger', () => {
       {
         key: '2026-09-06',
         model: CALL.model,
+        // A call that named no rate card billed on the ordinary one, which is what every
+        // synchronous call does.
+        pricingTier: 'standard',
         calls: 2,
         inputTokens: 200,
         outputTokens: 40,

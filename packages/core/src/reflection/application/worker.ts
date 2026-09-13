@@ -4,9 +4,10 @@ import {
   type CompletionBinding,
 } from './completion-publication.js';
 import { SourceIndexDrainer } from './index-drain.js';
+import { VECTOR_JOB_TYPE } from './intake-queue.js';
 import { INTEGRATE_JOB_TYPE } from './intake.js';
 import type { ReflectionRun } from './orchestrator.js';
-import { drainPendingVectors } from './vectors.js';
+import { attachSourceVectors, drainPendingVectors } from './vectors.js';
 import {
   EMPTY_DRAIN,
   type ReflectionDrain,
@@ -14,16 +15,19 @@ import {
   type ReflectionWorkerOptions,
 } from './worker-contract.js';
 import { describeFailedRun, episodeIdOf } from './worker-diagnostics.js';
-import { backoffDelayMs } from '../../infrastructure/backoff.js';
+import { ClaimGate, RetryHolder } from './worker-retries.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { errorMessage } from '../../infrastructure/errors.js';
+import { isGenerationUnavailable } from '../../infrastructure/providers/errors.js';
 import {
   ReflectionQueueClaimant,
   reclaimStaleReflectionJobs,
 } from '../../infrastructure/sqlite/claim.js';
 import { recordEnrichmentLagMs } from '../../infrastructure/sqlite/lag-samples.js';
+import { completeReflectionJobForSource } from '../../infrastructure/sqlite/reflection-queue.js';
 import type { ReflectionJob } from '../../infrastructure/sqlite/reflection-queue.js';
 import { halfWindowIntervalMs, SweepTimer } from '../../infrastructure/sweep-timer.js';
+import { runGenerationUnavailability } from '../domain/stage.js';
 
 /**
  * Reflection is event-driven. A signal from intake starts a claim-and-run cycle immediately;
@@ -63,16 +67,17 @@ export type {
  */
 const REAPER_MIN_INTERVAL_MS = 1_000;
 
-type HeldRetry = {
-  readonly timer: NodeJS.Timeout;
-  readonly reason: string;
-};
-
 export { backoffDelayMs } from '../../infrastructure/backoff.js';
 export { describeFailedRun } from './worker-diagnostics.js';
 
 /** Claiming another kind of source work would spend its attempts failing it here. */
-const RUNNABLE_JOB_TYPES: readonly string[] = [INTEGRATE_JOB_TYPE];
+const RUNNABLE_JOB_TYPES: readonly string[] = [INTEGRATE_JOB_TYPE, VECTOR_JOB_TYPE];
+
+/**
+ * What is still runnable with no key: the embedding, which reaches the local model and has
+ * nothing to do with generation. A keyless substrate keeps vectoring what it captures.
+ */
+const KEYLESS_JOB_TYPES: readonly string[] = [VECTOR_JOB_TYPE];
 
 export class ReflectionWorker {
   readonly #deps: ReflectionWorkerDeps;
@@ -82,23 +87,20 @@ export class ReflectionWorker {
   readonly #retryBaseMs: number;
   readonly #retryCapMs: number;
   readonly #maxAttempts: number;
-  readonly #breakerThreshold: number;
-  readonly #breakerCooldownMs: number;
   readonly #vectorBatchSize: number;
   readonly #clock: () => Date;
 
   /** Runs in flight. Its size is the pool occupancy the claim loop reads. */
   readonly #running = new Set<Promise<void>>();
   readonly #index: SourceIndexDrainer;
-  /** Jobs whose claim this instance holds through a backoff delay, keyed by job id. */
-  readonly #retries = new Map<string, HeldRetry>();
-  #cooldown: NodeJS.Timeout | undefined;
+  readonly #retries: RetryHolder;
+  readonly #gate: ClaimGate;
   #reaper: SweepTimer | undefined;
-  #consecutiveFailures = 0;
-  #paused = false;
   #started = false;
   #stopped = false;
   #processed = 0;
+  /** Nodes the queued vector rows have embedded, reported beside the startup drain's own. */
+  #vectored = 0;
 
   constructor(deps: ReflectionWorkerDeps, options: ReflectionWorkerOptions = {}) {
     this.#deps = deps;
@@ -107,8 +109,6 @@ export class ReflectionWorker {
     this.#retryBaseMs = options.retryBaseMs ?? DEFAULT_RETRY_BASE_MS;
     this.#retryCapMs = options.retryCapMs ?? DEFAULT_RETRY_CAP_MS;
     this.#maxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
-    this.#breakerThreshold = options.breakerThreshold ?? DEFAULT_BREAKER_THRESHOLD;
-    this.#breakerCooldownMs = options.breakerCooldownMs ?? DEFAULT_BREAKER_COOLDOWN_MS;
     this.#vectorBatchSize = options.vectorBatchSize ?? DEFAULT_VECTOR_BATCH_SIZE;
     this.#clock = options.clock ?? ((): Date => new Date());
     this.#index = new SourceIndexDrainer({
@@ -116,6 +116,25 @@ export class ReflectionWorker {
       resolver: deps.resolver,
       logger: deps.logger,
       now: this.#clock,
+    });
+    this.#gate = new ClaimGate({
+      logger: deps.logger,
+      breakerThreshold: options.breakerThreshold ?? DEFAULT_BREAKER_THRESHOLD,
+      cooldownMs: options.breakerCooldownMs ?? DEFAULT_BREAKER_COOLDOWN_MS,
+      onOpen: () => {
+        this.#pump();
+      },
+    });
+    this.#retries = new RetryHolder({
+      db: deps.db,
+      claimant: this.#claimant,
+      logger: deps.logger,
+      retryBaseMs: this.#retryBaseMs,
+      retryCapMs: this.#retryCapMs,
+      maxAttempts: this.#maxAttempts,
+      onReleased: () => {
+        this.#pump();
+      },
     });
   }
 
@@ -130,7 +149,7 @@ export class ReflectionWorker {
 
   /** True while the breaker holds claiming off. Retries and signals both wait it out. */
   get paused(): boolean {
-    return this.#paused;
+    return this.#gate.paused;
   }
 
   /** Jobs waiting on their backoff delay, whose claims this instance still holds. */
@@ -171,8 +190,11 @@ export class ReflectionWorker {
     this.#index.resume();
     const reclaimed = reclaimStaleReflectionJobs(this.#deps.db, this.#staleTimeoutMs);
     this.#startReaper();
-    const vectored = await drainPendingVectors(this.#deps, this.#vectorBatchSize);
+    const drained = await drainPendingVectors(this.#deps, this.#vectorBatchSize);
     const ran = await this.#drainQueue();
+    // The backlog the drain found, plus whatever the queued vector rows embedded on the way
+    // through: both are nodes this start gave a vector to.
+    const vectored = drained + this.#vectored;
     // After the pipeline, not before it: an acceptance writes both rows, and indexing a source
     // whose projection this drain is about to rebuild would index the old parts.
     const indexed = await this.#index.settle();
@@ -193,21 +215,17 @@ export class ReflectionWorker {
   async stop(): Promise<void> {
     this.#stopped = true;
     this.#index.stop();
-    if (this.#cooldown !== undefined) {
-      clearTimeout(this.#cooldown);
-      this.#cooldown = undefined;
-    }
+    this.#gate.clear();
     if (this.#reaper !== undefined) {
       this.#reaper.stop();
       this.#reaper = undefined;
     }
-    this.#paused = false;
 
     // Twice: a run still in flight can fail while the first pass is waiting on it, and the
     // claim it parks would otherwise outlive the worker holding it.
-    this.#releaseHeld();
+    this.#retries.releaseAll();
     await this.whenIdle();
-    this.#releaseHeld();
+    this.#retries.releaseAll();
     this.#started = false;
   }
 
@@ -254,14 +272,6 @@ export class ReflectionWorker {
     this.#pump();
   }
 
-  #releaseHeld(): void {
-    for (const [jobId, held] of this.#retries) {
-      clearTimeout(held.timer);
-      this.#claimant.release(this.#deps.db, jobId, held.reason);
-    }
-    this.#retries.clear();
-  }
-
   /** Resolves when nothing is running. Rows waiting on a backoff are not runs. */
   async whenIdle(): Promise<void> {
     while (this.#running.size > 0 || this.#index.inFlight().length > 0) {
@@ -275,13 +285,14 @@ export class ReflectionWorker {
    * `UPDATE … RETURNING` behind it covers every other process.
    */
   #pump(): void {
-    if (this.#stopped || this.#paused) {
+    if (this.#stopped || this.#gate.paused) {
       return;
     }
     while (this.#running.size < this.#workerCount) {
       let job: ReflectionJob | undefined;
+      const claimable = this.#gate.generationHeld ? KEYLESS_JOB_TYPES : RUNNABLE_JOB_TYPES;
       try {
-        job = this.#claimant.claimNext(this.#deps.db, this.#maxAttempts, RUNNABLE_JOB_TYPES);
+        job = this.#claimant.claimNext(this.#deps.db, this.#maxAttempts, claimable);
       } catch (err) {
         this.#deps.logger.error({ err }, 'reflection worker could not claim a job');
         return;
@@ -315,18 +326,25 @@ export class ReflectionWorker {
 
   /** Never rejects: every outcome is either the job's completion or its recorded failure. */
   async #execute(job: ReflectionJob): Promise<void> {
-    this.#processed += 1;
     const episodeId = episodeIdOf(job);
-    if (job.jobType !== INTEGRATE_JOB_TYPE || episodeId === undefined) {
+    if (episodeId === undefined || !RUNNABLE_JOB_TYPES.includes(job.jobType)) {
+      this.#processed += 1;
       this.#fail(job, `unrunnable job of type ${job.jobType}`);
       return;
     }
+    if (job.jobType === VECTOR_JOB_TYPE) {
+      await this.#vectorize(job, episodeId);
+      return;
+    }
+    // Counted after the vector branch: `ran` is the enrichment count the lanes and the breaker
+    // reason about, and an embedding is reported as vectors rather than as a run.
+    this.#processed += 1;
 
     try {
       // The dequeue moment, passed rather than read inside the run, so every transaction stamp
-      // and every elapsed-time decision in the pipeline shares one reading. World time is not
-      // this: the orchestrator takes it from the episode, which is what lets a replay run a
-      // years-old episode on today's clock without dating its writes to the conversation.
+      // and every elapsed-time decision in the pipeline shares one reading. The orchestrator
+      // takes world time from the episode, which is what lets a replay run a years-old episode
+      // on today's clock without dating its writes to the conversation.
       const now = this.#clock();
       // Read before the run, not after it. The completion is a statement about the obligations
       // the run started with, so a generation replaced while it worked and a row the source
@@ -343,11 +361,48 @@ export class ReflectionWorker {
       // discharges no effect; it records the typed outcomes and the work still owed.
       await this.#settle(job, episodeId, run, bound, finished);
       if (!finished) {
+        // Which of the two the run owes: another attempt, or a wait. A run whose every failure
+        // was the backend refusing to run at all learned nothing this episode could learn, and
+        // charging it would exhaust the row a later key or a new day was meant to revive.
+        const refused = runGenerationUnavailability(run.summary.stages);
+        if (refused !== undefined) {
+          this.#defer(job, refused.reason);
+          return;
+        }
         this.#fail(job, describeFailedRun(episodeId, run));
       }
     } catch (err) {
+      if (isGenerationUnavailable(err)) {
+        this.#defer(job, errorMessage(err));
+        return;
+      }
       this.#fail(job, errorMessage(err));
     }
+  }
+
+  /**
+   * The embedding an acceptance queued. It completes its own row: a content vector is a property
+   * on a node the acceptance already committed rather than an obligation anything else reads, so
+   * there is no settlement to publish. The completion is bound to the source, the way the
+   * pipeline's is, so a row whose id this holds but whose episode it does not cannot be the row
+   * it finished.
+   */
+  async #vectorize(job: ReflectionJob, episodeId: string): Promise<void> {
+    try {
+      const attached = await attachSourceVectors(this.#deps, episodeId);
+      completeReflectionJobForSource(this.#deps.db, job.id, episodeId);
+      this.#vectored += attached;
+      this.#gate.succeeded();
+      this.#deps.logger.debug({ jobId: job.id, episodeId, attached }, 'content vectors attached');
+    } catch (err) {
+      this.#fail(job, errorMessage(err));
+    }
+  }
+
+  /** Work that cannot run at all rather than work that failed. The gate narrows claiming. */
+  #defer(job: ReflectionJob, reason: string): void {
+    this.#retries.defer(job, reason);
+    this.#gate.holdGeneration();
   }
 
   /**
@@ -395,7 +450,7 @@ export class ReflectionWorker {
    * the commit and this line leaves nothing half done for the next recovery to guess at.
    */
   #succeed(job: ReflectionJob, episodeId: string, run: ReflectionRun): void {
-    this.#consecutiveFailures = 0;
+    this.#gate.succeeded();
     // Only a run that actually enriched something is the freshness pin's "intake to
     // enriched": `already_applied` and `episode_unavailable` measured nothing new, and
     // recording them would understate the lag the p95 exists to catch.
@@ -416,63 +471,10 @@ export class ReflectionWorker {
     );
   }
 
-  /**
-   * The claim is held through the backoff rather than released into it: an unclaimed row is
-   * claimable, so releasing first would let the next signal or the drain re-run the job
-   * immediately and turn the delay into a spin. The release that counts the attempt and
-   * records the reason happens when the delay is up, or when `stop()` gives the job back.
-   *
-   * A job that has spent its attempts is released now and stays in the queue with its last
-   * error. Claiming skips it from then on: it is maintenance's, not the worker's.
-   */
+  /** A failed job: counted against the breaker, then parked on its own backoff. */
   #fail(job: ReflectionJob, reason: string): void {
-    const attempts = job.attempts + 1;
-    this.#noteFailure();
-
-    if (attempts >= this.#maxAttempts) {
-      this.#claimant.release(this.#deps.db, job.id, reason);
-      this.#deps.logger.error(
-        { jobId: job.id, attempts, reason },
-        'reflection job exhausted its attempts; left queued for maintenance',
-      );
-      return;
-    }
-
-    const delayMs = backoffDelayMs(attempts, this.#retryBaseMs, this.#retryCapMs);
-    const timer = setTimeout(() => {
-      this.#retries.delete(job.id);
-      this.#claimant.release(this.#deps.db, job.id, reason);
-      this.#pump();
-    }, delayMs);
-    this.#retries.set(job.id, { timer, reason });
-    this.#deps.logger.warn(
-      { jobId: job.id, attempts, delayMs, reason },
-      'reflection job failed; retry scheduled',
-    );
-  }
-
-  /**
-   * Five consecutive failures pause claiming for a cooldown. The pause is the whole of the
-   * degradation: no lexical extractor stands in for the model, because late structure beats
-   * bad structure and the queue is durable enough to wait.
-   */
-  #noteFailure(): void {
-    this.#consecutiveFailures += 1;
-    if (this.#consecutiveFailures < this.#breakerThreshold || this.#paused) {
-      return;
-    }
-    this.#paused = true;
-    this.#deps.logger.error(
-      { failures: this.#consecutiveFailures, cooldownMs: this.#breakerCooldownMs },
-      'reflection worker paused; claiming resumes after the cooldown',
-    );
-    this.#cooldown = setTimeout(() => {
-      this.#cooldown = undefined;
-      this.#paused = false;
-      this.#consecutiveFailures = 0;
-      this.#deps.logger.info('reflection worker resumed after cooldown');
-      this.#pump();
-    }, this.#breakerCooldownMs);
+    this.#gate.failed();
+    this.#retries.schedule(job, reason);
   }
 
   /** Runs every claimable row, including a legacy one no signal will ever arrive for. */

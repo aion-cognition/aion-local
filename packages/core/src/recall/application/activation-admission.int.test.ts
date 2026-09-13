@@ -22,7 +22,10 @@ import type { Provider, Vector } from '../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { handleReflection } from '../../reflection/application/intake.js';
 import { LaneAssigner } from '../../reflection/application/lanes.js';
-import { directIntakePublisher } from '../../reflection/test-support/direct-intake.fixture.js';
+import {
+  directIntakePublisher,
+  drainAcceptedVectors,
+} from '../../reflection/test-support/direct-intake.fixture.js';
 import { SessionManager } from '../../session/session-manager.js';
 
 /**
@@ -115,17 +118,18 @@ async function push(observation: string, now: Date): Promise<string> {
       driver: harness.driver,
       db,
       sessions: deps.sessions,
-      provider,
       logger,
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),
       workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
       publications: directIntakePublisher(harness.driver, db),
-      acceptHookCapture: true,
     },
     { observations: [observation] },
     { identity: WRITE_SESSION, now },
   );
+  // Intake queues the embedding rather than performing it, so the fixture runs the row the
+  // worker would run: what this file asserts on is vector search, which needs the vectors.
+  await drainAcceptedVectors(harness.driver, provider);
   return result.episode_id;
 }
 

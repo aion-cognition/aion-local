@@ -20,7 +20,7 @@ import { acceptTier3Proposal, type Tier3Request } from '../domain/tier3.js';
  */
 
 const KEY = (process.env.AION_ANTHROPIC_API_KEY ?? '').trim();
-const ABSENT = KEY === '' || process.env.TEST_AION_GENERATION === 'local';
+const ABSENT = KEY === '';
 
 const CALL_TIMEOUT_MS = 120_000;
 
@@ -70,7 +70,7 @@ describe.skipIf(ABSENT)('the tier-3 advisor on the model that serves it', () => 
     const calls: ApiCall[] = [];
 
     const outcome = await adviseTier3(liveProvider(calls), REQUEST, {
-      model: DEFAULTS.models.reflect,
+      model: DEFAULTS.anthropic.model,
       timeoutMs: CALL_TIMEOUT_MS,
     });
 
@@ -99,7 +99,7 @@ describe.skipIf(ABSENT)('the tier-3 advisor on the model that serves it', () => 
     const calls: ApiCall[] = [];
 
     await adviseTier3(liveProvider(calls), REQUEST, {
-      model: DEFAULTS.models.reflect,
+      model: DEFAULTS.anthropic.model,
       timeoutMs: CALL_TIMEOUT_MS,
     });
 

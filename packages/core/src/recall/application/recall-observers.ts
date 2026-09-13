@@ -90,16 +90,15 @@ function digest(value: string): string {
 }
 
 /**
- * The route the run actually resolved, not the models configured for it. A pin, a missing key
- * and a key present all name the same alias and reach different servers, so the trace records
- * what the routing rule decided.
+ * What the run's cue call could reach. A substrate with no key extracts no cues at all, so the
+ * trace records that rather than a model name the call never sent anything to.
  */
 function routeOf(config: Config): TraceRoute {
   const routing = resolveProviderRouting(config);
   return {
-    cueProvider: routing.roles.cue.provider,
+    cueProvider: 'anthropic',
     cueModel: routing.roles.cue.model,
-    cueReason: routing.roles.cue.reason,
+    cueReason: routing.roles.cue.available ? 'key' : 'no-key',
     embedModel: routing.embedModel,
   };
 }

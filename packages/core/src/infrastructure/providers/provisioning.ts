@@ -10,19 +10,13 @@ export type OllamaProvisionTarget = {
   baseUrl: string;
   embedModel: string;
   embedDimension: number;
-  /**
-   * The chat models routing still runs locally, which is what init pulls. A role routed to
-   * Anthropic contributes nothing here: a key-covered install downloads no instruct weights
-   * it will never call. Empty is a normal value, and means every generation role is remote.
-   */
-  chatModels: readonly string[];
 };
 
 export type ProvisionEvent =
   | { type: 'reachable' }
   | { type: 'pull_progress'; model: string; status: string; completed?: number; total?: number }
   | { type: 'pull_done'; model: string }
-  | { type: 'verify_done'; model: string; kind: 'embed' | 'chat' };
+  | { type: 'verify_done'; model: string; kind: 'embed' };
 
 export type ProvisionOptions = {
   fetchImpl?: typeof fetch;
@@ -229,47 +223,10 @@ async function verifyEmbedModel(
 }
 
 /**
- * A 5-token generate. Some chat models (qwen3's thinking variants) spend a budget that
- * small on `thinking` and return empty `content`, so this checks that the model produced
- * a completed message, not that `content` itself is non-empty.
- *
- * `aion doctor` calls this directly, for the chat models routing still runs locally.
- */
-export async function verifyOllamaChatModel(
-  baseUrl: string,
-  model: string,
-  fetchImpl: typeof fetch = fetch,
-  onEvent?: (event: ProvisionEvent) => void,
-): Promise<void> {
-  const response = await fetchImpl(`${normalizeBaseUrl(baseUrl)}/api/chat`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: 'user', content: 'reply with one word' }],
-      stream: false,
-      options: { num_predict: 5 },
-    }),
-  });
-  if (!response.ok) {
-    throw new ModelVerificationError(
-      model,
-      'chat',
-      `${response.status} ${summarizeErrorBody(await response.text())}`,
-    );
-  }
-
-  const body = (await response.json()) as { message?: unknown; done?: boolean };
-  if (typeof body.message !== 'object' || body.message === null || body.done !== true) {
-    throw new ModelVerificationError(model, 'chat', 'response did not complete with a message');
-  }
-  onEvent?.({ type: 'verify_done', model, kind: 'chat' });
-}
-
-/**
- * Init-time provisioning: reachability, then pull the models routing needs (deduped, since
- * cue and reflect may name the same model) via `/api/pull`, then one round-trip verification
- * per model. Throws the first named error encountered; the CLI surfaces it and exits.
+ * Init-time provisioning: reachability, then pull the embedding model via `/api/pull`, then one
+ * round-trip verification of it. One model, because generation runs remotely and the vector
+ * space is the only thing Ollama still owns. Throws the first named error encountered; the CLI
+ * surfaces it and exits.
  */
 export async function provisionOllama(
   target: OllamaProvisionTarget,
@@ -283,12 +240,7 @@ export async function provisionOllama(
   });
   options.onEvent?.({ type: 'reachable' });
 
-  const chatModels = [...new Set(target.chatModels)];
-  const allModels = [...new Set([target.embedModel, ...chatModels])];
-
-  for (const model of allModels) {
-    await pullModel(target.baseUrl, model, fetchImpl, options.onEvent);
-  }
+  await pullModel(target.baseUrl, target.embedModel, fetchImpl, options.onEvent);
 
   await verifyEmbedModel(
     target.baseUrl,
@@ -297,7 +249,4 @@ export async function provisionOllama(
     fetchImpl,
     options.onEvent,
   );
-  for (const model of chatModels) {
-    await verifyOllamaChatModel(target.baseUrl, model, fetchImpl, options.onEvent);
-  }
 }

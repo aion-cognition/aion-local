@@ -329,7 +329,7 @@ export class SupersessionTestBed {
    * Which text the two passes read. Absent is the local route, which is what a fake provider
    * gets everywhere else; a test that wants the keyed words sets it.
    */
-  route: { readonly provider: 'ollama' | 'anthropic' } | undefined;
+  route: { readonly provider: 'anthropic' } | undefined;
   #store: SqliteStore | undefined;
   #dataDir = '';
 

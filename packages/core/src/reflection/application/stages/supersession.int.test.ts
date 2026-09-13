@@ -96,10 +96,8 @@ const pairs = new Map<string, SeededPair>();
 
 /**
  * Every assertion here is about behavior: propose rather than close, which neighbor the
- * judgment is spent on, and which rows land. That holds on whichever model answers, so the
- * default route is the fast one. The published precision number for this battery is not a
- * behavior claim and was measured on the local judge, so re-measuring it means running this
- * file with `TEST_AION_GENERATION=local`.
+ * judgment is spent on, and which rows land. None of it is a precision figure; the number that
+ * sets `AION_SUPERSEDE_MODE` is measured in `gate/supersession-precision.int.test.ts`.
  */
 function liveModelProvider(): Provider {
   return testGenerationProvider({
@@ -164,13 +162,11 @@ beforeAll(async () => {
       memberId: backbone.member.id,
       workspaceId: backbone.workspace.id,
     }),
-    provider: live,
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
     publications: directIntakePublisher(harness.driver, db),
-    acceptHookCapture: true,
   };
 
   for (const pair of PAIRS) {
@@ -276,7 +272,7 @@ describe('SupersessionStage against a live graph', () => {
 
     const ctx = await contextFor(pair.nextEpisodeId, liveProvider(calls));
     const outcome = await new SupersessionStage({
-      model: DEFAULTS.models.reflect,
+      model: DEFAULTS.anthropic.model,
       mode: 'propose',
       maxNeighbors: 1,
     }).run(ctx);
@@ -311,7 +307,7 @@ describe('SupersessionStage against a live graph', () => {
 
     const ctx = await contextFor(pair.nextEpisodeId, liveProvider(calls));
     const outcome = await new SupersessionStage({
-      model: DEFAULTS.models.reflect,
+      model: DEFAULTS.anthropic.model,
       mode: 'propose',
       maxNeighbors: 1,
     }).run(ctx);
@@ -334,7 +330,7 @@ describe('SupersessionStage against a live graph', () => {
 
     const ctx = await contextFor(pair.nextEpisodeId, liveProvider(calls));
     const outcome = await new SupersessionStage({
-      model: DEFAULTS.models.reflect,
+      model: DEFAULTS.anthropic.model,
       mode: 'propose',
       maxNeighbors: 2,
       neighborThreshold: 0.4,
@@ -360,7 +356,7 @@ describe('SupersessionStage against a live graph', () => {
 
     const ctx = await contextFor(pair.nextEpisodeId, liveProvider(calls));
     const outcome = await new SupersessionStage({
-      model: DEFAULTS.models.reflect,
+      model: DEFAULTS.anthropic.model,
       mode: 'propose',
       maxNeighbors: 1,
     }).run(ctx);

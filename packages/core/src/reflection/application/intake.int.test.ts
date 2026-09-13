@@ -1,4 +1,3 @@
-import type { Driver } from 'neo4j-driver';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -28,7 +27,6 @@ import {
   type Neo4jHarness,
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger } from '../../infrastructure/logging/logger.js';
-import { OllamaProvider } from '../../infrastructure/providers/ollama-provider.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   ARCHIVE_SCHEMA_VERSION,
@@ -87,9 +85,14 @@ function ledgerRowCount(): number {
 }
 
 /** Queue rows whose episode belongs to this session, matched through the graph. */
+/** The enrichment rows alone: an acceptance also writes a vector row and an index row. */
+function integrateJobs(): ReflectionJob[] {
+  return listReflectionJobs(db).filter((job) => job.jobType === INTEGRATE_JOB_TYPE);
+}
+
 async function jobsForSession(sessionId: string): Promise<ReflectionJob[]> {
   const episodeIds = new Set(await episodeIdsInSession(harness.driver, sessionId));
-  return listReflectionJobs(db).filter((job) =>
+  return integrateJobs().filter((job) =>
     episodeIds.has((job.payload as { episode_id: string }).episode_id),
   );
 }
@@ -109,10 +112,6 @@ beforeAll(async () => {
     driver: harness.driver,
     db,
     sessions: new SessionManager(harness.driver, backboneIds),
-    provider: new OllamaProvider({
-      baseUrl: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
-      embedModel: DEFAULTS.models.embed,
-    }),
     onJobEnqueued: (jobId: string) => {
       enqueuedJobIds.push(jobId);
     },
@@ -121,7 +120,6 @@ beforeAll(async () => {
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
     publications: directIntakePublisher(harness.driver, db),
-    acceptHookCapture: true,
   };
 
   const result = await handleReflection(deps, MIXED_PAYLOAD, { identity: SESSION_IDENTITY });
@@ -186,26 +184,24 @@ describe('reflection intake against a live graph and live Ollama', () => {
     );
   });
 
-  it('attaches a vector to the episode and every turn after the commit, at the configured dimension', async () => {
-    const episodeVector = (await nodeProperties(harness.driver, episodeId)).content_vec as number[];
+  it('leaves the episode and every turn without a vector, for the queued row to attach', async () => {
     const turns = await turnsOfEpisode(harness.driver, episodeId);
 
-    expect(episodeVector).toHaveLength(EMBED_DIMENSION);
-    expect(episodeVector.every((value) => Number.isFinite(value))).toBe(true);
+    expect((await nodeProperties(harness.driver, episodeId)).content_vec).toBeUndefined();
     for (const turn of turns) {
-      expect(turn.content_vec as number[]).toHaveLength(EMBED_DIMENSION);
+      expect(turn.content_vec).toBeUndefined();
     }
   });
 
   it('enqueues one integrate job carrying the episode id, and wakes the worker once', () => {
-    const jobs = listReflectionJobs(db);
+    const integrate = listReflectionJobs(db).filter((job) => job.jobType === INTEGRATE_JOB_TYPE);
 
-    expect(jobs).toHaveLength(1);
-    expect(jobs[0]?.jobType).toBe(INTEGRATE_JOB_TYPE);
-    expect(jobs[0]?.payload).toEqual({ episode_id: episodeId });
-    expect(jobs[0]?.claimedBy).toBeNull();
+    expect(integrate).toHaveLength(1);
+    expect(integrate[0]?.payload).toEqual({ episode_id: episodeId });
+    expect(integrate[0]?.claimedBy).toBeNull();
 
-    expect(enqueuedJobIds).toEqual([jobs[0]?.id]);
+    // One wakeup, for the one job the reflection worker's signal is about.
+    expect(enqueuedJobIds).toEqual([integrate[0]?.id]);
   });
 
   it('leaves the ops ledger untouched: the pipeline owns it, not intake', () => {
@@ -270,7 +266,7 @@ describe('reflection intake against a live graph and live Ollama', () => {
     });
     expect(await countNodes(harness.driver)).toBe(nodesBefore);
     expect(await countRelationships(harness.driver)).toBe(edgesBefore);
-    expect(listReflectionJobs(db)).toHaveLength(1);
+    expect(integrateJobs()).toHaveLength(1);
     expect(enqueuedJobIds).toHaveLength(1);
     expect(ledgerRowCount()).toBe(0);
   });
@@ -281,7 +277,7 @@ describe('reflection intake against a live graph and live Ollama', () => {
     });
 
     expect(other.episode_id).not.toBe(episodeId);
-    expect(listReflectionJobs(db)).toHaveLength(2);
+    expect(integrateJobs()).toHaveLength(2);
     expect(enqueuedJobIds).toHaveLength(2);
 
     expect(
@@ -302,37 +298,6 @@ describe('reflection intake against a live graph and live Ollama', () => {
   });
 });
 
-/**
- * The real driver with a fuse in its write transactions: statement `allowed + 1` onward
- * rejects. Atomicity is a property of the transaction, so proving it needs a failure that
- * lands inside one, and after store-before-embed no dependency of intake can produce one.
- */
-function driverFailingAfter(driver: Driver, allowed: number): Driver {
-  const executeQuery = driver.executeQuery.bind(driver);
-  return {
-    executeQuery,
-    session: () => {
-      const session = driver.session();
-      return {
-        executeWrite: (work: (tx: unknown) => Promise<unknown>) =>
-          session.executeWrite((tx) => {
-            let seen = 0;
-            return work({
-              run: async (cypher: string, parameters: Record<string, unknown>) => {
-                seen += 1;
-                if (seen > allowed) {
-                  throw new Error('severed mid-transaction');
-                }
-                return tx.run(cypher, parameters);
-              },
-            });
-          }),
-        close: () => session.close(),
-      };
-    },
-  } as unknown as Driver;
-}
-
 describe('reflection intake under failure and concurrency', () => {
   const PAYLOAD = {
     turns: [
@@ -342,34 +307,13 @@ describe('reflection intake under failure and concurrency', () => {
     observations: ['webhooks were the only option with the vendor we had'],
   };
 
-  it('writes nothing at all when a write fails partway through the episode', async () => {
-    const identity = 'partial-write-session';
-
-    // The lock, the dedupe read, the Episode node, its containment edge, and the first
-    // Turn go through; the sixth statement throws. Nothing embedded can force this any
-    // more, since the embed call now happens after the commit, so the failure is injected
-    // at the statement the transaction is on when it lands.
-    const severed = { ...deps, driver: driverFailingAfter(harness.driver, 5) };
-
-    await expect(handleReflection(severed, PAYLOAD, { identity })).rejects.toThrow(/severed/);
-
-    expect(await countNodesInSession(harness.driver, 'Episode', identity)).toBe(0);
-    expect(await countNodesInSession(harness.driver, 'Turn', identity)).toBe(0);
-    expect(await jobsForSession(identity)).toHaveLength(0);
-
-    // A clean retry starts from nothing, so the episode lands whole.
-    const retry = await handleReflection(deps, PAYLOAD, { identity });
-    expect(await countNodesInSession(harness.driver, 'Episode', identity)).toBe(1);
-    expect(await countNodesInSession(harness.driver, 'Turn', identity)).toBe(2);
-    expect(await jobsForSession(identity)).toHaveLength(1);
-    expect(retry.queued).toBe(true);
-  });
-
-  it('queues the job on retry when the episode committed but the enqueue did not', async () => {
+  it('refuses before it writes anything when the local store cannot be read', async () => {
     const identity = 'orphan-episode-session';
 
-    // The graph write commits, then the queue insert fails: the window a crash between the
-    // two stores opens. Nothing repairs it later, so intake has to repair it on the retry.
+    // Intake reads the store before it publishes: the occurrence lookup, the readiness policy,
+    // and the queue depth. A store that cannot answer stops the call there, which is the right
+    // order: an acceptance published against records nobody can read is the state no recovery
+    // can resolve.
     const closed = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
     closed.close();
 
@@ -377,9 +321,10 @@ describe('reflection intake under failure and concurrency', () => {
       handleReflection({ ...deps, db: closed }, PAYLOAD, { identity }),
     ).rejects.toThrow();
 
-    expect(await countNodesInSession(harness.driver, 'Episode', identity)).toBe(1);
+    expect(await countNodesInSession(harness.driver, 'Episode', identity)).toBe(0);
     expect(await jobsForSession(identity)).toHaveLength(0);
 
+    // The retry, against the open store, lands whole and queues once.
     const retry = await handleReflection(deps, PAYLOAD, { identity });
     const queued = await jobsForSession(identity);
 
@@ -392,23 +337,13 @@ describe('reflection intake under failure and concurrency', () => {
   it('stores one episode when the same payload arrives concurrently in one session', async () => {
     const identity = 'concurrent-intake-session';
 
-    // A stub embedder, not live Ollama: Ollama serializes requests for one model, which
-    // staggers the callers enough that they never reach the graph together. The race this
-    // test exists for is in the graph, and it only happens if they arrive at once.
-    const vector = Array.from({ length: EMBED_DIMENSION }, () => 0.01);
-    const instant = {
-      ...deps,
-      provider: {
-        embed: (texts: readonly string[]) => Promise.resolve(texts.map(() => vector)),
-        generate: () => Promise.reject(new Error('intake must never call generate')),
-      } as ReflectionIntakeDeps['provider'],
-    };
-
+    // Nothing is stubbed here any more: intake embeds nothing, so four callers arrive at the
+    // graph together on their own, which is the race this exists for.
     const results = await Promise.all([
-      handleReflection(instant, PAYLOAD, { identity }),
-      handleReflection(instant, PAYLOAD, { identity }),
-      handleReflection(instant, PAYLOAD, { identity }),
-      handleReflection(instant, PAYLOAD, { identity }),
+      handleReflection(deps, PAYLOAD, { identity }),
+      handleReflection(deps, PAYLOAD, { identity }),
+      handleReflection(deps, PAYLOAD, { identity }),
+      handleReflection(deps, PAYLOAD, { identity }),
     ]);
 
     const ids = new Set(results.map((result) => result.episode_id));

@@ -25,15 +25,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runLast } from './last.js';
 
 /**
- * The authorized key, read the way `testGenerationProvider` reads it, including its
- * `TEST_AION_GENERATION=local` kill switch. Passed only into the service environment this
- * fixture builds: the literal it used to build had no key field at all, so a keyed run of this
- * root silently generated on the local route and discharged nothing.
+ * The authorized key, read the way `testGenerationProvider` reads it. Passed only into the
+ * service environment this fixture builds: the literal it used to build had no key field at
+ * all, so a keyed run of this root generated nothing and discharged nothing.
  */
-const ANTHROPIC_API_KEY =
-  process.env.TEST_AION_GENERATION === 'local'
-    ? undefined
-    : (process.env.AION_ANTHROPIC_API_KEY ?? '').trim() || undefined;
+const ANTHROPIC_API_KEY = (process.env.AION_ANTHROPIC_API_KEY ?? '').trim() || undefined;
 
 /**
  * `aion last --json` must reproduce, byte-for-byte on content, the pack the MCP client

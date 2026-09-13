@@ -27,11 +27,57 @@ export function summarizeErrorBody(body: string): string {
   return `${oneLine.slice(0, ERROR_BODY_LIMIT)} [truncated]`;
 }
 
+/**
+ * Generation was asked for with no Anthropic key set.
+ *
+ * It is a distinct type because the callers answer it differently from a failure: the reflection
+ * worker puts the job back without spending an attempt, and recall drops to the raw-query path.
+ * Nothing retries it on a timer. A key arrives by an operator editing `.env` and restarting, so
+ * the honest report is a queue that is not draining and a status line that says why.
+ *
+ * `reason` is for the other way generation has nowhere to run, below. The default states the
+ * missing key, which is what every caller that names only a surface means.
+ */
+export class GenerationUnavailableError extends Error {
+  constructor(surface: string, reason?: string) {
+    super(
+      reason ??
+        `generation for "${surface}" needs AION_ANTHROPIC_API_KEY; the work stays queued until one is set`,
+    );
+    this.name = 'GenerationUnavailableError';
+  }
+}
+
+/**
+ * The day's generation spending ceiling is reached.
+ *
+ * The same type as a missing key, deliberately: every caller already answers that one correctly.
+ * Background work goes back on the queue without spending an attempt, cues fall back to the raw
+ * query, and nothing throws an ordinary failure into a pipeline that would retry it against the
+ * same exhausted ceiling. What clears it is a new UTC day or a higher ceiling, neither of which a
+ * retry timer can bring about.
+ */
+export class GenerationCeilingReachedError extends GenerationUnavailableError {
+  constructor(surface: string, committedUsd: number, ceilingUsd: number) {
+    super(
+      surface,
+      `generation for "${surface}" would pass today's ceiling of $${ceilingUsd.toFixed(2)} ` +
+        `(committed $${committedUsd.toFixed(4)}); the work stays queued until the next UTC day ` +
+        `or a higher AION_ANTHROPIC_DAILY_CEILING_USD`,
+    );
+    this.name = 'GenerationCeilingReachedError';
+  }
+}
+
+export function isGenerationUnavailable(err: unknown): boolean {
+  return err instanceof GenerationUnavailableError;
+}
+
 /** A non-2xx answer from Ollama. `kind` names the endpoint that refused. */
 export class OllamaRequestError extends Error {
   readonly status: number;
 
-  constructor(kind: 'embed' | 'generate', status: number, body: string) {
+  constructor(kind: 'embed', status: number, body: string) {
     // Capped and flattened, never carried whole: this message reaches the logs through every
     // `{ err }` call site, so a body that echoes the request would leak the episode text.
     super(`Ollama ${kind} request failed: ${String(status)} ${summarizeErrorBody(body)}`);
@@ -65,7 +111,7 @@ export class ModelPullError extends Error {
 }
 
 export class ModelVerificationError extends Error {
-  constructor(model: string, kind: 'embed' | 'chat', reason: string) {
+  constructor(model: string, kind: 'embed', reason: string) {
     super(`Round-trip verification failed for Ollama model "${model}" (${kind}): ${reason}`);
     this.name = 'ModelVerificationError';
   }

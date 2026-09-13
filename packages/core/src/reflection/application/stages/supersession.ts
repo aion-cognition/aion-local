@@ -99,7 +99,7 @@ export class SupersessionStage implements ReflectionStage {
 
   constructor(options: Partial<SupersessionStageOptions> = {}) {
     this.#options = {
-      model: DEFAULTS.models.reflect,
+      model: DEFAULTS.anthropic.model,
       timeoutMs: DEFAULTS.reflection.stageTimeoutMs,
       mode: DEFAULTS.reflection.supersedeMode,
       autoConfidence: DEFAULTS.reflection.supersedeAutoConfidence,

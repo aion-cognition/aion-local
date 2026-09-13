@@ -51,7 +51,7 @@ describe('checkOllamaReachable', () => {
 });
 
 describe('provisionOllama', () => {
-  it('pulls each unique model once, verifies embed and chat, and reports events in order', async () => {
+  it('pulls the embedding model, verifies it, and reports events in order', async () => {
     const calls: string[] = [];
     const fetchImpl = vi.fn(async (url: string | URL, init?: RequestInit) => {
       const path = new URL(String(url)).pathname;
@@ -82,7 +82,6 @@ describe('provisionOllama', () => {
         baseUrl: 'http://localhost:11434',
         embedModel: 'nomic-embed-text',
         embedDimension: 768,
-        chatModels: ['qwen3:1.7b', 'qwen3:8b'],
       },
       { fetchImpl: fetchImpl as unknown as typeof fetch, onEvent: (e) => events.push(e) },
     );
@@ -90,58 +89,17 @@ describe('provisionOllama', () => {
     expect(calls).toEqual([
       '/api/version:undefined',
       '/api/pull:nomic-embed-text',
-      '/api/pull:qwen3:1.7b',
-      '/api/pull:qwen3:8b',
       '/api/embed:nomic-embed-text',
-      '/api/chat:qwen3:1.7b',
-      '/api/chat:qwen3:8b',
     ]);
     expect(events[0]).toEqual({ type: 'reachable' });
     expect(
       events.filter((e) => e.type === 'pull_done').map((e) => (e as { model: string }).model),
-    ).toEqual(['nomic-embed-text', 'qwen3:1.7b', 'qwen3:8b']);
-    expect(events.at(-1)).toEqual({ type: 'verify_done', model: 'qwen3:8b', kind: 'chat' });
-  });
-
-  it('dedupes the pull and chat-verify calls when both roles name the same model', async () => {
-    const pullCalls: string[] = [];
-    const chatCalls: string[] = [];
-    const fetchImpl = vi.fn(async (url: string | URL, init?: RequestInit) => {
-      const path = new URL(String(url)).pathname;
-      const body =
-        init?.body === undefined
-          ? {}
-          : (JSON.parse(init.body as string) as Record<string, unknown>);
-
-      if (path === '/api/version') {
-        return jsonResponse({ version: '0.24.0' });
-      }
-      if (path === '/api/pull') {
-        pullCalls.push(String(body.model));
-        return ndjson(PULL_SUCCESS);
-      }
-      if (path === '/api/embed') {
-        return jsonResponse({ embeddings: [new Array<number>(768).fill(0.1)] });
-      }
-      if (path === '/api/chat') {
-        chatCalls.push(String(body.model));
-        return jsonResponse({ done: true, message: { role: 'assistant', content: '' } });
-      }
-      throw new Error(`unexpected path: ${path}`);
+    ).toEqual(['nomic-embed-text']);
+    expect(events.at(-1)).toEqual({
+      type: 'verify_done',
+      model: 'nomic-embed-text',
+      kind: 'embed',
     });
-
-    await provisionOllama(
-      {
-        baseUrl: 'http://localhost:11434',
-        embedModel: 'nomic-embed-text',
-        embedDimension: 768,
-        chatModels: ['qwen3:1.7b', 'qwen3:1.7b'],
-      },
-      { fetchImpl: fetchImpl as unknown as typeof fetch },
-    );
-
-    expect(pullCalls).toEqual(['nomic-embed-text', 'qwen3:1.7b']);
-    expect(chatCalls).toEqual(['qwen3:1.7b']);
   });
 
   it('pulls the embed model alone when every generation role routes to Anthropic', async () => {
@@ -176,7 +134,6 @@ describe('provisionOllama', () => {
         baseUrl: 'http://localhost:11434',
         embedModel: 'nomic-embed-text',
         embedDimension: 768,
-        chatModels: [],
       },
       { fetchImpl: fetchImpl as unknown as typeof fetch },
     );
@@ -202,7 +159,6 @@ describe('provisionOllama', () => {
         baseUrl: 'http://localhost:11434',
         embedModel: 'nomic-embed-text',
         embedDimension: 768,
-        chatModels: ['qwen3:1.7b', 'qwen3:8b'],
       },
       { fetchImpl: fetchImpl as unknown as typeof fetch },
     ).catch((e: unknown) => e);
@@ -231,7 +187,6 @@ describe('provisionOllama', () => {
         baseUrl: 'http://localhost:11434',
         embedModel: 'nomic-embed-text',
         embedDimension: 768,
-        chatModels: ['qwen3:1.7b', 'qwen3:8b'],
       },
       { fetchImpl: fetchImpl as unknown as typeof fetch },
     ).catch((e: unknown) => e);

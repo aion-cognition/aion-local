@@ -116,7 +116,6 @@ beforeEach(() => {
     driver: graph.driver,
     db,
     sessions: new SessionManager(graph.driver, { memberId: MEMBER_ID, workspaceId: WORKSPACE_ID }),
-    provider: { embed, generate } as unknown as ReflectionIntakeDeps['provider'],
     onJobEnqueued: (jobId: string) => {
       enqueuedJobIds.push(jobId);
     },
@@ -125,7 +124,6 @@ beforeEach(() => {
     lanes: new LaneAssigner(LANE_LIMITS),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
     publications: directIntakePublisher(graph.driver, db, () => ACCEPTED_AT),
-    acceptHookCapture: true,
   };
 });
 
@@ -133,10 +131,6 @@ afterEach(() => {
   db.close();
   rmSync(dataDir, { recursive: true, force: true });
 });
-
-function embeddedTexts(call: number): string {
-  return (embed.mock.calls[call]?.[0] as readonly string[]).join('\n');
-}
 
 /** Pino's numeric levels, which is what the JSONL line carries. */
 const PINO_INFO = 30;
@@ -174,54 +168,18 @@ describe('reflection intake validation', () => {
 describe('reflection intake hook capture', () => {
   const HOOK_PAYLOAD = { ...PAYLOAD, origin: { channel: 'hook', event: 'stop' } };
 
-  /** Reflection routed to a local model, which is the profile that takes no hook traffic. */
-  function localReflect(): ReflectionIntakeDeps {
-    return { ...deps, acceptHookCapture: false };
-  }
-
-  async function rejectionOf(intake: ReflectionIntakeDeps, payload: unknown): Promise<Error> {
-    return await handleReflection(intake, payload, { identity: 'session-a' }).then(
-      () => {
-        throw new Error('the call was expected to reject');
-      },
-      (err: unknown) => err as Error,
-    );
-  }
-
-  it('refuses a hook payload before anything is stored when reflection runs local', async () => {
-    const refused = await rejectionOf(localReflect(), HOOK_PAYLOAD);
-
-    expect(refused.message).toContain('hook capture needs the keyed profile');
-    expect(graph.statements).toHaveLength(0);
-    expect(listReflectionJobs(db)).toHaveLength(0);
-    expect(listExperiencesAfter(db, undefined, 10)).toHaveLength(0);
-    expect(embed).not.toHaveBeenCalled();
-  });
-
-  // The refusal is the caller's error rather than the service's, so it comes back the way an
-  // invalid payload does: same class, carrying a message that says what to do about it.
-  it('refuses it the way an invalid payload is refused', async () => {
-    const invalid = await rejectionOf(deps, { summary: 'nothing happened' });
-    const refused = await rejectionOf(localReflect(), HOOK_PAYLOAD);
-
-    expect(refused.name).toBe(invalid.name);
-    expect(refused.message).toContain(
-      'hook capture needs the keyed profile: reflection is routed to a local model. Set AION_ANTHROPIC_API_KEY and restart, or run aion hooks uninstall.',
-    );
-  });
-
-  it('stores a hook payload when the keyed route accepts capture', async () => {
+  it('stores a hook payload', async () => {
     const result = await handleReflection(deps, HOOK_PAYLOAD, { identity: 'session-a' });
 
     expect(graph.nodes.get(result.episode_id)?.properties.origin_channel).toBe('hook');
   });
 
-  it('stores every other origin whichever way hook capture is set', async () => {
+  it('stores every other origin the same way', async () => {
     const origins = [{ channel: 'mcp' }, { channel: 'cli' }, undefined];
 
     for (const [index, origin] of origins.entries()) {
       const result = await handleReflection(
-        localReflect(),
+        deps,
         { ...PAYLOAD, observations: [`episode number ${String(index)}`], origin },
         { identity: 'session-a' },
       );
@@ -232,13 +190,11 @@ describe('reflection intake hook capture', () => {
 });
 
 describe('reflection intake redaction', () => {
-  it('redacts every payload string before it reaches the graph or the embedder', async () => {
+  it('redacts every payload string before it reaches the graph', async () => {
     const result = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
 
     expect(graph.writtenText()).not.toContain(AWS_KEY);
     expect(graph.writtenText()).not.toContain(GITHUB_TOKEN);
-    expect(embeddedTexts(0)).not.toContain(AWS_KEY);
-    expect(embeddedTexts(0)).not.toContain(GITHUB_TOKEN);
 
     const episodeText = graph.nodes.get(result.episode_id)?.properties.text as string;
     expect(episodeText).toContain('⟨secret:aws-access-key:');
@@ -297,7 +253,8 @@ describe('reflection intake storage', () => {
       extraction_method: 'reflection_intake',
     });
     expect(episode?.properties.content_hash).toEqual(expect.any(String));
-    expect((episode?.properties.content_vec as number[]).length).toBe(EMBED_DIMENSION);
+    // No vector yet: the acceptance queued the embedding rather than waiting on it.
+    expect(episode?.properties.content_vec).toBeUndefined();
 
     const turns = graph.nodesWithLabel('Turn');
     expect(turns.map((turn) => turn.properties.sequence)).toEqual([0, 1]);
@@ -350,20 +307,18 @@ describe('reflection intake storage', () => {
     expect(episode?.properties.origin_event).toBeUndefined();
   });
 
-  it('embeds the episode body and every turn in one batched call', async () => {
-    await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
-
-    expect(embed).toHaveBeenCalledTimes(1);
-    expect((embed.mock.calls[0]?.[0] as readonly string[]).length).toBe(3);
-  });
-
   it('enqueues exactly one integrate job carrying the episode id and wakes the worker once', async () => {
     const result = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
 
-    // Two rows: the integrate job the worker runs, and the bounded source-index work the
-    // acceptance owes, which is enqueued in the bulk lane and never enters the pipeline.
+    // Three rows: the integrate job the worker runs, the vector work the acceptance owes, and
+    // the bounded source-index work, which is enqueued in the bulk lane and never enters the
+    // pipeline.
     const jobs = listReflectionJobs(db);
-    expect(jobs.map((job) => job.jobType).sort()).toEqual(['integrate', 'source_index']);
+    expect(jobs.map((job) => job.jobType).sort()).toEqual([
+      'attach_vectors',
+      'integrate',
+      'source_index',
+    ]);
     const integrate = jobs.find((job) => job.jobType === INTEGRATE_JOB_TYPE);
     expect(integrate?.payload).toEqual({ episode_id: result.episode_id });
 

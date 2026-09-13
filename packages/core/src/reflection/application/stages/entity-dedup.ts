@@ -99,7 +99,7 @@ export class EntityDedupStage implements ReflectionStage {
       similarityThreshold: DEFAULTS.reflection.entityDedupThreshold,
       sharedEpisodeJaccardFloor: DEFAULTS.reflection.entityNominationJaccardFloor,
       mode: DEFAULT_ENTITY_MERGE_MODE,
-      model: DEFAULTS.models.reflect,
+      model: DEFAULTS.anthropic.model,
       timeoutMs: DEFAULTS.reflection.stageTimeoutMs,
       maxJudgments: DEFAULT_MAX_JUDGMENTS,
       ...options,

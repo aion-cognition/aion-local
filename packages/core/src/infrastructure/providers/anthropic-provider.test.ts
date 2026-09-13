@@ -1,10 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  AnthropicProvider,
-  AnthropicRequestError,
-  AnthropicResponseError,
-} from './anthropic-provider.js';
+import { AnthropicRequestError, AnthropicResponseError } from './anthropic-errors.js';
+import { AnthropicProvider } from './anthropic-provider.js';
 import { CircuitOpenError } from './circuit-breaker.js';
 import { ERROR_BODY_LIMIT } from './errors.js';
 import type { StructuredRequest } from './types.js';
@@ -12,9 +9,8 @@ import type { StructuredRequest } from './types.js';
 const SCHEMA = { type: 'object', properties: { ok: { type: 'boolean' } } };
 
 const REQUEST: StructuredRequest = {
-  // An Ollama tag, because the caller reads its model from config the same way under both
-  // routes. The provider substitutes the model it was built with.
-  model: 'qwen3:8b',
+  // Whatever the caller named: the provider substitutes the model it was built with.
+  model: 'the-caller-model',
   messages: [
     { role: 'system', content: 'you extract entities' },
     { role: 'user', content: 'the episode text' },
@@ -144,14 +140,10 @@ describe('the request the provider sends', () => {
     expect(body.model).toBe('claude-haiku-4-5');
     expect(body.think).toBeUndefined();
     expect(body.output_config).toBeUndefined();
-    expect(body.system).toEqual([
-      {
-        type: 'text',
-        text: expect.stringContaining('you extract entities'),
-        cache_control: { type: 'ephemeral' },
-      },
-    ]);
-    expect((body.system as { text: string }[])[0]?.text).toContain(JSON.stringify(SCHEMA));
+    // A plain string, not a marked block: this prefix is far under the cache floor, and
+    // `anthropic-cache.ts` carries the measurement behind that.
+    expect(body.system).toEqual(expect.stringContaining('you extract entities'));
+    expect(body.system as string).toContain(JSON.stringify(SCHEMA));
     // The system message is lifted out; only the conversation turns stay in `messages`.
     expect(body.messages).toEqual([{ role: 'user', content: 'the episode text' }]);
   });
@@ -217,9 +209,7 @@ describe('the reply the provider reads', () => {
       format: { type: 'json_schema', schema: { ...SCHEMA, additionalProperties: false } },
     });
     // The retry constrains the answer, so it stops restating the schema as an instruction.
-    expect(sentBody(fetchImpl, 1).system).toEqual([
-      { type: 'text', text: 'you extract entities', cache_control: { type: 'ephemeral' } },
-    ]);
+    expect(sentBody(fetchImpl, 1).system).toBe('you extract entities');
   });
 
   it('closes every nested object on the constrained retry, and leaves one that states its own rule', async () => {

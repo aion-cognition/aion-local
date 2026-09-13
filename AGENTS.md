@@ -51,9 +51,11 @@ packages/core/src/
                                         AION_* registry derive from it; loader
   infrastructure/graph/                 every Cypher statement in the workspace
   infrastructure/logging/               pino wrapper
-  infrastructure/providers/             Ollama client, circuit breaker, provisioning
-  infrastructure/sqlite/                reflection queue, experience archive, usage-event log,
-                                        last-pack cache, ops ledger, introspection insights, locks
+  infrastructure/providers/             Anthropic client and batch adapter, local embedder,
+                                        circuit breaker, provisioning
+  infrastructure/sqlite/                reflection queue, batch work, experience archive,
+                                        usage-event log, last-pack cache, ops ledger,
+                                        introspection insights, locks
   recall/domain/                        pure: activation, fusion (RRF/MMR), pack assembly
   recall/application/                   cue extraction, seed strategies, the recall pipeline
   plasticity/                           reinforcement folding and the decay curve, plus the
@@ -69,7 +71,8 @@ packages/core/src/
   session/                              identity-to-session-id resolution
   prompts/                              every generation system prompt, one file per surface,
                                         exported as LOCAL and KEYED, forks named in
-                                        fork-registry.test.ts
+                                        fork-registry.test.ts; prompt-prefix-size.test.ts
+                                        measures them against the cache floor
 packages/mcp/src/                       MCP server: tool definitions, HTTP transport
 packages/cli/src/                       aion command: init, status, doctor, stats, last, why,
                                         timeline, search, source-search, source, forget,
@@ -231,19 +234,11 @@ are shared with the workstream that owns each area (`floors.data.ts`,
   runner boots no pool, drops to serial, and every file leases the warm container directly,
   so a run starts in seconds. `node scripts/test-neo4j.mjs stop` removes it.
 - `model-reconciliation` and `routing-key-flip` live in the `integration-ollama` project,
-  which runs serially after the integration group finishes. They assert on the Ollama
-  daemon's resident-model list, which the whole machine shares: a concurrent file generating
-  against the same model would reload it mid-eviction and fail the poll. `npm run
-  test:integration` runs both projects; a bare `--project integration` filter skips them.
-- A root that boots the service under a key unloads the local generation tags on its way up,
-  and the daemon those tags live in is the whole machine's. `reconcileModels`
-  (`packages/mcp/src/boot-models.ts`) unloads what a remote-routed role no longer needs. Under
-  `AION_ANTHROPIC_API_KEY`, `mcp/service.int` and `cli/last.int` pull the local reflect tag out
-  from under any local-route file running abreast of them, and the `integration` project runs
-  files in parallel. Neither root claims anything about residency, which is why nothing there
-  fails: the file that breaks is the other one. Run keyed service-boot roots in a selection of
-  their own, or in the serial `integration-ollama` project where the residency roots already
-  live.
+  which runs serially after the integration group finishes. They read the Ollama daemon's
+  resident-model list, which the whole machine shares, and assert that nothing this substrate
+  does disturbs it. `npm run test:integration` runs both projects; a bare `--project integration`
+  filter skips them. Nothing unloads a model any more: the embedder is the only tag this program
+  names, and it is the vector index.
 - A rehearsal that loads fixtures, injects faults, or tears a store down starts from
   `startRehearsalSubstrate()` (`test-support/consolidation-rehearsal.fixture.ts`) rather than
   from the harness directly. It refuses before anything connects when the environment offers
@@ -285,37 +280,25 @@ to do and no collector.
 ## Test generation routing
 
 Integration tests that drive enrichment call `testGenerationProvider(options)`
-(`infrastructure/providers/test-support/generation-provider.ts`) instead of constructing an
-`OllamaProvider` directly. With `AION_ANTHROPIC_API_KEY` set and `TEST_AION_GENERATION` unset or
-not `local`, generation runs on Anthropic (`claude-haiku-4-5`, override with
-`AION_ANTHROPIC_MODEL`) and returns in a second or two. Embedding always stays on Ollama, since
-the substrate has one embedding space. With no key, or `TEST_AION_GENERATION=local`, generation
-runs on the local reflect model instead (`qwen3:4b-instruct-2507-q4_K_M` by default). That model
-measured 12.2s at 1,772 input tokens and 46.8s at 12,488 on 2026-09-08; the previous default
-`qwen3:8b` took 35 to 100 seconds an episode.
+(`infrastructure/providers/test-support/generation-provider.ts`) instead of constructing a
+provider directly. With `AION_ANTHROPIC_API_KEY` set, generation runs on Anthropic
+(`claude-haiku-4-5`, override with `AION_ANTHROPIC_MODEL`) and returns in a second or two.
+Embedding always stays on Ollama, since the substrate has one embedding space. With no key the
+provider refuses to generate with the same error the service raises: there is no second route to
+fall back to. The precision gates guard themselves with their own `REMOTE_JUDGE_ABSENT` skip; the
+rest of the enrichment files fail on a keyless machine, which is the honest reading, since what
+they measure cannot run there.
 
 The key needs no export. The `integration` and `integration-ollama` projects run a setup file
 (`infrastructure/config/test-support/load-env.fixture.ts`) that reads `AION_ANTHROPIC_API_KEY`
 and `AION_ANTHROPIC_MODEL` from the repo `.env`. It sets whichever of the two the shell left
 unset or blank. Setup files run before any test module loads, so a battery reading the key at
-module scope sees the loaded value. An exported value wins over the file, and
-`TEST_AION_GENERATION=local` forces the local model whatever the key says: the loader never
-touches that variable. Those two keys are the only ones loaded, so a pin sitting in `.env`
-cannot reroute a run. `npm run quality:extraction` loads the same two from the working
-directory.
+module scope sees the loaded value. An exported value wins over the file. Those two keys are the
+only ones loaded, so a pin sitting in `.env` cannot reroute a run. `npm run quality:extraction`
+loads the same two from the working directory.
 
-A file whose subject is the local model itself (`cues.int.test.ts`, `ollama-provider.int.test.ts`)
-builds its own `OllamaProvider` and ignores this switch.
-
-`stages/supersession.int.test.ts` measures a real number this way. The recorded 0.400
-precision figure came from a live-stack exercise run on the local judge, before that route read
-a judge pair of its own. It describes words the local route no longer sends.
-`gate/supersession-precision.int.test.ts` scores the local judge directly. Run it with
-`TEST_AION_GENERATION=local` and it reads the same 24 pairs against the small model, an hour
-rather than fifteen minutes. Its assertion about the shipped default skips on that route, since
-the default describes the route the service runs on. Measured 2026-09-05 on qwen3:8b, two-pass:
-precision 0.800, recall 0.333. The stage file's own assertions (propose not close, which rows
-land) hold on either model and are not what those figures describe.
+A file whose subject is the embedding model itself (`ollama-provider.int.test.ts`) builds its own
+`OllamaProvider` and ignores this switch.
 
 `gate/supersession-precision.int.test.ts` is what sets the shipped `AION_SUPERSEDE_MODE`.
 It scores the single-pass and the two-pass judge over the same 24 pairs. It asserts the

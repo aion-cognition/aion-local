@@ -40,7 +40,6 @@ export type KnobDeclaration = readonly [
 export type KnobTable = Readonly<Record<string, Readonly<Record<string, KnobDeclaration>>>>;
 
 const searchMethod = z.enum(['vector', 'bm25', 'graph_traversal']);
-const providerPin = z.enum(['auto', 'ollama', 'anthropic']);
 const installProfile = z.enum(['docker', 'native']);
 
 /**
@@ -99,33 +98,18 @@ export const KNOBS = {
     // it resets. `snowflake-arctic-embed2` returns 1024 floats and takes 8192 tokens. It was
     // picked against six other local models on name pairs drawn from a live proposal queue: it
     // held the widest gap between duplicate and distinct names and carries the widest window,
-    // which is what raises the embed input cap.
+    // which is what raises the embed input cap. It is the only model Ollama serves here:
+    // generation runs on the remote model named below.
     embed: ['AION_EMBED_MODEL', text, 'snowflake-arctic-embed2'],
     embedDimension: ['AION_EMBED_DIMENSION', positiveInt, 1024],
-    cue: ['AION_CUE_MODEL', text, 'qwen3:1.7b'],
-    // An instruct checkpoint, so it emits no reasoning block for `think: false` to switch off,
-    // and the one candidate measured on this hardware that the installed Ollama already runs.
-    // Measured 2026-09-08 against the previous default `qwen3:8b`, schema-constrained and
-    // uncached: 12.2s at 1,772 in / 514 out, 19.3s at 4,969 in, 46.8s at 12,488 in, which is
-    // about 40% off the 8b at the same shape. 2.5 GB on disk at q4_K_M and 4.2 GB resident at
-    // the window below, against 6.6 GB for the 8b.
-    reflect: ['AION_REFLECT_MODEL', text, 'qwen3:4b-instruct-2507-q4_K_M'],
-    // The `options.num_ctx` each role's generations are served under. Two numbers rather than
-    // one because the windows answer different questions. Reflection reads rendered episode
-    // text, so its window is sized to the rendered-input allowance with room over it; the
-    // measured cost of holding 16384 open is 4.2 GB resident and a 22.8s cold load. The cue
-    // call is one query string and the only generation under a latency budget
-    // (`recall.cueBudgetMs`, 8s), and a cold load at 4-8k measured 4.6-6.4s against that same
-    // 22.8s, so its window is the small one. Neither is the model's own default: see
-    // `StructuredRequest.numCtx` for what trusting that costs. Embeddings are unaffected, since
-    // the embed model's window is a property of the vector space rather than of a call.
-    cueNumCtx: ['AION_CUE_NUM_CTX', positiveInt, 4_096],
-    reflectNumCtx: ['AION_REFLECT_NUM_CTX', positiveInt, 16_384],
   },
   anthropic: {
-    /** Empty string means fully local; a non-empty key opts a call class into a remote provider. */
+    /**
+     * Empty string means no generation. Capture, embeddings and every graph read still run; the
+     * generation work queues and `aion status` says so. Nothing falls back to a local model.
+     */
     apiKey: ['AION_ANTHROPIC_API_KEY', z.string(), ''],
-    /** The model every remote-routed generation names, whatever model the caller asked for. */
+    /** The model every generation names, whatever model the caller asked for. */
     model: ['AION_ANTHROPIC_MODEL', text, DEFAULT_ANTHROPIC_MODEL],
     promptCache: ['AION_ANTHROPIC_PROMPT_CACHE', z.boolean(), true],
     // Tokens a remote call that asked to reason may spend reasoning. Haiku 4.5 takes only the
@@ -135,18 +119,16 @@ export const KNOBS = {
     // budget on 2026-09-13. The provider clamps it under the call's own max_tokens, since
     // thinking is billed and counted as output.
     thinkingBudgetTokens: ['AION_ANTHROPIC_THINKING_BUDGET_TOKENS', positiveInt, 2048],
-  },
-  /**
-   * Per-role provider pins. `auto` follows the key: set, and every generation role goes to
-   * Anthropic; unset, and everything is local. A pin overrides that for one role in either
-   * direction, which is what lets cue extraction stay on the fast local model while reflection
-   * runs remotely, or the reverse. Embeddings are not a role here: one model owns the vector
-   * space for the life of the substrate. Both vars are named for the role they pin rather than
-   * AION_ROUTING_*, so they read next to the model vars they route.
-   */
-  routing: {
-    cue: ['AION_CUE_PROVIDER', providerPin, 'auto'],
-    reflect: ['AION_REFLECT_PROVIDER', providerPin, 'auto'],
+    // Dollars of generation one UTC day may commit, across ordinary Messages calls and batch
+    // submissions together. Every dispatch holds its own conservative maximum against it before
+    // it is sent and replaces that with what it cost when the answer lands, so the number bounds
+    // committed spend rather than reported spend. Past it, background work queues and recall
+    // falls back to the raw query: exhaustion is generation being unavailable, the same shape a
+    // substrate with no key already answers correctly, and not a failure anything retries.
+    // Five is the retained W4 figure and is a backstop rather than a budget: the whole 2026-09-13
+    // build round spent $5.12 across every chunk, so an ordinary day of use is nowhere near it
+    // and a runaway loop reaches it in minutes.
+    dailyCeilingUsd: ['AION_ANTHROPIC_DAILY_CEILING_USD', positive, 5],
   },
   recall: {
     // Three, not two: the cross-session graph routes every path through a Session hub, and

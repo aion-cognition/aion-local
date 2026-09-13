@@ -1,13 +1,17 @@
 import type { Config } from '../../infrastructure/config/schema.js';
 import type { IntrospectionOperation } from '../domain/operation.js';
 import { backboneRepairOperation } from './operations/backbone-repair.js';
+import { batchSettlementOperation } from './operations/batch-settlement.js';
 import { claimConsolidationOperation } from './operations/claim-consolidation.js';
 import { claimDedupOperation } from './operations/claim-dedup.js';
 import { communityRefreshOperation } from './operations/community-refresh.js';
 import { confirmationSignalCompletionOperation } from './operations/confirmation-signal-completion.js';
 import { curiosityOperation } from './operations/curiosity.js';
 import { deadLetterOperation } from './operations/dead-letter.js';
-import { descriptionFreshnessOperation } from './operations/description-freshness-operation.js';
+import {
+  descriptionFreshnessHandler,
+  descriptionFreshnessOperation,
+} from './operations/description-freshness-operation.js';
 import { edgePruneOperation } from './operations/edge-prune.js';
 import { episodeEvictOperation } from './operations/episode-evict.js';
 import { identifierDecayOperation } from './operations/identifier-decay.js';
@@ -97,6 +101,10 @@ export function introspectionOperations(config: Config): readonly IntrospectionO
     // a redaction that landed after the write leaves the secret in the graph.
     vectorBackfillOperation(),
     reconcileReenqueueOperation(),
+    // The remote half of the same hygiene: send the background generation that was batched and
+    // settle what came back. Description freshness is the producer behind it; a surface that
+    // moves its own judgment off the hot path registers its handler here beside that one.
+    batchSettlementOperation([descriptionFreshnessHandler]),
     deadLetterOperation(),
     redactionResiduePurgeOperation(),
 

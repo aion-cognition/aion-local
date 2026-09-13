@@ -121,9 +121,21 @@ mismatched pair is a failure, because the plugin is compiled against the kernel 
 ## API costs
 
 Run `aion costs [--days N]` to group billed API responses by UTC day and calling surface.
-The default window includes today and the preceding six days. Each row reports the model,
-call count, input and output tokens, thinking tokens, cache-write and cache-read tokens, the
-cache-read share of that group's input tokens, usage-error count, and estimated dollars.
+The default window includes today and the preceding six days. Each row reports the model, the rate
+card it billed on, call count, input and output tokens, thinking tokens, cache-write and cache-read
+tokens, the cache-read share of that group's input tokens, usage-error count, and estimated
+dollars.
+
+A row's rate is `standard` or `batch`. Batched requests bill at half the ordinary rate for the
+same tokens, so the discount is in the dollars and never in the counts: the token columns are what
+the model read and wrote either way, and halving them would misreport every reading that is not
+about money. Rate cards group separately, so a batched answer cannot inherit the ordinary price.
+
+Each batched answer is recorded once, under the remote request it came from (`<batch id>:<work
+key>`). A settlement pass reads an ended batch again until its rows are terminal, and without that
+identity one paid answer would be charged once per reading. An answer the substrate discards as
+stale is charged the same as one it applies: paid is paid, and a bill that counted only the useful
+answers would report the batch lane as cheaper than it is by the amount of the waste.
 
 The thinking column is a share of the output column, not an addition to it. The API bills
 reasoning as output, so a total that sums the two counts it twice. It says how much of the output
@@ -159,44 +171,106 @@ Each group's cache share uses the same denominator.
 
 | Control | Default | Effect |
 |---|---|---|
-| `AION_ANTHROPIC_PROMPT_CACHE` | `true` | Marks the system prefix for five-minute provider caching, including the schema in `system_prompt` mode. Inert on every production surface today under shipped prompts and defaults. `false` sends the original string format. |
+| `AION_ANTHROPIC_DAILY_CEILING_USD` | `5` | Dollars of generation one UTC day may commit, shared by ordinary Messages calls and batch submissions. Consulted before dispatch, never after. |
+| `AION_ANTHROPIC_PROMPT_CACHE` | `true` | Allows the marker on a system prefix that reaches the API's 4,096-token floor. No shipped surface does, so no shipped call carries it; the provider decides per call rather than marking unconditionally. `false` switches the marker off whatever the length. |
 | `AION_CUE_CACHE_TTL_MINUTES` | `30` | Reuses successful cue results in this process for identical generation requests. `0` disables it. The cache holds at most 256 entries. |
-| `AION_CUE_PROVIDER` | `auto` | `ollama` removes cue generation API charges while reflection remains keyed. See [the cue pin measurement limits](degradation.md#cue-extraction-pinned-local). |
+
+### The daily ceiling
+
+Every dispatch holds against the day before it is sent. The hold is a conservative maximum, priced
+from the prompt going out (three characters per token, under the four the docs estimate) and the
+call's own `max_tokens`; when the answer lands, what it actually cost replaces the hold. The
+reservations are rows in `generation_spend`, so two callers in one process, two processes, and one
+process across a restart all read the same committed total, and a batch submitted before a restart
+is still money committed after it. A hold nobody comes back to keeps counting at its maximum:
+unknown is not free.
+
+A day that cannot cover the next dispatch refuses it as generation being unavailable, the same
+type a substrate with no key answers with. Background work goes back on the queue without spending
+an attempt, a batch submission is not sent and its work stays queued, and recall falls back to the
+raw query text. Nothing retries against a spent ceiling, because nothing a retry does clears it: a
+new UTC day or a higher number does.
+
+`aion costs` prints the day against the ceiling, with what is still in flight beside it. A model
+the price table does not carry cannot be held against a dollar figure at all; such a call is
+dispatched and counted, and that line says how many there were rather than reading them as free.
 
 The extraction floor, `AION_REFLECTION_MIN_EXTRACTION_CHARS`, is owned by the separate
 hardening change and is not present on this branch. `AION_NARRATIVE_MIN_NEW_EPISODES` is
 deferred and is not a supported setting. Neither should be set before its implementation lands.
-Bulk batching also remains deferred until the ledger measures its share of spend.
 
-In `system_prompt` mode, per-call schemas break the static-prefix premise even when only user messages otherwise change.
-Semantic relationships, the tier-3 advisor, and cognitive restatement build schemas per call;
-entity merge judgment and consolidation synthesis accept caller-supplied schemas.
-Changing those schemas changes the cached block and can prevent reuse.
+### Batched generation
 
-Eligible prefixes that change can incur cache-write charges without later savings.
-Recheck reuse when changing prompts, schemas, or models; the switch alone does not guarantee savings.
+Background work that tolerates minutes to hours goes through the Message Batches API at half the
+ordinary rate. Cues and anything a caller is waiting on stay on ordinary Messages calls: a batch
+takes up to 24 hours, which is not a latency budget.
 
-### Prompt cache measurements
+The adapter is `packages/core/src/infrastructure/providers/batch-adapter.ts`, and what is owed
+lives in the `batch_work` table. Four rules hold it:
 
-On 2026-09-06, isolated Haiku 4.5 calls used the production cues, entities, and cognitive
-prompts and schemas. Each surface made two identical requests per schema-delivery mode.
+- Submission is not completion. The remote identity is written down before anything is counted
+  as done, and a crash between the API accepting a batch and that write costs a duplicate batch
+  rather than an answer nobody can find.
+- Results are consumed by `custom_id`, never by position. The API returns them unordered.
+- Every answer is revalidated against the substrate before it is applied. Hours passed, and the
+  pair a judgment is about may have merged, been superseded, or been forgotten. A stale answer is
+  discarded and recorded as discarded.
+- No remote job holds the publication guard. A handler takes its own publication when the answer
+  is in hand.
 
-| Surface | Input tokens per call, system prompt / structured output | Cache hits, system prompt / structured output |
-|---|---|---|
-| Cues | 520 / 683 | 0 of 2 / 0 of 2 |
-| Entities | 364 / 569 | 0 of 2 / 0 of 2 |
-| Cognitive | 756 / 1005 | 0 of 2 / 0 of 2 |
+Success, error, cancellation and expiry are all handled, and only the first is terminal:
+cancelled, expired and errored work goes back on the queue, because the question was never
+answered. A reset partitions old answers away by substrate identity, so a batch submitted before
+it can land afterwards and be recognized as belonging to a store that no longer exists.
 
-Prompt caching is inert on every production surface today under shipped Haiku 4.5 prompts and defaults.
-The largest instruction constant is roughly 1300 tokens, below the 4096-token minimum cacheable prefix;
-the three live samples above confirm zero reuse for their requests.
-Production prompts were not padded. [Anthropic's cache documentation](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
-defines the minimum and token accounting.
+The `batch_settlement` maintenance operation is the pump: it consumes what has landed, then
+submits what is owed. `aion costs` prints outstanding batch commitments beside the bill, because a
+submitted batch is spend that has not been charged yet.
 
-A separate long-prefix control verified both modes: second requests read 7865 tokens in
-`system_prompt` and 7953 in `output_config`. For the same four control calls, the ledger
-estimated $0.031890 with caching off and $0.021609 with caching on, a 32.2% reduction.
-Structured output therefore supports reuse; the default remains `system_prompt`.
+Its cadence is the introspection engine's, not a timer of its own and not a promise of fifteen
+minutes. The engine wakes every `AION_MAINTENANCE_TICK_MINUTES` (15 by default) and runs **one**
+operation, chosen from the whole catalog by tier, urgency and waiting time. This one carries a
+standing relevance of 0.15 and no gauge in the health snapshot, so it reaches the threshold on
+starvation rather than on demand, and several ticks can pass between its turns. The `quarter-hour`
+bucket is a ceiling on how often it may be selected, not a floor on how often it is. What that
+costs is latency on an answer already hours old, which is the reason this work was batched.
+
+`description_freshness` is the producer. It nominates entity glosses that fell behind their
+mentions, builds each request with the same prompt and result schema the inline call used, and
+writes it to `batch_work`; the pump sends them and hands each answer back to the surface's own
+handler. The handler re-reads the entity, refuses an answer whose gloss or baseline moved while
+the batch was out, and applies the rest through the same guarded write, which is the last word on
+whether a description was refreshed. Foreground cues stay on Messages. A surface that moves its
+own judgment off the hot path registers its handler in `catalog.ts` beside that one.
+
+### Prompt caching
+
+Haiku 4.5 caches no prefix shorter than 4,096 tokens. A `cache_control` marker on a shorter one
+is accepted and ignored, which reads as cached in the request and as uncached on the bill, so the
+provider attaches it only where the prefix reaches the floor.
+
+Nothing reaches it. `packages/core/src/prompts/prompt-prefix-size.test.ts` measures all 36 shipped
+system prompts on every run: the longest is `supersession-review:KEYED` at 2,491 characters,
+roughly 620 tokens, against a floor of about 16,384 characters. That test fails if a prompt grows
+past the floor, which is how the decision gets revisited. No prompt is padded to reach it: a
+prefix written to be long is text the model reads on every call that nobody wrote for a reason.
+
+The floor itself is measured rather than taken from the documentation.
+`anthropic-cache.int.test.ts` sends a 4,315-token probe prefix twice against the live API and
+reads the usage fields back: the prefix is written once and read back on the second call, and the
+uncached input is 12 tokens a call. The same file sends a short prefix twice and reads zero
+creation and zero read tokens, which is the state every shipped surface is in.
+
+`aion costs` reads `cache_creation_input_tokens` and `cache_read_input_tokens` off every billed
+response, so the day a surface does grow a real shared prefix the evidence is already there.
+[Anthropic's cache documentation](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
+defines the minimum and the token accounting.
+
+One thing to watch if a prefix ever does qualify: in `system_prompt` mode the schema is part of
+the prefix, so a surface that builds its schema per call has a prefix that changes per call.
+Semantic relationships, the tier-3 advisor and cognitive restatement build theirs that way, and
+entity merge judgment and consolidation synthesis take a caller's. A changing eligible prefix
+pays the cache write every time and reads it back never.
 
 The CLI reported these cache-effectiveness lines:
 
@@ -225,11 +299,17 @@ passed. `drop` never touches a claimed row: that job is running, and deleting it
 worker produces exactly the orphan `reconcile` exists to repair. `aion doctor` runs the same
 reconcile count as an informational check and warns past `AION_RECONCILE_WARN_THRESHOLD`.
 
-`--job-type <integrate | source_index>` narrows `ls`, `drop` and `promote` to one job type;
-`reconcile` and `index` do not take it. `drop` and `promote` default to `integrate` when it is
-omitted, so a plain `drop` leaves `source_index` rows alone and reports how many it skipped.
-Pass `--job-type source_index` to drop those too. `promote` refuses `source_index` outright,
-since the index drainer claims those rows by job type rather than by lane.
+`--job-type <integrate | attach_vectors | source_index>` narrows `ls`, `drop` and `promote` to
+one job type; `reconcile` and `index` do not take it. `drop` and `promote` default to `integrate`
+when it is omitted, so a plain `drop` leaves the other two alone and reports how many it skipped.
+Pass the type to drop those too. `promote` refuses `source_index` outright, since the index
+drainer claims those rows by job type rather than by lane.
+
+An acceptance writes three rows: the `integrate` job the reflection worker runs, the
+`attach_vectors` job that owes the episode's embedding, and the `source_index` job the index
+drainer owns. `ls` counts each apart, because one embed call a source is not the backlog a
+caller asking how far behind its turn is wants reported to it. `pending_ahead` on a reflection
+ack counts `integrate` rows alone for the same reason.
 
 ## Reviewing proposals
 

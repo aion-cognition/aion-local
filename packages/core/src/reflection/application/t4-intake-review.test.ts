@@ -1,13 +1,12 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it } from 'vitest';
 
 import { handleReflection, type ReflectionIntakeDeps } from './intake.js';
 import { LaneAssigner } from './lanes.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { openLogger } from '../../infrastructure/logging/logger.js';
-import type { Vector } from '../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   listReferenceBatches,
@@ -19,7 +18,6 @@ import { FakeGraph } from '../test-support/fake-graph.fixture.js';
 
 const MEMBER_ID = 'member-1';
 const WORKSPACE_ID = 'workspace-1';
-const EMBED_DIMENSION = 8;
 const NOW = new Date('2026-09-08T06:00:00.000Z');
 
 const PAYLOAD = {
@@ -35,12 +33,6 @@ let db: SqliteHandle;
 let dataDir: string;
 let deps: ReflectionIntakeDeps;
 
-function fakeVectors(texts: readonly string[]): Vector[] {
-  return texts.map((_unused, index) =>
-    Array.from({ length: EMBED_DIMENSION }, (__unused, slot) => (index + 1) / (slot + 1)),
-  );
-}
-
 beforeEach(() => {
   graph = new FakeGraph();
   graph.seedNode(MEMBER_ID, ['Member', 'Entity', 'AionNode']);
@@ -51,16 +43,11 @@ beforeEach(() => {
     driver: graph.driver,
     db,
     sessions: new SessionManager(graph.driver, { memberId: MEMBER_ID, workspaceId: WORKSPACE_ID }),
-    provider: {
-      embed: vi.fn((texts: readonly string[]) => Promise.resolve(fakeVectors(texts))),
-      generate: vi.fn(() => Promise.reject(new Error('intake must never call generate'))),
-    },
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: 4.5,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
     publications: directIntakePublisher(graph.driver, db),
-    acceptHookCapture: true,
   };
 });
 

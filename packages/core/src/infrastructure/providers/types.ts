@@ -22,42 +22,40 @@ export type StructuredRequest = {
   schema: JsonSchema;
   maxTokens?: number;
   temperature?: number;
-  /**
-   * `options.num_ctx` on the local provider: the context window this call is served under. The
-   * provider sends it on every role-routed generation and never trusts the model's own default,
-   * because that default is not one number. Ollama documents 4096 in its FAQ, 2048 in the
-   * Modelfile reference and a VRAM-derived value elsewhere, and overrunning it truncates in
-   * silence: measured 2026-09-08, a 5,234-token prompt sent at num_ctx 4096 came back reporting
-   * prompt_eval_count 4096, with 1,138 tokens dropped, no error and no warning. A judge reading a
-   * truncated record still answers, and answers confidently. The role's knob supplies the value;
-   * a caller that sizes its own call class may name one instead. Anthropic has no equivalent
-   * setting and ignores it.
-   */
-  numCtx?: number;
   signal?: AbortSignal;
   /**
-   * Whether the model reasons before it answers. Both routes honour it, by different
-   * mechanisms.
-   *
-   * Local: hybrid reasoning models (the qwen3 family) emit a reasoning block ahead of the
-   * structured answer unless it is switched off, and that block dominates the call: measured on
-   * host Ollama, `qwen3:1.7b` runs 527-937ms warm with reasoning off against a 1.9-11.3s spread
-   * with it on, plus calls that never return at all.
-   *
-   * Remote: `true` turns on Haiku 4.5's extended thinking with an explicit token budget. That
-   * model takes no adaptive mode, so the budget is a request field rather than an effort word.
-   * Anything but `true` sends no thinking configuration, which is the model's own default of off.
+   * Whether the model reasons before it answers. `true` turns on Haiku 4.5's extended thinking
+   * with an explicit token budget. That model takes no adaptive mode, so the budget is a request
+   * field rather than an effort word. Anything but `true` sends no thinking configuration, which
+   * is the model's own default of off.
    *
    * Extraction tasks set this false; a caller that wants the model to reason sets it true.
    */
   think?: boolean;
 };
 
+/**
+ * Which rate card a response is billed on. Batched requests bill at half the ordinary rate for
+ * the same token counts, so the discount belongs here and never in the counts themselves: a
+ * halved token total would read as a smaller request on every report that is not about money.
+ */
+export type ApiPricingTier = 'standard' | 'batch';
+
 /** Usage reported by one billed API response; the input token classes do not overlap. */
 export type ApiCall = {
   readonly occurredAt: Date;
   readonly model: string;
   readonly surface: string;
+  /**
+   * The remote request this usage is for, where the route names one. It is the identity a bill
+   * is recorded once under: a batch is read again on every settlement pass, and a second row per
+   * reading would charge one answer as many times as it was polled.
+   *
+   * Absent on the synchronous route, where one call is one response and there is nothing to poll.
+   */
+  readonly requestId?: string;
+  /** Absent means `standard`, which is what every synchronous call is. */
+  readonly pricingTier?: ApiPricingTier;
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly cacheCreationTokens: number;
@@ -78,25 +76,32 @@ export type ApiCall = {
 };
 
 /**
- * `embed` always runs locally; `generate` is provider-routed and may leave the machine when
- * an Anthropic key is set. One interface covers both so callers never branch on which
- * implementation is behind it.
+ * The local half. Embeddings never leave the machine: one model owns the vector space for the
+ * life of a substrate, so a call site that only embeds asks for this rather than for a whole
+ * provider it would never generate through.
  */
-export type Provider = {
+export type Embedder = {
   embed(texts: readonly string[]): Promise<Vector[]>;
+};
+
+/**
+ * `embed` runs locally; `generate` leaves the machine for the Anthropic API. One interface
+ * covers both so callers never branch on which implementation is behind it.
+ */
+export type Provider = Embedder & {
   generate(req: StructuredRequest): Promise<unknown>;
   /**
    * Where `generate` resolved, for a call site that sizes its own prompt to the model behind it.
    * Structural rather than the routing layer's own type, so this module stays free of that
-   * import and no existing implementation grows a field. An absent route reads as local: a test
-   * fake or a bare `OllamaProvider` gets the small-model behavior.
+   * import and no existing implementation grows a field. An absent route is a test fake, which
+   * gets the small-model prompt shapes.
    */
-  readonly route?: { readonly provider: 'ollama' | 'anthropic' };
+  readonly route?: { readonly provider: 'anthropic' };
 };
 
 /**
- * Half a provider: what a remote route can offer. Anthropic has no embeddings API, and the
- * embedding model is the vector index, so the routing layer pairs one of these with the local
- * embedder rather than letting a second implementation of `Provider` exist without `embed`.
+ * Half a provider: what the remote route offers. Anthropic has no embeddings API, so the
+ * routing layer pairs one of these with the local embedder rather than letting a second
+ * implementation of `Provider` exist without `embed`.
  */
 export type GenerationBackend = Pick<Provider, 'generate'>;

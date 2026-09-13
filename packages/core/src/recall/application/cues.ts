@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { isAbortError } from '../../infrastructure/errors.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
+import { isGenerationUnavailable } from '../../infrastructure/providers/errors.js';
 import type {
   ChatMessage,
   JsonSchema,
@@ -15,9 +16,9 @@ import { LOCAL as CUE_SYSTEM_PROMPT } from '../../prompts/cue-extraction.js';
 
 /**
  * One model call produces the cues: exactly one `generate` per invocation, which is all the
- * recall hot path allows. A failure, a busted budget, or a response that fails validation
- * degrades to the caller's own query and summary text verbatim, never to keyword extraction
- * over it.
+ * recall hot path allows. A failure, a busted budget, a response that fails validation, or a
+ * substrate with no key at all degrades to the caller's own query and summary text verbatim,
+ * never to keyword extraction over it.
  */
 
 export type CueExtractionInput = {
@@ -28,7 +29,7 @@ export type CueExtractionInput = {
 
 export type CueExtractionDeps = {
   readonly provider: Provider;
-  /** `config.models.cue`. */
+  /** `config.anthropic.model`. */
   readonly model: string;
   /** `config.recall.cueBudgetMs`; a hang guard on the one `generate` call, not a target. */
   readonly budgetMs: number;
@@ -154,10 +155,8 @@ function buildMessages(input: CueExtractionInput): ChatMessage[] {
 }
 
 /** JSON preserves field boundaries even when user text contains control characters. */
-function cacheKey(request: StructuredRequest, provider: Provider): string {
-  return createHash('sha256')
-    .update(JSON.stringify({ request, route: provider.route?.provider ?? 'ollama' }))
-    .digest('hex');
+function cacheKey(request: StructuredRequest): string {
+  return createHash('sha256').update(JSON.stringify(request)).digest('hex');
 }
 
 type CueModelCallResult =
@@ -185,6 +184,9 @@ async function callCueModel(
     });
     return { ok: true, data };
   } catch (error) {
+    if (isGenerationUnavailable(error)) {
+      return { ok: false, reason: 'unavailable', error };
+    }
     return { ok: false, reason: isAbortError(error) ? 'timeout' : 'model_error', error };
   } finally {
     clearTimeout(timer);
@@ -212,8 +214,8 @@ async function callCueModel(
 const SUMMARY_CUE_WEIGHT: CueWeight = 1;
 
 /**
- * The degraded rung: recall proceeds on query and summary embeddings plus BM25 over the raw
- * query text. Both of the caller's own text buckets carry through, the summary at the same
+ * The degraded rung, and the whole of recall on a substrate with no key: recall proceeds on
+ * query and summary embeddings plus BM25 over the raw query text. Both of the caller's own text buckets carry through, the summary at the same
  * damped weight the healthy path gives it, because the summary is context the caller already
  * extracted and dropping it costs signal the degraded path has no other way to recover. The
  * recent-turns bucket does not carry: it is the lowest-weighted bucket, and a verbatim turn
@@ -295,7 +297,7 @@ export async function extractCues(
     // Reasoning costs the cue budget without improving extraction from the supplied text.
     think: false,
   };
-  const key = cacheKey(request, deps.provider);
+  const key = cacheKey(request);
   const cached = deps.cache.get(key);
   if (cached !== undefined) {
     return cached;
@@ -303,10 +305,16 @@ export async function extractCues(
 
   const call = await callCueModel(deps, request);
   if (!call.ok) {
-    deps.logger.warn(
-      { err: call.error, model: deps.model, reason: call.reason },
-      'cue extraction degraded',
-    );
+    // A substrate with no key is not an incident: it is the configuration, and it says so once
+    // per call at debug rather than warning on every recall for the life of the install.
+    if (call.reason === 'unavailable') {
+      deps.logger.debug({ reason: call.reason }, 'cue extraction degraded to the raw query');
+    } else {
+      deps.logger.warn(
+        { err: call.error, model: deps.model, reason: call.reason },
+        'cue extraction degraded',
+      );
+    }
     return degradedResult(input, call.reason);
   }
 

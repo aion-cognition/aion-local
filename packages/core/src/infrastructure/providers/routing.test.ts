@@ -1,173 +1,64 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  acceptsHookCapture,
-  evictableModels,
-  localChatModels,
+  GENERATION_ROLES,
   remoteBannerLines,
   resolveProviderRouting,
   routingSummary,
-  unbackedPins,
-  type ProviderPin,
 } from './routing.js';
 import { DEFAULTS } from '../config/defaults.js';
 import type { Config } from '../config/schema.js';
 
 const HAIKU = DEFAULTS.anthropic.model;
-const CUE_MODEL = DEFAULTS.models.cue;
-const REFLECT_MODEL = DEFAULTS.models.reflect;
 const EMBED_MODEL = DEFAULTS.models.embed;
 
-type Setup = {
-  readonly key?: string;
-  readonly cue?: ProviderPin;
-  readonly reflect?: ProviderPin;
-  readonly cueModel?: string;
-  readonly reflectModel?: string;
-};
-
-function config(setup: Setup = {}): Config {
-  return {
-    ...DEFAULTS,
-    models: {
-      ...DEFAULTS.models,
-      cue: setup.cueModel ?? CUE_MODEL,
-      reflect: setup.reflectModel ?? REFLECT_MODEL,
-    },
-    anthropic: { ...DEFAULTS.anthropic, apiKey: setup.key ?? '' },
-    routing: { cue: setup.cue ?? 'auto', reflect: setup.reflect ?? 'auto' },
-  };
+function config(key = ''): Config {
+  return { ...DEFAULTS, anthropic: { ...DEFAULTS.anthropic, apiKey: key } };
 }
 
-describe('the routing matrix', () => {
-  it('keeps every role local when no key is set', () => {
+describe('the routing rule', () => {
+  it('routes every generation role to the Anthropic model when the key is set', () => {
+    const routing = resolveProviderRouting(config('sk-ant-test'));
+
+    expect(routing.keyPresent).toBe(true);
+    for (const role of GENERATION_ROLES) {
+      expect(routing.roles[role]).toEqual({ role, model: HAIKU, available: true });
+    }
+  });
+
+  it('makes every role unavailable with no key rather than routing it somewhere else', () => {
     const routing = resolveProviderRouting(config());
 
     expect(routing.keyPresent).toBe(false);
-    expect(routing.roles.cue).toMatchObject({
-      provider: 'ollama',
-      model: CUE_MODEL,
-      reason: 'local-default',
-    });
-    expect(routing.roles.reflect).toMatchObject({ provider: 'ollama', model: REFLECT_MODEL });
-    expect(localChatModels(routing)).toEqual([CUE_MODEL, REFLECT_MODEL]);
-    expect(evictableModels(routing)).toEqual([]);
+    for (const role of GENERATION_ROLES) {
+      expect(routing.roles[role].available).toBe(false);
+      expect(routing.roles[role].model).toBe(HAIKU);
+    }
   });
 
-  it('routes every generation role to the Anthropic model when the key is set', () => {
-    const routing = resolveProviderRouting(config({ key: 'sk-ant-test' }));
-
-    expect(routing.roles.cue).toMatchObject({ provider: 'anthropic', model: HAIKU, reason: 'key' });
-    expect(routing.roles.reflect).toMatchObject({
-      provider: 'anthropic',
-      model: HAIKU,
-      reason: 'key',
-    });
-    // The local tag travels with the route, which is what reconciliation unloads.
-    expect(routing.roles.reflect.localModel).toBe(REFLECT_MODEL);
-    expect(localChatModels(routing)).toEqual([]);
+  it('reads a key that is only whitespace as no key', () => {
+    expect(resolveProviderRouting(config('  \n')).keyPresent).toBe(false);
   });
 
-  it('honours a per-role pin back to Ollama with the key still set', () => {
-    const routing = resolveProviderRouting(config({ key: 'sk-ant-test', cue: 'ollama' }));
-
-    expect(routing.roles.cue).toMatchObject({
-      provider: 'ollama',
-      model: CUE_MODEL,
-      reason: 'pinned-local',
-    });
-    expect(routing.roles.reflect).toMatchObject({ provider: 'anthropic', model: HAIKU });
-    expect(localChatModels(routing)).toEqual([CUE_MODEL]);
-  });
-
-  it('honours a per-role pin to Anthropic while the other role stays local', () => {
-    const routing = resolveProviderRouting(
-      config({ key: 'sk-ant-test', cue: 'ollama', reflect: 'anthropic' }),
-    );
-
-    expect(routing.roles.reflect).toMatchObject({ provider: 'anthropic', reason: 'pinned-remote' });
-    expect(routing.roles.cue.provider).toBe('ollama');
-  });
-
-  it('runs a role pinned to Anthropic locally when no key backs the pin, and says so', () => {
-    const routing = resolveProviderRouting(config({ reflect: 'anthropic' }));
-
-    expect(routing.roles.reflect).toMatchObject({
-      provider: 'ollama',
-      model: REFLECT_MODEL,
-      reason: 'pin-without-key',
-    });
-    expect(unbackedPins(routing).map((route) => route.role)).toEqual(['reflect']);
-    expect(evictableModels(routing)).toEqual([]);
-  });
-
-  it('reports no unbacked pin when the key backs it', () => {
-    expect(
-      unbackedPins(resolveProviderRouting(config({ key: 'sk-ant-test', reflect: 'anthropic' }))),
-    ).toEqual([]);
-  });
-});
-
-describe('what routing asks init and reconciliation to do', () => {
-  it('evicts every generation model once every generation role is remote', () => {
-    const routing = resolveProviderRouting(config({ key: 'sk-ant-test' }));
-
-    expect(evictableModels(routing)).toEqual([CUE_MODEL, REFLECT_MODEL]);
-  });
-
-  it('evicts only the roles that went remote', () => {
-    const routing = resolveProviderRouting(config({ key: 'sk-ant-test', cue: 'ollama' }));
-
-    expect(evictableModels(routing)).toEqual([REFLECT_MODEL]);
-  });
-
-  it('never evicts a model another role still routes to locally', () => {
-    const routing = resolveProviderRouting(
-      config({ key: 'sk-ant-test', cue: 'ollama', cueModel: 'qwen3:8b', reflectModel: 'qwen3:8b' }),
-    );
-
-    expect(routing.roles.reflect.provider).toBe('anthropic');
-    expect(evictableModels(routing)).toEqual([]);
-  });
-
-  it('never evicts the embedding model, even when a role names it', () => {
-    const routing = resolveProviderRouting(
-      config({ key: 'sk-ant-test', reflectModel: EMBED_MODEL }),
-    );
-
-    expect(evictableModels(routing)).toEqual([CUE_MODEL]);
-  });
-
-  it('takes hook capture only where the reflect role routes remote', () => {
-    expect(acceptsHookCapture(resolveProviderRouting(config()))).toBe(false);
-    expect(acceptsHookCapture(resolveProviderRouting(config({ key: 'sk-ant-test' })))).toBe(true);
-  });
-
-  // The key alone is not the profile: a reflect role pinned local digests capture on the same
-  // model a keyless install would, so the pin is refused the way a missing key is.
-  it('refuses hook capture when a key is set and the reflect role is pinned local', () => {
-    const routing = resolveProviderRouting(config({ key: 'sk-ant-test', reflect: 'ollama' }));
-
-    expect(routing.keyPresent).toBe(true);
-    expect(acceptsHookCapture(routing)).toBe(false);
+  it('leaves the embedding model out of the routing question', () => {
+    expect(resolveProviderRouting(config('sk-ant-test')).embedModel).toBe(EMBED_MODEL);
+    expect(resolveProviderRouting(config()).embedModel).toBe(EMBED_MODEL);
   });
 });
 
 describe('what a person reads about the route', () => {
   it('summarizes each role as provider and model', () => {
-    expect(
-      routingSummary(resolveProviderRouting(config({ key: 'sk-ant-test', cue: 'ollama' }))),
-    ).toBe(`cue=ollama:${CUE_MODEL} reflect=anthropic:${HAIKU}`);
+    expect(routingSummary(resolveProviderRouting(config('sk-ant-test')))).toBe(
+      `cue=anthropic:${HAIKU} reflect=anthropic:${HAIKU}`,
+    );
   });
 
-  it('prints no banner on a fully local install', () => {
-    expect(remoteBannerLines(resolveProviderRouting(config()))).toEqual([]);
+  it('summarizes a keyless substrate as queued rather than as a model it never calls', () => {
+    expect(routingSummary(resolveProviderRouting(config()))).toBe('cue=queued reflect=queued');
   });
 
   it('names the call classes that leave the machine and the ones that do not', () => {
-    const banner = remoteBannerLines(resolveProviderRouting(config({ key: 'sk-ant-test' }))).join(
-      '\n',
-    );
+    const banner = remoteBannerLines(resolveProviderRouting(config('sk-ant-test'))).join('\n');
 
     expect(banner).toContain('Anthropic API');
     expect(banner).toContain(HAIKU);
@@ -176,12 +67,12 @@ describe('what a person reads about the route', () => {
     expect(banner).toContain('embeddings and every graph read stay local');
   });
 
-  it('names only the remote role when one is pinned local', () => {
-    const banner = remoteBannerLines(
-      resolveProviderRouting(config({ key: 'sk-ant-test', cue: 'ollama' })),
-    ).join('\n');
+  it('says what a keyless install still does and what waits', () => {
+    const banner = remoteBannerLines(resolveProviderRouting(config())).join('\n');
 
-    expect(banner).toContain('reflection extraction');
-    expect(banner).not.toContain('recall cue extraction');
+    expect(banner).toContain('no AION_ANTHROPIC_API_KEY is set');
+    expect(banner).toContain('capture, embeddings and every graph read still work');
+    expect(banner).toContain('Generation work queues');
+    expect(banner).toContain('raw query');
   });
 });

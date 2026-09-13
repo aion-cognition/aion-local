@@ -22,8 +22,9 @@ import { bootstrapService, type AionService } from './bootstrap.js';
 /**
  * The key flip at the boundary a person actually flips it: the service boots with the key and
  * again without it, against the live Ollama on this machine. What it proves is the pair of
- * claims the routing decision rests on: generation follows the key, and the local models it
- * covers leave memory but not disk, so taking the key back out costs a load and not a pull.
+ * claims the routing decision rests on: generation runs remotely when a key is set and queues
+ * when it is not, and Ollama's memory is untouched either way, because the only model this
+ * substrate asks it for is the embedder.
  *
  * The key is read from the environment. Nothing here writes `.env`, and the live stack is
  * untouched: this boots its own service against the test harness Neo4j and a throwaway SQLite.
@@ -31,9 +32,7 @@ import { bootstrapService, type AionService } from './bootstrap.js';
 
 const API_KEY = (process.env.AION_ANTHROPIC_API_KEY ?? '').trim();
 const OLLAMA_URL = process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434';
-
-/** Both roles name the small instruct model, so one load covers the whole flip. */
-const CHAT_MODEL = DEFAULTS.models.cue;
+const EMBED_MODEL = DEFAULTS.models.embed;
 const MEMBER_NAME = 'Key Flip Test';
 
 let harness: Neo4jHarness;
@@ -46,8 +45,6 @@ function env(withKey: boolean): NodeJS.ProcessEnv {
     AION_NEO4J_URI: harness.uri,
     AION_NEO4J_PASSWORD: harness.password,
     AION_OLLAMA_URL: OLLAMA_URL,
-    AION_CUE_MODEL: CHAT_MODEL,
-    AION_REFLECT_MODEL: CHAT_MODEL,
     AION_SQLITE_PATH: join(dir, 'aion.sqlite'),
     AION_LOG_FILE: logPath,
     AION_LOG_LEVEL: 'debug',
@@ -75,10 +72,6 @@ function messagesSince(offset: number): string[] {
     .map((line) => (JSON.parse(line) as { msg?: string }).msg ?? '');
 }
 
-async function residentNames(): Promise<string[]> {
-  return (await listResidentModels(OLLAMA_URL)).map((model) => model.name);
-}
-
 /**
  * Sorted, because what this asserts is that nothing was pulled or removed. Ollama's tag
  * listing has no stable order between two calls, so comparing it as a sequence fails on the
@@ -88,29 +81,8 @@ async function installedModels(): Promise<string[]> {
   return [...(await listOllamaModels(OLLAMA_URL))].sort();
 }
 
-async function loadChatModel(): Promise<void> {
-  const response = await fetch(`${OLLAMA_URL}/api/generate`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ model: CHAT_MODEL, keep_alive: 300, stream: false }),
-  });
-  expect(response.ok).toBe(true);
-  await response.text();
-}
-
-async function waitUntil(predicate: () => Promise<boolean>, timeoutMs = 30_000): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    if (await predicate()) {
-      return true;
-    }
-    if (Date.now() > deadline) {
-      return false;
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 250);
-    });
-  }
+async function residentNames(): Promise<string[]> {
+  return [...(await listResidentModels(OLLAMA_URL)).map((model) => model.name)].sort();
 }
 
 beforeAll(async () => {
@@ -130,11 +102,10 @@ afterAll(async () => {
 
 describe('booting with the key and again without it', () => {
   it.skipIf(API_KEY === '')(
-    'routes generation to Anthropic and unloads the local model the key covers',
+    'routes every generation role to Anthropic and touches no resident model',
     async () => {
       const installedBefore = await installedModels();
-      await loadChatModel();
-      expect(await residentNames()).toContain(CHAT_MODEL);
+      const residentBefore = await residentNames();
 
       const offset = logLines().length;
       let started: AionService | undefined;
@@ -148,18 +119,17 @@ describe('booting with the key and again without it', () => {
       expect(messages).toContain(
         `provider routing: cue=anthropic:${DEFAULTS.anthropic.model} reflect=anthropic:${DEFAULTS.anthropic.model}`,
       );
-      expect(messages.some((message) => message.startsWith('model reconciliation: unloaded'))).toBe(
-        true,
+      // The boot warms the embedder, so residency can grow by that one tag and nothing else.
+      expect((await residentNames()).filter((name) => !name.startsWith(EMBED_MODEL))).toEqual(
+        residentBefore.filter((name) => !name.startsWith(EMBED_MODEL)),
       );
-      expect(await waitUntil(async () => !(await residentNames()).includes(CHAT_MODEL))).toBe(true);
       expect(await installedModels()).toEqual(installedBefore);
     },
     300_000,
   );
 
-  it('restores local routing with the key gone, and reconciliation touches nothing', async () => {
+  it('queues generation with the key gone, and says so once at boot', async () => {
     const installedBefore = await installedModels();
-    await loadChatModel();
 
     const offset = logLines().length;
     let started: AionService | undefined;
@@ -170,12 +140,10 @@ describe('booting with the key and again without it', () => {
     }
 
     const messages = messagesSince(offset);
-    expect(messages).toContain(
-      `provider routing: cue=ollama:${CHAT_MODEL} reflect=ollama:${CHAT_MODEL}`,
-    );
-    // Nothing to unload means Ollama is not called at all, so no reconciliation line is written.
-    expect(messages.some((message) => message.startsWith('model reconciliation:'))).toBe(false);
-    expect(await residentNames()).toContain(CHAT_MODEL);
+    expect(messages).toContain('provider routing: cue=queued reflect=queued');
+    expect(
+      messages.some((message) => message.includes('every generation stays queued until a key')),
+    ).toBe(true);
     expect(await installedModels()).toEqual(installedBefore);
   }, 300_000);
 });

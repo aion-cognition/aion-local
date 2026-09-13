@@ -5,6 +5,7 @@ import {
   countUsageEvents,
   DEFAULT_SQLITE_PATH,
   experienceArchiveSpan,
+  GenerationSpendGuard,
   isManagedNeo4jUri,
   appliedGraphSchemaVersion,
   PIPELINE_VERSION,
@@ -311,6 +312,9 @@ async function runReplay(substrate: Substrate, flags: ReplayFlags): Promise<numb
   const provider = new ProviderRouter({
     config,
     recordApiCall: new ApiUsageRecorder(db, logger).recordApiCall,
+    // A replay re-extracts real episodes through the real stages, which is the largest run of
+    // generation this program makes. It holds against the same day's ceiling as everything else.
+    spending: new GenerationSpendGuard({ db, ceilingUsd: config.anthropic.dailyCeilingUsd }),
   }).forRole('reflect');
   const deps: ReplayDeps = {
     driver,

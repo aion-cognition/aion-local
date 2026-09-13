@@ -73,7 +73,6 @@ let scored: Scored[] = [];
 
 function batteryConfig(): Config {
   const apiKey = process.env.AION_ANTHROPIC_API_KEY ?? '';
-  const local = process.env.TEST_AION_GENERATION === 'local';
   return {
     ...DEFAULTS,
     ollama: {
@@ -81,7 +80,6 @@ function batteryConfig(): Config {
       url: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
     },
     anthropic: { ...DEFAULTS.anthropic, apiKey },
-    routing: { ...DEFAULTS.routing, reflect: local ? 'ollama' : DEFAULTS.routing.reflect },
     // structural_discovery's standing relevance rises with the orphan share, which takes the
     // orphan readings here at tier 2, and what this battery pins is the advisor rather than the
     // catalog's composition.
@@ -156,10 +154,7 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('the tier-3 advisor selection battery', () 
     const route = router.routing.roles.reflect;
     const resolved = resolveProviderRouting(config).roles.reflect;
 
-    console.log(
-      `tier-3 battery route: provider ${route.provider}, model ${route.model}, ` +
-        `reason ${route.reason}, local tag ${route.localModel}`,
-    );
+    console.log(`tier-3 battery route: model ${route.model}, available ${String(route.available)}`);
 
     expect(route).toEqual(resolved);
     expect(scored).toHaveLength(TIER3_SELECTION_BATTERY.length);

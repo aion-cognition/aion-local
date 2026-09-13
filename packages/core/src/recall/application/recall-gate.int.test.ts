@@ -23,7 +23,10 @@ import type { Provider, Vector } from '../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { handleReflection } from '../../reflection/application/intake.js';
 import { LaneAssigner } from '../../reflection/application/lanes.js';
-import { directIntakePublisher } from '../../reflection/test-support/direct-intake.fixture.js';
+import {
+  directIntakePublisher,
+  drainAcceptedVectors,
+} from '../../reflection/test-support/direct-intake.fixture.js';
 import { SessionManager } from '../../session/session-manager.js';
 
 /**
@@ -113,7 +116,6 @@ async function push(input: PushInput): Promise<string> {
       driver: harness.driver,
       db,
       sessions,
-      provider,
       logger,
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),
@@ -121,7 +123,6 @@ async function push(input: PushInput): Promise<string> {
       // Accepted at the moment the push names. A `knew_at` read rewinds what the substrate knew,
       // and a source accepted at the real current time was known at no moment this file pins.
       publications: directIntakePublisher(harness.driver, db, () => input.now),
-      acceptHookCapture: true,
     },
     {
       observations: [input.observation],
@@ -136,6 +137,9 @@ async function push(input: PushInput): Promise<string> {
     },
     { identity: input.identity, now: input.now },
   );
+  // Intake queues the embedding rather than performing it, so the fixture runs the row the
+  // worker would run: what this file asserts on is vector search, which needs the vectors.
+  await drainAcceptedVectors(harness.driver, provider);
   return result.episode_id;
 }
 

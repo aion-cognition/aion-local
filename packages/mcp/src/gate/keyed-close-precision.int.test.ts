@@ -121,8 +121,7 @@ const halfOf = new Map<string, { readonly entry: KeyedCase; readonly half: CaseH
  * this battery never called.
  */
 function batteryApiKey(): string {
-  const key = process.env.AION_ANTHROPIC_API_KEY ?? '';
-  return process.env.TEST_AION_GENERATION === 'local' ? '' : key;
+  return process.env.AION_ANTHROPIC_API_KEY ?? '';
 }
 
 async function seedEpisode(id: string, text: string, occurredAt: Date): Promise<void> {
@@ -280,8 +279,8 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('the 24-case keyed close battery', () => {
   it('names the route it measured, so the number belongs to a model', () => {
     const route = resolveProviderRouting(substrate.config).roles.reflect;
     console.log(
-      `keyed close battery route: provider ${route.provider}, model ${route.model}, ` +
-        `reason ${route.reason}, local tag ${route.localModel}; embeddings on ` +
+      `keyed close battery route: model ${route.model}, ` +
+        `available ${String(route.available)}; embeddings on ` +
         `${substrate.config.models.embed} at ${String(substrate.config.models.embedDimension)} dimensions`,
     );
 

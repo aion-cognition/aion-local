@@ -47,7 +47,7 @@ const DEDUP_MAX_JUDGMENTS = 8;
 
 const configured: Config = {
   ...DEFAULTS,
-  models: { ...DEFAULTS.models, reflect: 'wiring-probe-model' },
+  anthropic: { ...DEFAULTS.anthropic, model: 'wiring-probe-model' },
   hebbian: { ...DEFAULTS.hebbian, weightFloor: 0.13 },
   sqlite: { ...DEFAULTS.sqlite, reinforcementQueueCap: 4_242 },
   temporal: { ...DEFAULTS.temporal, readingHorizonDays: 31, intentionHorizonDays: 33 },
@@ -95,7 +95,7 @@ const configured: Config = {
 const stages = reflectionStages(configured);
 
 const wiredSupersessionOptions = {
-  model: configured.models.reflect,
+  model: configured.anthropic.model,
   timeoutMs: configured.reflection.stageTimeoutMs,
   mode: configured.reflection.supersedeMode,
   autoConfidence: configured.reflection.supersedeAutoConfidence,
@@ -152,7 +152,7 @@ describe('reflectionStages', () => {
     );
 
     expect(entities.describe()).toEqual({
-      model: configured.models.reflect,
+      model: configured.anthropic.model,
       timeoutMs: configured.reflection.stageTimeoutMs,
       maxEntities: configured.reflection.maxEntities,
       minExtractionChars: configured.reflection.minExtractionChars,
@@ -167,7 +167,7 @@ describe('reflectionStages', () => {
     );
 
     expect(dedup.describe()).toEqual({
-      model: configured.models.reflect,
+      model: configured.anthropic.model,
       timeoutMs: configured.reflection.stageTimeoutMs,
       similarityThreshold: configured.reflection.entityDedupThreshold,
       sharedEpisodeJaccardFloor: configured.reflection.entityNominationJaccardFloor,
@@ -175,7 +175,7 @@ describe('reflectionStages', () => {
       maxJudgments: DEDUP_MAX_JUDGMENTS,
     });
     expect(entityDedupOptions(configured)).toEqual({
-      model: configured.models.reflect,
+      model: configured.anthropic.model,
       timeoutMs: configured.reflection.stageTimeoutMs,
       similarityThreshold: configured.reflection.entityDedupThreshold,
       sharedEpisodeJaccardFloor: configured.reflection.entityNominationJaccardFloor,
@@ -209,7 +209,7 @@ describe('reflectionStages', () => {
 
   it('builds cognitive extraction, semantic relationships and reinforcement from the same config', () => {
     expect(cognitiveOptions(configured)).toEqual({
-      model: configured.models.reflect,
+      model: configured.anthropic.model,
       timeoutMs: configured.reflection.stageTimeoutMs,
       maxNodes: configured.reflection.maxCognitiveNodes,
       keyedCloseMode: configured.reflection.keyedCloseMode,
@@ -219,7 +219,7 @@ describe('reflectionStages', () => {
       minExtractionChars: configured.reflection.minExtractionChars,
     });
     expect(semanticRelationshipOptions(configured)).toEqual({
-      model: configured.models.reflect,
+      model: configured.anthropic.model,
       timeoutMs: configured.reflection.stageTimeoutMs,
       maxRelationships: configured.reflection.maxRelationships,
     });
@@ -237,7 +237,7 @@ describe('narrativeOptions', () => {
         renderedInputAllowance: configured.maintenance.chunkRenderedInputAllowance,
         maxSpanMs: configured.maintenance.chunkMaxSpanMs,
       },
-      model: configured.models.reflect,
+      model: configured.anthropic.model,
       idleMs: configured.reflection.narrativeIdleMinutes * MINUTE_MS,
       timeoutMs: configured.reflection.stageTimeoutMs,
       // The whole group, both routes' numbers included: the resolved route picks inside it at

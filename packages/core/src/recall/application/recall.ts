@@ -165,7 +165,7 @@ export async function handleRecall(
     extractCues(
       {
         provider: deps.provider,
-        model: deps.config.models.cue,
+        model: deps.config.anthropic.model,
         budgetMs: deps.config.recall.cueBudgetMs,
         cache: deps.cueCache,
         logger: deps.logger,

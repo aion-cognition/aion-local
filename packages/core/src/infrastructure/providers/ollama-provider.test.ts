@@ -159,83 +159,10 @@ describe('OllamaProvider.embed', () => {
   });
 });
 
-describe('OllamaProvider.generate', () => {
-  it('posts the schema as the chat format and parses the returned JSON content', async () => {
-    const fetchImpl = vi.fn(async (url: string | URL, init?: RequestInit) => {
-      expect(String(url)).toBe('http://localhost:11434/api/chat');
-      const parsed = JSON.parse(init?.body as string) as Record<string, unknown>;
-      expect(parsed.model).toBe('qwen3:1.7b');
-      expect(parsed.format).toEqual({ type: 'object', properties: { cues: { type: 'array' } } });
-      expect(parsed.stream).toBe(false);
-      expect(parsed.options).toEqual({ num_predict: 128, temperature: 0.2 });
-      return jsonResponse({ message: { role: 'assistant', content: '{"cues":["a"]}' } });
-    });
-    const provider = new OllamaProvider({
-      baseUrl: 'http://localhost:11434',
-      embedModel: 'nomic-embed-text',
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-    });
-
-    await expect(
-      provider.generate({
-        model: 'qwen3:1.7b',
-        messages: [{ role: 'user', content: 'extract cues' }],
-        schema: { type: 'object', properties: { cues: { type: 'array' } } },
-        maxTokens: 128,
-        temperature: 0.2,
-      }),
-    ).resolves.toEqual({ cues: ['a'] });
-  });
-
-  it('sends the context window on the request, beside the other model options', async () => {
-    // Ollama's own default is three different numbers depending on which of its docs you read,
-    // and a prompt over the window is truncated with no error: measured 2026-09-08, a
-    // 5,234-token prompt at num_ctx 4096 came back reporting prompt_eval_count 4096.
-    const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => {
-      const parsed = JSON.parse(init?.body as string) as { options?: Record<string, number> };
-      expect(parsed.options).toEqual({ num_predict: 128, num_ctx: 16_384 });
-      return jsonResponse({ message: { role: 'assistant', content: '{"ok":true}' } });
-    });
-    const provider = new OllamaProvider({
-      baseUrl: 'http://localhost:11434',
-      embedModel: 'nomic-embed-text',
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-    });
-
-    await expect(
-      provider.generate({
-        model: 'qwen3:4b-instruct-2507-q4_K_M',
-        messages: [{ role: 'user', content: 'reflect' }],
-        schema: {},
-        maxTokens: 128,
-        numCtx: 16_384,
-      }),
-    ).resolves.toEqual({ ok: true });
-    expect(fetchImpl).toHaveBeenCalledOnce();
-  });
-
-  it('throws when the response has no message content', async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({ message: { role: 'assistant' } }));
-    const provider = new OllamaProvider({
-      baseUrl: 'http://localhost:11434',
-      embedModel: 'nomic-embed-text',
-      fetchImpl,
-    });
-
-    await expect(
-      provider.generate({
-        model: 'qwen3:1.7b',
-        messages: [{ role: 'user', content: 'hi' }],
-        schema: {},
-      }),
-    ).rejects.toThrow(/missing message content/);
-  });
-});
-
 /**
- * The error message is what roughly a dozen `{ err }` call sites write to the JSONL log, and a
- * reflection prompt embeds episode and claim text. A provider that echoes the request back in
- * its error body would put that content in every one of those lines.
+ * The error message is what roughly a dozen `{ err }` call sites write to the JSONL log, and the
+ * text handed to the embedder is episode and claim text. A provider that echoes the request back
+ * in its error body would put that content in every one of those lines.
  */
 describe('what a request error carries into the logs', () => {
   const LEAKY_BODY = Array.from(
@@ -254,11 +181,7 @@ describe('what a request error carries into the logs', () => {
     });
 
     const err = (await provider
-      .generate({
-        model: 'qwen3:1.7b',
-        messages: [{ role: 'user', content: 'the episode text' }],
-        schema: {},
-      })
+      .embed(['the episode text'])
       .catch((e: unknown) => e)) as OllamaRequestError;
 
     expect(err).toBeInstanceOf(OllamaRequestError);

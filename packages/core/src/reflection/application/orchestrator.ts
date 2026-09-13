@@ -4,6 +4,7 @@ import type { JudgmentEvidence } from '../../evidence/application/judgment.js';
 import { errorMessage, roundMs } from '../../infrastructure/errors.js';
 import { loadEpisodeContext } from '../../infrastructure/graph/episode-context.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
+import { isGenerationUnavailable } from '../../infrastructure/providers/errors.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import type { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
@@ -34,6 +35,7 @@ import {
   type ReflectionSummary,
   type StageContext,
   type StageRecord,
+  type StageUnavailability,
 } from '../domain/stage.js';
 import { PIPELINE_VERSION } from '../domain/version.js';
 
@@ -85,6 +87,46 @@ export type ReflectionRunOptions = {
 
 function elapsed(started: number): number {
   return roundMs(performance.now() - started);
+}
+
+type RefusalWatch = {
+  readonly provider: Provider;
+  /** The refusal the watched provider was given, or nothing where it was given none. */
+  refused(): StageUnavailability | undefined;
+};
+
+/**
+ * The provider a stage runs against, with any typed refusal kept where the run can read it back.
+ *
+ * Embedding passes straight through: it reaches the local model and is not part of the question.
+ */
+function watchRefusals(provider: Provider): RefusalWatch {
+  let refusal: StageUnavailability | undefined;
+  return {
+    provider: {
+      ...(provider.route === undefined ? {} : { route: provider.route }),
+      embed: (texts) => provider.embed(texts),
+      generate: async (req) => {
+        try {
+          return await provider.generate(req);
+        } catch (err) {
+          if (isGenerationUnavailable(err)) {
+            refusal = { surface: req.surface ?? 'unlabeled', reason: errorMessage(err) };
+          }
+          throw err;
+        }
+      },
+    },
+    refused: () => refusal,
+  };
+}
+
+/** A stage that declared the refusal itself keeps what it declared. */
+function withRefusal(record: StageRecord, refused: StageUnavailability | undefined): StageRecord {
+  if (refused === undefined || record.unavailable !== undefined) {
+    return record;
+  }
+  return { ...record, unavailable: refused };
 }
 
 /** What this run's outcomes are about: the generation it started under, and what that owed. */
@@ -354,12 +396,21 @@ export class ReflectionOrchestrator {
    * One stage's blast radius. A throw is caught and recorded rather than propagated: the
    * stages after it still run, and the run still enriches the episode with whatever the
    * rest of the pipeline can extract.
+   *
+   * The stage runs against a watched provider, so a refusal it turned into prose is still on the
+   * record the worker reads. Without that the two reasons a stage has no model answer, a backend
+   * that refused and a call that failed, arrive at the queue as the same failed outcome.
    */
   async #runStage(stage: ReflectionStage, context: StageContext): Promise<StageRecord> {
     const started = performance.now();
+    const watch = watchRefusals(context.provider);
+    const watched: StageContext = { ...context, provider: watch.provider };
     try {
-      const outcome = await stage.run(context);
-      const record: StageRecord = { name: stage.name, ...outcome, durationMs: elapsed(started) };
+      const outcome = await stage.run(watched);
+      const record: StageRecord = withRefusal(
+        { name: stage.name, ...outcome, durationMs: elapsed(started) },
+        watch.refused(),
+      );
       if (outcome.status === 'failed') {
         this.#deps.logger.warn(
           { episodeId: context.episodeId, stage: stage.name, summary: outcome.summary },
@@ -372,13 +423,16 @@ export class ReflectionOrchestrator {
         { err, episodeId: context.episodeId, stage: stage.name },
         'reflection stage threw; continuing with the rest of the pipeline',
       );
-      return {
-        name: stage.name,
-        status: 'failed',
-        summary: 'the stage threw',
-        durationMs: elapsed(started),
-        error: errorMessage(err),
-      };
+      return withRefusal(
+        {
+          name: stage.name,
+          status: 'failed',
+          summary: 'the stage threw',
+          durationMs: elapsed(started),
+          error: errorMessage(err),
+        },
+        watch.refused(),
+      );
     }
   }
 

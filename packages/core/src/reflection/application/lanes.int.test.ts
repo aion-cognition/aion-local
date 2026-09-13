@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
-import { SOURCE_INDEX_JOB_TYPE } from './intake-queue.js';
+import { SOURCE_INDEX_JOB_TYPE, VECTOR_JOB_TYPE } from './intake-queue.js';
 import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
 import { LaneAssigner } from './lanes.js';
 import { ReflectionOrchestrator } from './orchestrator.js';
@@ -36,7 +36,6 @@ import {
  * real substrate that night; both are asserted here against a throwaway one.
  */
 const EMBED_DIMENSION = DEFAULTS.models.embedDimension;
-const OLLAMA_URL = process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434';
 
 const FLOOD_SIZE = 20;
 const FLOOD_IDENTITY = 'lane-flood-session';
@@ -61,15 +60,33 @@ let logger: Logger;
 let intake: ReflectionIntakeDeps;
 let worker: ReflectionWorker | undefined;
 
+/** The recording stage generates nothing, so the pipeline's provider only has to exist. */
+const stageProvider = {
+  embed: (): Promise<never[]> => Promise.reject(new Error('no embedding in the pipeline')),
+  generate: (): Promise<never> => Promise.reject(new Error('no generation in this battery')),
+};
+
+/**
+ * The worker's embedder is real: every acceptance owes a vector row as well as an enrichment
+ * one, and this file drains the whole queue. A stub that refused would leave those rows behind
+ * and make the lane assertion about the stub rather than about the lanes.
+ */
+function embedder(): OllamaProvider {
+  return new OllamaProvider({
+    baseUrl: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
+    embedModel: DEFAULTS.models.embed,
+  });
+}
+
 function buildWorker(stage: ReflectionStage): ReflectionWorker {
   const runner = new ReflectionOrchestrator(
-    { driver: harness.driver, db, provider: intake.provider, logger },
+    { driver: harness.driver, db, provider: stageProvider, logger },
     [stage],
   );
   worker = new ReflectionWorker({
     driver: harness.driver,
     db,
-    provider: intake.provider,
+    provider: embedder(),
     runner,
     logger,
     publications: directCompletionPublisher(harness.driver, db),
@@ -104,7 +121,6 @@ beforeAll(async () => {
       memberId: backbone.member.id,
       workspaceId: backbone.workspace.id,
     }),
-    provider: new OllamaProvider({ baseUrl: OLLAMA_URL, embedModel: DEFAULTS.models.embed }),
     // Late-bound on purpose: the worker under test is rebuilt per case, and intake wakes
     // whichever one is current.
     onJobEnqueued: () => {
@@ -115,7 +131,6 @@ beforeAll(async () => {
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
     publications: directIntakePublisher(harness.driver, db),
-    acceptHookCapture: true,
   };
 }, 300_000);
 
@@ -147,19 +162,26 @@ describe('a bulk-flagged flood ahead of one live turn', () => {
     });
     expect(live.lane).toBe('interactive');
 
-    // One acceptance owes two rows: the `integrate` job this worker runs, and the `source_index`
-    // job the drainer owns. Both populations are asserted by name, because adding them together
-    // is what read a 21-job reflection backlog as 42.
+    // One acceptance owes three rows: the `integrate` job this worker runs, the `attach_vectors`
+    // job it also runs, and the `source_index` job the drainer owns. Every population is
+    // asserted by name, because adding them together is what read a 21-job reflection backlog
+    // as 42.
     const integrate = listQueueJobs(db, { jobType: INTEGRATE_JOB_TYPE });
     expect(integrate).toHaveLength(FLOOD_SIZE + 1);
     expect(integrate.filter((job) => job.lane === 'bulk')).toHaveLength(FLOOD_SIZE);
+
+    // The vector rows ride the acceptance's own lane, so the flood's are bulk and the live
+    // turn's is interactive, exactly like the enrichment beside them.
+    const vectors = listQueueJobs(db, { jobType: VECTOR_JOB_TYPE });
+    expect(vectors).toHaveLength(FLOOD_SIZE + 1);
+    expect(vectors.filter((job) => job.lane === 'bulk')).toHaveLength(FLOOD_SIZE);
 
     const indexed = listQueueJobs(db, { jobType: SOURCE_INDEX_JOB_TYPE });
     expect(indexed).toHaveLength(FLOOD_SIZE + 1);
     // The index lane is a literal, and `pending_ahead` reads the interactive lane only.
     expect(indexed.filter((job) => job.lane === 'bulk')).toHaveLength(FLOOD_SIZE + 1);
 
-    expect(listReflectionJobs(db)).toHaveLength(2 * (FLOOD_SIZE + 1));
+    expect(listReflectionJobs(db)).toHaveLength(3 * (FLOOD_SIZE + 1));
 
     const stage = new RecordingStage();
     const started = buildWorker(stage);

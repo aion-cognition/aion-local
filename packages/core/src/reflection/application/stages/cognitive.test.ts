@@ -847,7 +847,7 @@ describe('CognitiveExtractionStage', () => {
       const stage = new CognitiveExtractionStage();
 
       expect(stage.describe()).toEqual({
-        model: DEFAULTS.models.reflect,
+        model: DEFAULTS.anthropic.model,
         timeoutMs: DEFAULTS.reflection.stageTimeoutMs,
         maxNodes: DEFAULTS.reflection.maxCognitiveNodes,
         keyedCloseMode: DEFAULTS.reflection.keyedCloseMode,

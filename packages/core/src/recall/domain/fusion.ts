@@ -382,7 +382,13 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
   // whole rejected population to rank against, which a per-candidate rule cannot see. Never
   // flips `anchored`: that flag means the query's own evidence cleared something, and a path
   // admission is evidence of graph reach, not of answering the query.
-  const pathAdmitted = admitByPathStrength(unmeasuredArrivals, options, items, decisions, methodStats);
+  const pathAdmitted = admitByPathStrength(
+    unmeasuredArrivals,
+    options,
+    items,
+    decisions,
+    methodStats,
+  );
 
   items.sort(compareFused);
   // Merging by id above is the whole of the identity question fusion can answer. Two ids carrying

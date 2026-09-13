@@ -75,17 +75,8 @@ async function runOllamaCheck(config: Config): Promise<{ result: CheckResult; pa
   }
 }
 
-describe('the Ollama round-trip check under routing', () => {
-  it('round-trips the embed model and every chat model that still routes locally', async () => {
-    const { result, paths } = await runOllamaCheck(DEFAULTS);
-
-    expect(result.ok).toBe(true);
-    expect(result.detail).toContain(`${String(DEFAULTS.models.embedDimension)} dimensions`);
-    expect(result.detail).toContain(`chat ${DEFAULTS.models.cue}, ${DEFAULTS.models.reflect} ok`);
-    expect(paths.filter((path) => path === '/api/chat')).toHaveLength(2);
-  });
-
-  it('checks no chat model the key covers, and names where those roles went', async () => {
+describe('the Ollama round-trip check', () => {
+  it('round-trips the embed model and asks Ollama for nothing else', async () => {
     const keyed: Config = {
       ...DEFAULTS,
       anthropic: { ...DEFAULTS.anthropic, apiKey: 'sk-ant-test' },
@@ -94,25 +85,17 @@ describe('the Ollama round-trip check under routing', () => {
     const { result, paths } = await runOllamaCheck(keyed);
 
     expect(result.ok).toBe(true);
+    expect(result.detail).toContain(`${String(DEFAULTS.models.embedDimension)} dimensions`);
+    expect(result.detail).toContain(`generation on anthropic (${DEFAULTS.anthropic.model})`);
     expect(paths).not.toContain('/api/chat');
-    expect(result.detail).toContain('no chat model routes locally');
-    expect(result.detail).toContain(
-      `cue, reflect routed to anthropic (${DEFAULTS.anthropic.model})`,
-    );
   });
 
-  it('still checks the chat model a pin kept local', async () => {
-    const split: Config = {
-      ...DEFAULTS,
-      anthropic: { ...DEFAULTS.anthropic, apiKey: 'sk-ant-test' },
-      routing: { cue: 'ollama', reflect: 'auto' },
-    };
+  it('says generation is queued when no key backs it', async () => {
+    const { result, paths } = await runOllamaCheck(DEFAULTS);
 
-    const { result, paths } = await runOllamaCheck(split);
-
-    expect(paths.filter((path) => path === '/api/chat')).toHaveLength(1);
-    expect(result.detail).toContain(`chat ${DEFAULTS.models.cue} ok`);
-    expect(result.detail).toContain('reflect routed to anthropic');
+    expect(result.ok).toBe(true);
+    expect(result.detail).toContain('generation queued: no AION_ANTHROPIC_API_KEY set');
+    expect(paths).not.toContain('/api/chat');
   });
 });
 
@@ -137,24 +120,15 @@ describe('the hooks-route check', () => {
     anthropic: { ...DEFAULTS.anthropic, apiKey: 'sk-ant-test' },
   };
 
-  it('passes an install whose reflection runs on a local model, and names the model', async () => {
+  it('passes an install with no key, and says the captures wait rather than fail', async () => {
     // This used to fail, and the hook client used to remove itself alongside it. Both came from a
     // build whose local model could not keep up with a capture every turn.
     const result = await runHooksCheck(DEFAULTS, { AION_HOOKS_INSTALLED: 'true' });
 
     expect(result.ok).toBe(true);
     expect(result.warn).toBeUndefined();
-    expect(result.detail).toContain(DEFAULTS.models.reflect);
-    expect(result.detail).toContain('nothing here needs one');
-  });
-
-  it('passes an install whose key a pin sends back to the local model', async () => {
-    const pinned: Config = { ...keyed, routing: { cue: 'auto', reflect: 'ollama' } };
-
-    const result = await runHooksCheck(pinned, { AION_HOOKS_INSTALLED: 'true' });
-
-    expect(result.ok).toBe(true);
-    expect(result.detail).toContain(DEFAULTS.models.reflect);
+    expect(result.detail).toContain('stored and queued');
+    expect(result.detail).toContain('AION_ANTHROPIC_API_KEY');
   });
 
   it('names the anthropic model when the route resolves there', async () => {

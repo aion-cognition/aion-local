@@ -2,27 +2,29 @@ import type { Driver } from 'neo4j-driver';
 
 import {
   findPendingVectorNodes,
+  findPendingVectorNodesForSource,
   writeContentVectors,
   type ContentVectorEntry,
   type PendingVectorNode,
 } from '../../infrastructure/graph/pending-vectors.js';
-import type { Provider } from '../../infrastructure/providers/types.js';
+import type { Embedder } from '../../infrastructure/providers/types.js';
 import { vectorInputHash } from '../domain/vector-input.js';
 
 export {
   findPendingVectorNodes,
+  findPendingVectorNodesForSource,
   type PendingVectorNode,
 } from '../../infrastructure/graph/pending-vectors.js';
 
 /**
- * The embed-and-write half of the write path, split out because it runs in two places: at
- * the end of intake, on the nodes that call just committed, and in the worker's startup
- * drain, on whatever an earlier outage left pending. Both are the same operation: the
- * only difference is who found the nodes.
+ * The embed-and-write half of the write path, split out because it runs in three places: the
+ * queued vector job for one accepted source, the worker's startup drain over whatever an
+ * earlier outage left pending, and the `vector_backfill` operation. All three are the same
+ * operation: the only difference is who found the nodes.
  *
- * The provider call is not guarded here. Intake treats a failure as "vectors stay pending"
- * and answers the caller anyway; the worker treats it as a job to retry. Swallowing it in
- * the middle would take that choice away from both.
+ * The provider call is not guarded here. The job treats a failure as a retry and the startup
+ * drain treats it as a backlog to pick up next time. Swallowing it in the middle would take
+ * that choice away from both.
  */
 
 /** One node to one vector, by position in the call's own list. */
@@ -45,7 +47,7 @@ function pair(
 /** The ids that now carry a content vector. */
 export async function attachContentVectors(
   driver: Driver,
-  provider: Provider,
+  provider: Embedder,
   nodes: readonly PendingVectorNode[],
 ): Promise<string[]> {
   if (nodes.length === 0) {
@@ -57,9 +59,27 @@ export async function attachContentVectors(
 
 export type PendingVectorDrainDeps = {
   readonly driver: Driver;
-  readonly provider: Provider;
+  readonly provider: Embedder;
   readonly logger: { warn: (fields: Record<string, unknown>, message: string) => void };
 };
+
+/**
+ * Everything an accepted source still owes a vector, embedded and written in one pass. This is
+ * what the queued `attach_vectors` job runs. It throws on a provider failure, so the job retries
+ * with the queue's own backoff rather than reporting a source as vectorized that is not.
+ *
+ * The set is read at run time rather than carried in the payload: by the time the job is
+ * claimed another writer may have vectorized the episode already, and a payload naming nodes
+ * would re-embed them.
+ */
+export async function attachSourceVectors(
+  deps: PendingVectorDrainDeps,
+  sourceId: string,
+): Promise<number> {
+  const pending = await findPendingVectorNodesForSource(deps.driver, sourceId);
+  const written = await attachContentVectors(deps.driver, deps.provider, pending);
+  return written.length;
+}
 
 /**
  * What an inference outage left behind, oldest first. A batch that comes back short of what was

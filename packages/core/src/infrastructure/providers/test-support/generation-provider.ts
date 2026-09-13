@@ -1,4 +1,5 @@
 import { DEFAULT_ANTHROPIC_MODEL } from '../anthropic-provider.js';
+import { GenerationUnavailableError } from '../errors.js';
 import { OllamaProvider, type OllamaProviderOptions } from '../ollama-provider.js';
 import type { Provider, StructuredRequest, Vector } from '../types.js';
 import { AnthropicHaikuClient } from './anthropic-client.js';
@@ -17,7 +18,7 @@ export type AnthropicTestProviderOptions = {
 export class AnthropicTestProvider implements Provider {
   /**
    * The same fact the service's routed provider carries, so a call site that sizes its prompt
-   * to the model behind it reads the keyed shape here rather than the local one.
+   * to the model behind it reads what the service reads.
    */
   readonly route = { provider: 'anthropic' } as const;
   readonly #client: AnthropicHaikuClient;
@@ -36,30 +37,46 @@ export class AnthropicTestProvider implements Provider {
     return this.#embedder.embed(texts);
   }
 
-  /**
-   * The request names an Ollama tag, because the caller reads its model from config the same
-   * way the service does. Swapping it here keeps every call site free of a second model knob
-   * it would need under this route alone.
-   */
   generate(req: StructuredRequest): Promise<unknown> {
     return this.#client.generate({ ...req, model: this.#model });
   }
 }
 
 /**
+ * The provider a test drives when there is no key: it embeds, and refuses to generate with the
+ * same error the service raises. A file that needs enrichment skips on the missing key rather
+ * than measuring a model this substrate does not run.
+ */
+export class KeylessTestProvider implements Provider {
+  readonly #embedder: OllamaProvider;
+
+  constructor(embedder: OllamaProvider) {
+    this.#embedder = embedder;
+  }
+
+  embed(texts: readonly string[]): Promise<Vector[]> {
+    return this.#embedder.embed(texts);
+  }
+
+  generate(req: StructuredRequest): Promise<unknown> {
+    return Promise.reject(new GenerationUnavailableError(req.surface ?? 'unlabeled'));
+  }
+}
+
+/**
  * The provider an integration test drives enrichment through. With `AION_ANTHROPIC_API_KEY` in
- * the environment the generations run on Haiku and come back in a second or two, where qwen3:8b
- * takes 35 to 100 seconds for the same call. Set `TEST_AION_GENERATION=local` to force the local
- * model, which is what a file measuring local-model quality wants. With no key at all everything
- * falls back to local silently, so a machine without one still runs the whole suite.
+ * the environment the generations run on Haiku and come back in a second or two. With no key,
+ * generation refuses the same way the service refuses, because there is no second route left to
+ * fall back to: an enrichment file on a keyless machine has to skip rather than measure
+ * something the product does not run.
  *
  * The key is read here at call time and never stored anywhere else.
  */
 export function testGenerationProvider(options: OllamaProviderOptions): Provider {
   const ollama = new OllamaProvider(options);
   const apiKey = process.env.AION_ANTHROPIC_API_KEY ?? '';
-  if (apiKey.trim().length === 0 || process.env.TEST_AION_GENERATION === 'local') {
-    return ollama;
+  if (apiKey.trim().length === 0) {
+    return new KeylessTestProvider(ollama);
   }
 
   return new AnthropicTestProvider({

@@ -1,13 +1,16 @@
 import { AnthropicProvider } from './anthropic-provider.js';
+import { GenerationUnavailableError } from './errors.js';
 import { OllamaProvider } from './ollama-provider.js';
-import {
-  resolveProviderRouting,
-  type GenerationRole,
-  type ProviderName,
-  type ProviderRouting,
-  type RoleRoute,
-} from './routing.js';
-import type { ApiCall, GenerationBackend, Provider, StructuredRequest, Vector } from './types.js';
+import { resolveProviderRouting, type GenerationRole, type ProviderRouting } from './routing.js';
+import type { SpendingGuard } from './spending.js';
+import type {
+  ApiCall,
+  Embedder,
+  GenerationBackend,
+  Provider,
+  StructuredRequest,
+  Vector,
+} from './types.js';
 import type { Config } from '../config/schema.js';
 
 /**
@@ -17,7 +20,7 @@ import type { Config } from '../config/schema.js';
  */
 export type GenerationEvent = {
   readonly role: GenerationRole;
-  readonly provider: ProviderName;
+  readonly provider: 'anthropic';
   readonly model: string;
   readonly durationMs: number;
   readonly ok: boolean;
@@ -29,40 +32,58 @@ export type ProviderRouterOptions = {
   readonly onGeneration?: (event: GenerationEvent) => void;
   readonly now?: () => number;
   readonly recordApiCall?: (call: ApiCall) => void;
+  /**
+   * The day's spending backstop, shared with every other route into the same store. Absent
+   * leaves this router's calls unbounded, which is what a composition with no substrate store
+   * behind it gets.
+   */
+  readonly spending?: SpendingGuard;
 };
 
 /**
- * One role's `Provider`: the local embedder, and whichever backend the role routes to for
- * `generate`. Callers keep naming their own model from config; a remote route substitutes its
- * own, so no call site needs a second model knob for the route it happens to be on.
- *
- * This is also where the context window is stated. Every role call leaves here carrying the
- * role's `num_ctx`, so no stage can reach Ollama on whatever default that build happens to
- * derive, and a call site that sizes its own class keeps the value it set.
+ * A backend that refuses every call, for a substrate with no key. It is a backend rather than an
+ * absent one so the shape of the call path is the same either way: the caller asks, the answer
+ * is that generation has nowhere to run, and the caller's own handling decides whether that
+ * means a queued job or a degraded pack.
+ */
+class UnavailableGeneration implements GenerationBackend {
+  generate(req: StructuredRequest): Promise<unknown> {
+    return Promise.reject(new GenerationUnavailableError(req.surface ?? 'unlabeled'));
+  }
+}
+
+/**
+ * One role's `Provider`: the local embedder, and the remote generation backend. Callers keep
+ * naming their own model from config; the router substitutes the routed one, so no call site
+ * needs a second model knob.
  */
 class RoutedProvider implements Provider {
-  readonly #embedder: Provider;
+  readonly #embedder: Embedder;
   readonly #generator: GenerationBackend;
-  readonly #route: RoleRoute;
+  readonly #role: GenerationRole;
+  readonly #model: string;
   readonly #onGeneration: ((event: GenerationEvent) => void) | undefined;
   readonly #now: () => number;
 
   constructor(
-    embedder: Provider,
+    embedder: Embedder,
     generator: GenerationBackend,
-    route: RoleRoute,
+    role: GenerationRole,
+    model: string,
     onGeneration: ((event: GenerationEvent) => void) | undefined,
     now: () => number,
   ) {
     this.#embedder = embedder;
     this.#generator = generator;
-    this.#route = route;
+    this.#role = role;
+    this.#model = model;
     this.#onGeneration = onGeneration;
     this.#now = now;
   }
 
-  get route(): RoleRoute {
-    return this.#route;
+  /** One provider name now, kept on the interface because call sites size prompts by it. */
+  get route(): { readonly provider: 'anthropic' } {
+    return { provider: 'anthropic' };
   }
 
   embed(texts: readonly string[]): Promise<Vector[]> {
@@ -73,22 +94,24 @@ class RoutedProvider implements Provider {
     const started = this.#now();
     const report = (ok: boolean): void => {
       this.#onGeneration?.({
-        role: this.#route.role,
-        provider: this.#route.provider,
-        model: this.#route.model,
+        role: this.#role,
+        provider: 'anthropic',
+        model: this.#model,
         durationMs: this.#now() - started,
         ok,
       });
     };
 
     try {
-      const answer = await this.#generator.generate(
-        req.numCtx === undefined ? { ...req, numCtx: this.#route.numCtx } : req,
-      );
+      const answer = await this.#generator.generate(req);
       report(true);
       return answer;
     } catch (err) {
-      report(false);
+      // A refusal for want of a key is not a generation outcome: counting it would put a
+      // failure rate on a substrate that never called anything.
+      if (!(err instanceof GenerationUnavailableError)) {
+        report(false);
+      }
       throw err;
     }
   }
@@ -96,13 +119,13 @@ class RoutedProvider implements Provider {
 
 /**
  * Resolves routing once and hands out one `Provider` per role. Both roles share one Ollama
- * client (embeddings are local under every route) and one Anthropic client (so a remote
- * outage opens one breaker rather than one per role).
+ * client (embeddings are local) and one Anthropic client (so a remote outage opens one breaker
+ * rather than one per role).
  */
 export class ProviderRouter {
   readonly routing: ProviderRouting;
   readonly #ollama: OllamaProvider;
-  readonly #anthropic: AnthropicProvider | undefined;
+  readonly #generator: GenerationBackend;
   readonly #byRole = new Map<GenerationRole, RoutedProvider>();
   readonly #onGeneration: ((event: GenerationEvent) => void) | undefined;
   readonly #now: () => number;
@@ -118,7 +141,7 @@ export class ProviderRouter {
       embedKeepAlive: config.ollama.embedKeepAlive,
       ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
     });
-    this.#anthropic = this.routing.keyPresent
+    this.#generator = this.routing.keyPresent
       ? new AnthropicProvider({
           // Trimmed, because routing decided the key was present after trimming it. A key read
           // from a file keeps its trailing newline, and fetch rejects that header value outright.
@@ -128,13 +151,14 @@ export class ProviderRouter {
           thinkingBudgetTokens: config.anthropic.thinkingBudgetTokens,
           now: this.#now,
           ...(options.recordApiCall === undefined ? {} : { recordApiCall: options.recordApiCall }),
+          ...(options.spending === undefined ? {} : { spending: options.spending }),
           ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
         })
-      : undefined;
+      : new UnavailableGeneration();
   }
 
-  /** The local provider itself, for a caller that only ever embeds. */
-  get embedder(): Provider {
+  /** The local embedder itself, for a caller that only ever embeds. */
+  get embedder(): Embedder {
     return this.#ollama;
   }
 
@@ -144,15 +168,11 @@ export class ProviderRouter {
       return existing;
     }
     const route = this.routing.roles[role];
-    // A remote route with no client cannot happen: routing resolves to Ollama without a key.
-    const generator: GenerationBackend =
-      route.provider === 'anthropic' && this.#anthropic !== undefined
-        ? this.#anthropic
-        : this.#ollama;
     const provider = new RoutedProvider(
       this.#ollama,
-      generator,
-      route,
+      this.#generator,
+      role,
+      route.model,
       this.#onGeneration,
       this.#now,
     );

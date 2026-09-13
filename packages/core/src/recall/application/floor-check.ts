@@ -4,7 +4,7 @@ import {
   UNRELATED_SENTENCES,
   type ScoredPair,
 } from './floors.data.js';
-import type { Provider } from '../../infrastructure/providers/types.js';
+import type { Embedder } from '../../infrastructure/providers/types.js';
 import type { AdmissionPolicy } from '../domain/admission.js';
 import {
   CALIBRATION_TOLERANCE,
@@ -33,7 +33,7 @@ import {
  * go and look.
  */
 export async function measureAdmissionFloor(
-  provider: Provider,
+  provider: Embedder,
   policy: AdmissionPolicy,
   queryPrefix: string,
 ): Promise<Separation> {

@@ -18,26 +18,20 @@ substrate: the hooks are a client that speaks the same MCP wire an agent does.
 `aion init local` and `aion init full` both install the hooks. What differs is where
 generation runs.
 
-`aion init local` runs every role on Ollama. This is what `aion init` has always done, now
-named. `aion init full` asks for an Anthropic key, records it in `.env`, and routes generation
-there instead. The shims push a lot of small capture work, and capture is Haiku-grade: read
-a turn, shape it, store it. On the local route that same volume queues behind the one reflect
-model every other caller is already waiting on. Routing generation to `claude-haiku-4-5` makes
-the cadence affordable. Embeddings stay local either way, because the vector space is the
-substrate.
+`aion init local` provisions the substrate without a key. `aion init full` asks for an Anthropic
+key and records it in `.env`. The shims push a lot of small capture work, and capture is
+Haiku-grade: read a turn, shape it, store it. Embeddings stay local either way, because the
+vector space is the substrate.
 
-`AION_CUE_PROVIDER=ollama` routes cue extraction locally while reflection stays keyed.
-Hooks stay enabled because their rule reads the reflect route. The setting saves every API
-charge for cue generation. Its quality and latency are still unmeasured.
+Hooks install and fire on every profile. Capture never depends on generation: a hook hands the
+turn to intake, intake stores it and queues the work, and the enrichment runs when there is a
+key to run it with. That was not always true. Install refused without a key, the server refused
+capture on a local route, and the client stripped its own entries on its next fire. All three
+came from a build that had a local model to protect from the cadence. There is no local model
+now, and the queue is what absorbs a key that is missing.
 
-Hooks are route-agnostic. They install on every profile, fire on every install, and hand the turn
-to whichever generation route this install resolved. The local route is a route. That was not
-always true. Install refused without a key, the server refused capture on a local route, and the
-client stripped its own entries on its next fire. All three came from a build whose local model
-could not keep up with a capture on every turn. It can: local reflection measured 18.5s a call.
-A key is optional spend, not a capability.
-
-`aion doctor` reports which model digests a capture as `hooks-route`. To decide whether hooks are
+`aion doctor` reports what digests a capture as `hooks-route`; with no key it says the captures
+are stored and queued. To decide whether hooks are
 installed, `bin/aion` looks in both `~/.claude/settings.json` and `$CODEX_HOME/hooks.json`.
 `aion hooks install` does the hook half on its own, on any install.
 

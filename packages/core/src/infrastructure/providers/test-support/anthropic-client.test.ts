@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { AnthropicResponseError } from '../anthropic-provider.js';
+import { AnthropicResponseError } from '../anthropic-errors.js';
 import { jsonSpans, parseJsonPayload } from './anthropic-client.js';
 
 /**

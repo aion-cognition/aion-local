@@ -214,17 +214,9 @@ export {
 
 export type { EdgeWeightDistribution } from './graph/edge-weight-distribution.js';
 
-export type { Provider } from './providers/types.js';
+export type { Embedder, Provider } from './providers/types.js';
 export { embedQueryPrefix } from './providers/embed-models.js';
-export {
-  acceptsHookCapture,
-  localChatModels,
-  remoteBannerLines,
-  remoteRoutes,
-  resolveProviderRouting,
-  routingSummary,
-  unbackedPins,
-} from './providers/routing.js';
+export { remoteBannerLines, resolveProviderRouting, routingSummary } from './providers/routing.js';
 export { ProviderRouter } from './providers/role-provider.js';
 export { listResidentModels, reconcileResidentModels } from './providers/model-reconciliation.js';
 export type { ReconciliationReport } from './providers/model-reconciliation.js';
@@ -235,7 +227,6 @@ export {
   listOllamaModels,
   provisionOllama,
   readOllamaVersion,
-  verifyOllamaChatModel,
 } from './providers/provisioning.js';
 export type { ProvisionEvent } from './providers/provisioning.js';
 
@@ -282,3 +273,7 @@ export {
   type ApiUsageGroup,
 } from './sqlite/api-usage.js';
 export { estimateApiCost } from './providers/api-pricing.js';
+export { GenerationSpendGuard } from './providers/spending.js';
+export { readSpendDay } from './sqlite/spend-ledger.js';
+export { batchWorkCounts } from './sqlite/batch-work.js';
+export { readSubstratePairing } from './sqlite/publication-control.js';

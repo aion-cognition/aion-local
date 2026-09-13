@@ -30,7 +30,10 @@ import type {
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { handleReflection } from '../../../reflection/application/intake.js';
 import { LaneAssigner } from '../../../reflection/application/lanes.js';
-import { directIntakePublisher } from '../../../reflection/test-support/direct-intake.fixture.js';
+import {
+  directIntakePublisher,
+  drainSourceVectors,
+} from '../../../reflection/test-support/direct-intake.fixture.js';
 import { SessionManager } from '../../../session/session-manager.js';
 import { CueCache } from '../cues.js';
 import { handleRecall, type RecallDeps } from '../recall.js';
@@ -255,7 +258,6 @@ export class ClaimProvenanceSubstrate {
         driver: this.driver,
         db: this.db,
         sessions: this.deps.sessions,
-        provider,
         logger: this.logger,
         entropyThreshold: DEFAULTS.redaction.entropyThreshold,
         lanes: new LaneAssigner(DEFAULTS.lanes),
@@ -265,11 +267,14 @@ export class ClaimProvenanceSubstrate {
         // outside all of them: the knowledge-time reads would answer empty and a confirmation
         // that stated no moment would be dated to the run rather than to the push.
         publications: directIntakePublisher(this.driver, this.db, () => now),
-        acceptHookCapture: true,
       },
       { observations: [observation], ...(provenance === undefined ? {} : { provenance }) },
       { identity, now },
     );
+    // Intake queues the embedding rather than performing it, so the fixture runs the row the
+    // worker would run. Scoped to this source: the seeded nodes beside it carry vectors the
+    // fixture chose, and a whole-backlog drain would overwrite the ones it left bare.
+    await drainSourceVectors(this.driver, provider, result.episode_id);
     return result.episode_id;
   }
 

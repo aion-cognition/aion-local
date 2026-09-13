@@ -105,13 +105,11 @@ beforeAll(async () => {
       memberId: backbone.member.id,
       workspaceId: backbone.workspace.id,
     }),
-    provider: provider(),
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
     publications: directIntakePublisher(harness.driver, db),
-    acceptHookCapture: true,
   };
 
   const stored = await handleReflection(intake, PAYLOAD, { identity: SESSION_IDENTITY });
@@ -135,12 +133,12 @@ beforeAll(async () => {
     pipelineVersion: PIPELINE_VERSION,
   };
 
-  const entityOutcome = await new EntityExtractionStage({ model: DEFAULTS.models.reflect }).run(
+  const entityOutcome = await new EntityExtractionStage({ model: DEFAULTS.anthropic.model }).run(
     setupCtx,
   );
   expect(entityOutcome.status).toBe('ok');
   const cognitiveOutcome = await new CognitiveExtractionStage({
-    model: DEFAULTS.models.reflect,
+    model: DEFAULTS.anthropic.model,
   }).run(setupCtx);
   expect(cognitiveOutcome.status).toBe('ok');
 }, 300_000);
@@ -173,7 +171,7 @@ describe('SemanticRelationshipStage against a live graph and a live model', () =
       pipelineVersion: PIPELINE_VERSION,
     };
 
-    const stage = new SemanticRelationshipStage({ model: DEFAULTS.models.reflect });
+    const stage = new SemanticRelationshipStage({ model: DEFAULTS.anthropic.model });
     const outcome = await stage.run(ctx);
 
     expect(outcome.status).toBe('ok');
@@ -260,13 +258,11 @@ describe('SemanticRelationshipStage against a live graph and a live model', () =
         memberId: backbone.member.id,
         workspaceId: backbone.workspace.id,
       }),
-      provider: provider(),
       logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),
       workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
       publications: directIntakePublisher(harness.driver, db),
-      acceptHookCapture: true,
     };
 
     const stored = await handleReflection(intake, payload, { identity });
@@ -287,16 +283,16 @@ describe('SemanticRelationshipStage against a live graph and a live model', () =
       pipelineVersion: PIPELINE_VERSION,
     };
 
-    const entityOutcome = await new EntityExtractionStage({ model: DEFAULTS.models.reflect }).run(
+    const entityOutcome = await new EntityExtractionStage({ model: DEFAULTS.anthropic.model }).run(
       setupCtx,
     );
     expect(entityOutcome.status).toBe('ok');
     const cognitiveOutcome = await new CognitiveExtractionStage({
-      model: DEFAULTS.models.reflect,
+      model: DEFAULTS.anthropic.model,
     }).run(setupCtx);
     expect(cognitiveOutcome.status).toBe('ok');
 
-    const stage = new SemanticRelationshipStage({ model: DEFAULTS.models.reflect });
+    const stage = new SemanticRelationshipStage({ model: DEFAULTS.anthropic.model });
     const outcome = await stage.run(setupCtx);
     expect(outcome.status).toBe('ok');
 

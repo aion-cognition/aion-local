@@ -123,9 +123,10 @@ no notion of episodes, cues, or memory packs beyond those primitives.
 
 `prompts/` sits beside those contexts and belongs to none of them: it holds every generation
 system prompt the workspace runs, one file per surface, sixteen of them. Each surface exports
-its text twice, as `LOCAL` and `KEYED`, and a caller reads whichever its resolved route names
-through `promptMode(provider)` in the directory's `index.ts`, so that rule is written once.
-Where both routes read the same words the two names point at one constant, and
+its text twice, as `LOCAL` and `KEYED`, and a caller reads whichever `promptMode(provider)` in
+the directory's `index.ts` names, so that rule is written once. Every routed provider is the one
+remote model now, so `KEYED` is what production reads and `LOCAL` is what a test fake with no
+route gets; the two names still have to agree where nothing forked them, and
 `fork-registry.test.ts` proves it surface by surface. Three surfaces diverge:
 `description-freshness`, `supersession-judge`, and `supersession-review`. Each is named in that
 file's list, so forking is a listed act. A fork ships only with the measurement that earned it,
@@ -200,16 +201,16 @@ the same primitives noted above, and `evidence/domain/ownership.ts` for one scop
    then the episode is in the graph and the job is in the queue.
 10. Return `{ episode_id, queued: true }` plus the assigned `lane` and `pending_ahead`
     (unclaimed interactive jobs ahead at enqueue time).
-11. Embed the episode text and every turn's text in one batched Ollama call and attach the
-    content vectors in a follow-up write. A failure here changes nothing above: the
-    episode, its turns, and the queue row are already committed, and a `:Memory` node
-    without its `content_vec` property is the pending marker the worker's startup drain
-    and the `vector_backfill` path complete when Ollama returns.
+Nothing here embeds. The acknowledgment writes an `attach_vectors` row beside the integrate
+job, in the acceptance's own lane, and the worker runs it: a `:Memory` node without its
+`content_vec` property is the pending marker, and the queued row, the worker's startup drain and
+the `vector_backfill` operation are three ways to clear it. Until one of them does, the episode
+is reachable by BM25, entity resolution, recency and traversal.
 
 A Neo4j outage during the publication still refuses honestly with `ReflectionNotStoredError`:
 nothing is half-written, and the message says the experience was not kept. An Ollama outage
-no longer loses anything: the record commits, the job queues, and the vectors arrive when the
-model does. `docs/degradation.md` holds the live-verified behavior for both modes.
+costs the caller nothing at all: it never reaches the intake path, and the queued row retries on
+its own backoff. `docs/degradation.md` holds the live-verified behavior for both modes.
 
 A caller's stated provenance (a source, a `CORRECTS` reference, a confirmation) is part of the
 acceptance rather than a best-effort tail. `classifyStatedReferences` resolves every reference

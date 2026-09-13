@@ -3,9 +3,8 @@ import { SYSTEM_SESSION_IDENTITY } from '../../infrastructure/graph/sessions.js'
 
 /**
  * What happened to the substrate itself, in the substrate's own memory. An init, a schema
- * advance, a replay, and a model swap are the events that change what the substrate is or
- * what it knows how to do; everything else it does is already recorded as graph lineage or
- * as an ops ledger row.
+ * advance and a replay are the events that change what the substrate is or what it knows how
+ * to do; everything else it does is already recorded as graph lineage or as an ops ledger row.
  *
  * `curiosity` is the one event the substrate authors rather than undergoes: a question it filed
  * about something it cannot describe. It travels this path because it is the same kind of thing,
@@ -13,11 +12,7 @@ import { SYSTEM_SESSION_IDENTITY } from '../../infrastructure/graph/sessions.js'
  * question to hang off.
  */
 export type LifecycleEvent =
-  | 'substrate_initialized'
-  | 'schema_recorded'
-  | 'replay_completed'
-  | 'models_reconciled'
-  | 'curiosity';
+  'substrate_initialized' | 'schema_recorded' | 'replay_completed' | 'curiosity';
 
 export type LifecycleEventInput = {
   readonly event: LifecycleEvent;

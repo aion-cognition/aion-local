@@ -130,13 +130,11 @@ beforeAll(async () => {
     driver: harness.driver,
     db,
     sessions,
-    provider,
     logger,
     entropyThreshold: config.redaction.entropyThreshold,
     lanes: new LaneAssigner(config.lanes),
     workerMaxAttempts: config.operational.workerMaxAttempts,
     publications: directIntakePublisher(harness.driver, db),
-    acceptHookCapture: true,
   };
   const recall: RecallDeps = {
     driver: harness.driver,
@@ -150,7 +148,7 @@ beforeAll(async () => {
 
   narratives = new SessionNarrativeCloser(
     { driver: harness.driver, db, provider, logger, publications },
-    { model: config.models.reflect },
+    { model: config.anthropic.model },
   );
 
   const backend: ToolBackend = {

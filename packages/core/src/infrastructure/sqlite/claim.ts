@@ -135,12 +135,22 @@ export class ReflectionQueueClaimant {
    * records why. Scoped to `id`, so it can only release a claim this instance holds;
    * returns false if the job isn't currently claimed by it (already released,
    * completed, or reclaimed as stale elsewhere).
+   *
+   * `countAttempt: false` records the reason without spending an attempt. It is for work that
+   * could not run rather than work that failed: generation with no key is the case, and
+   * counting it would leave the queue holding exhausted rows a later key could never revive.
    */
-  release(db: SqliteHandle, jobId: string, error: string): boolean {
+  release(
+    db: SqliteHandle,
+    jobId: string,
+    error: string,
+    options: { readonly countAttempt?: boolean } = {},
+  ): boolean {
+    const attempts = options.countAttempt === false ? 'attempts' : 'attempts + 1';
     const result = db
       .prepare(
         `UPDATE reflection_queue
-         SET claimed_at = NULL, claimed_by = NULL, attempts = attempts + 1, last_error = ?
+         SET claimed_at = NULL, claimed_by = NULL, attempts = ${attempts}, last_error = ?
          WHERE id = ? AND claimed_by = ?`,
       )
       .run(error, jobId, this.id);

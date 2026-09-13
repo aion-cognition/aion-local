@@ -18,7 +18,7 @@ import { executeUninstall, stripOwnedSettings, writePlan } from './uninstall.js'
 let dir: string;
 
 /** What a plain local install pulled, which is what the plan is told rather than asked to guess. */
-const MODELS = [DEFAULTS.models.cue, DEFAULTS.models.reflect, DEFAULTS.models.embed];
+const MODELS = [DEFAULTS.anthropic.model, DEFAULTS.anthropic.model, DEFAULTS.models.embed];
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'aion-uninstall-'));
@@ -150,19 +150,15 @@ describe('the plan', () => {
     expect(server?.commands?.join('\n')).not.toContain('qwen3:1.7b');
   });
 
-  it('reads them off config the way init does, so a remote role names no local tag', () => {
-    const local = { ...DEFAULTS, models: { ...DEFAULTS.models, reflect: 'qwen3:14b' } };
+  it('names the one tag this install pulled, whatever the key says', () => {
+    const custom = { ...DEFAULTS, models: { ...DEFAULTS.models, embed: 'some-other-embedder' } };
 
-    expect(installedModelTags(local)).toEqual([
-      DEFAULTS.models.cue,
-      'qwen3:14b',
-      DEFAULTS.models.embed,
-    ]);
-    // A keyed install pulled no chat model at all: naming one would offer to remove a tag this
-    // install never put on the machine.
+    expect(installedModelTags(custom)).toEqual(['some-other-embedder']);
+    // Generation runs remotely under every configuration, so no chat tag is ever this
+    // install's to offer for removal.
     expect(
-      installedModelTags({ ...local, anthropic: { ...DEFAULTS.anthropic, apiKey: 'sk-test' } }),
-    ).toEqual([DEFAULTS.models.embed]);
+      installedModelTags({ ...custom, anthropic: { ...DEFAULTS.anthropic, apiKey: 'sk-test' } }),
+    ).toEqual(['some-other-embedder']);
   });
 
   it('says what it cannot prove is ours when there is no manifest', () => {

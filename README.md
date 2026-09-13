@@ -2,8 +2,8 @@
 
 Aion Local is a local-first cognitive memory substrate for AI coding agents. It exposes four
 MCP tools: `recall` and `reflection` for memory, `source_search` and `source` for reading the
-captured archive directly. A Neo4j graph, a SQLite queue, and Ollama models running on the
-host back them. What one session stores, a later session recalls, with the decisions, the
+captured archive directly. A Neo4j graph, a SQLite queue, and an embedding model on the host
+Ollama back them, with generation on `claude-haiku-4-5`. What one session stores, a later session recalls, with the decisions, the
 reasons, and the corrections intact.
 
 Memory here is a process, not storage. Recall constructs context instead of searching for
@@ -13,12 +13,16 @@ correcting a fact supersedes the old node instead of deleting it. Nothing is eve
 so the substrate can answer what it believed at any point in time.
 [docs/whitepaper.md](docs/whitepaper.md) explains the thinking; this page gets you running.
 
-The substrate never leaves the machine. Generation is the one part that can.
+The substrate never leaves the machine. Generation is the one part that does: every model call
+runs on `claude-haiku-4-5`, and an API key is what turns it on.
 
 ## Quickstart
 
-Prerequisites: Docker (with Compose), git, and [Ollama](https://ollama.com) running on the
-host at its default port, 11434. No `npm install`: the image build owns every dependency.
+Prerequisites: Docker (with Compose), git, [Ollama](https://ollama.com) running on the host at
+its default port, 11434, and an `AION_ANTHROPIC_API_KEY`. Ollama serves the embedding model;
+the key is what generation runs on. Without a key the substrate still captures, embeds and
+recalls, and every generation waits (see below). No `npm install`: the image build owns every
+dependency.
 Node and npm come into it only for the two optional pieces below, `npm link` and the
 harness hooks.
 
@@ -34,7 +38,7 @@ cd aion-local
 ./bin/aion init
 ```
 
-`init` provisions the whole substrate: starts Neo4j, pulls and verifies the Ollama models,
+`init` provisions the whole substrate: starts Neo4j, pulls and verifies the embedding model,
 applies the graph schema, creates the Member, Workspace and Substrate backbone nodes, starts
 the MCP server, and prints a registration command. It asks which profile you want, and for a
 member name (defaulting to your git user.name). That name identifies the graph node your
@@ -55,58 +59,54 @@ reports one service-freshness warning there; it is cosmetic.
 
 ## Where generation runs
 
-Everything runs locally by default and nothing here needs an API key. "Profile" means the install
-profile (docker or native), which machine the substrate runs on. Where generation runs is a
-separate question, answered by the knobs below.
+Every generation runs on `claude-haiku-4-5` through the Anthropic API. There is one model and no
+routing choice: recall's cue call, reflection with every stage behind it, the maintenance
+judgments, and narratives all reach the same place. Routing resolves once at boot
+(`packages/core/src/infrastructure/providers/routing.ts`) and `aion status` prints it.
 
-Routing resolves once at boot (`packages/core/src/infrastructure/providers/routing.ts`), and every
-difference below reads the resolved route. An `AION_ANTHROPIC_API_KEY` sends both generation roles
-to Anthropic. `AION_CUE_PROVIDER` and `AION_REFLECT_PROVIDER` override that per role in either
-direction, and a role pinned to Anthropic with no key runs local and says so.
+Embeddings run on `snowflake-arctic-embed2` on the host Ollama under either install profile, and
+are never routed: one model owns the vector space for the life of the substrate. Ollama serves
+nothing else here.
 
-**Keyed.** With both provider pins at `auto`, both generation roles run on `claude-haiku-4-5`:
-recall's cue call, and reflection with every stage behind it, narratives included.
-`AION_CUE_PROVIDER=ollama` keeps cue extraction local while reflection stays keyed and hooks
-stay enabled. That pin removes the cue surface's API spend. Its pack-quality and latency
-comparison is pending; the shipped pin default stays `auto`. [Cue pin tradeoff](docs/degradation.md#cue-extraction-pinned-local)
-states the measurement limits.
+**With no key.** Capture, embedding, the graph and the archive all work. Recall works too, on the
+raw query text rather than extracted cues, and the pack says `degraded: cues/unavailable` so a
+caller reading one knows which kind of pack it is. Every generation stays queued: the reflection
+worker puts a job back without spending an attempt, `aion status` prints `routing cue=queued
+reflect=queued`, and `aion doctor` says the same under `ollama-round-trip` and `hooks-route`. Set
+a key and restart, and the queue drains. Nothing falls back to a local model.
 
-**Local.** Cues run on `qwen3:1.7b` and reflection on `qwen3:4b-instruct-2507-q4_K_M`, both on the host
-Ollama, each under a context window its role pins (`AION_CUE_NUM_CTX`, `AION_REFLECT_NUM_CTX`).
-
-Embeddings run on `snowflake-arctic-embed2` on the host under either profile and are never
-routed: one model owns the vector space for the life of the substrate.
+**Cost.** A daily dollar ceiling (`AION_ANTHROPIC_DAILY_CEILING_USD`, $5) is held against before
+anything is sent, by ordinary calls and batch submissions alike; past it, background work queues
+and recall falls back to the raw query, the same way a missing key reads. The Message Batches path
+carries the background work that tolerates minutes to hours, at half price: entity-gloss refreshes
+go through it today, cues and anything a caller is waiting on stay on ordinary Messages calls.
+`aion costs` prints the day against the ceiling and outstanding batch commitments beside what has
+landed ([docs/operations.md](docs/operations.md#api-costs)). Prompt caching is off on every shipped
+surface and the number behind that is in the same file: the API caches no prefix under 4,096
+tokens, and the longest system prompt here is about 620.
 
 What else the route decides:
 
-- **How wide a narrative reads.** One session synthesis reads 120 episodes and answers in 12
-  sentences on the keyed route, against 40 and 6 locally. The keyed route reads 4,000 characters
-  an episode, the local route 2,000
-  (`packages/core/src/reflection/domain/narrative-scale.ts`). Neither route clips a session
-  longer than its own cap: a long session is narrated in chunks and the chunk texts folded once,
-  so the local route pays more calls for the same coverage.
-- **What a capture costs.** Hooks are route-agnostic: they fire on every install and hand the
-  turn to whichever route this one resolved. `aion doctor` reports which model digests them as
-  `hooks-route`. [docs/harness.md](docs/harness.md) states the cadence.
-- **What a failed generation call costs.** The Anthropic provider retries a throttled or failed
-  answer and trips a circuit breaker on a bad stretch; the Ollama provider has neither, and a
-  failed call costs its stage. [docs/degradation.md](docs/degradation.md) carries both rungs,
-  the keyed narrative knobs, and the case where a key is pinned to a role that has none.
+- **What a capture costs.** Hooks fire on every install and hand the turn to the queue. `aion
+  doctor` reports what digests them as `hooks-route`. [docs/harness.md](docs/harness.md) states
+  the cadence.
+- **What a failed generation call costs.** The provider retries a throttled or failed answer and
+  trips a circuit breaker on a bad stretch. [docs/degradation.md](docs/degradation.md) carries the
+  rungs and what each of them costs.
 
 `init` takes one of two generation profiles and asks when you do not name one. Both install the
 Claude Code harness hooks. The hooks turn the agent's judgment call about when to remember into
 a fixed cadence: recall at session start and on a substantial prompt, capture on compaction,
 stop, subagent stop, and session end.
 
-- `aion init local` provisions the substrate and routes every generation role to the host Ollama.
-- `aion init full` asks for an Anthropic key, records it in `.env`, and routes generation there.
+- `aion init local` provisions the substrate without a key. Capture, embedding and recall run;
+  generation queues.
+- `aion init full` asks for an Anthropic key, records it in `.env`, and generation runs.
 
-The key is optional spend rather than a capability. Hooks once belonged to the keyed profile
-alone, because the local model of that build could not keep up with a capture on every turn. The
-current local model keeps up, so that rule is gone. To add a key to an existing install, put it
-in `.env` as `AION_ANTHROPIC_API_KEY=...` and rerun `./bin/aion init`; the service restarts with
-it and routing follows. Removing it and rerunning init routes everything back to local models the
-same way.
+Hooks belong to both: they fire on every install, and a capture with no key is stored and queued
+rather than refused. To add a key to an existing install, put it in `.env` as
+`AION_ANTHROPIC_API_KEY=...` and rerun `./bin/aion init`; the service restarts with it and the
+queued work drains. Removing it and rerunning init puts generation back in the queue.
 
 `aion hooks install | uninstall | status` does the hook half on its own. `--harness codex`
 points the same commands at `$CODEX_HOME/hooks.json` and the aion server block in the

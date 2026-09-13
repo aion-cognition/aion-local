@@ -131,7 +131,7 @@ type JudgeOptions = {
 function judgeOptions(ctx: OperationContext): JudgeOptions {
   return {
     surface: 'proposal_resolution',
-    model: ctx.config.models.reflect,
+    model: ctx.config.anthropic.model,
     timeoutMs: ctx.config.reflection.stageTimeoutMs,
     signal: ctx.signal,
   };

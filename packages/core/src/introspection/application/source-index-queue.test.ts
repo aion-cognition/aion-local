@@ -103,7 +103,7 @@ describe('the source-index queue path', () => {
       listReflectionJobs(store.db)
         .map((job) => job.jobType)
         .sort(),
-    ).toEqual(['integrate', 'source_index']);
+    ).toEqual(['attach_vectors', 'integrate', 'source_index']);
   });
 
   it('claims the index row, indexes the source, and takes the row off the queue', async () => {
@@ -112,7 +112,11 @@ describe('the source-index queue path', () => {
     expect(drain).toMatchObject({ claimed: 1, completed: 1, deferred: 0 });
     expect(drain.documents).toBe(3);
     expect(listSearchDocumentsForSource(store.db, 'episode-1')).toHaveLength(3);
-    expect(listReflectionJobs(store.db).map((job) => job.jobType)).toEqual(['integrate']);
+    expect(
+      listReflectionJobs(store.db)
+        .map((job) => job.jobType)
+        .sort(),
+    ).toEqual(['attach_vectors', 'integrate']);
   });
 
   it('discharges the acceptance obligation only when the whole source is indexed', async () => {

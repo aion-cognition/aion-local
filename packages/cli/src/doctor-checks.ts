@@ -1,5 +1,4 @@
 import {
-  acceptsHookCapture,
   describePairing,
   Neo4jPairingError,
   queueLagSnapshot,
@@ -293,13 +292,11 @@ export function coverageCheck(db: SqliteHandle): CheckResult {
 }
 
 /**
- * Which route the hooks feed, reported and not judged.
+ * Which model the hooks feed, reported and not judged.
  *
- * This used to fail a substrate that had hooks installed on the local route, and the hook client
- * used to remove itself there. Both came from a build whose local model could not keep up with a
- * capture every turn; the substrate is local-first, a key is optional spend, and hooks are
- * route-agnostic. What is left is worth saying: a capture fires every turn, so an operator
- * deserves to know which model is digesting it and what that costs.
+ * A capture fires every turn, so an operator deserves to know what digests it and what that
+ * costs. On a substrate with no key the captures still land: they are stored and queued, and
+ * the enrichment waits, which is the line this prints instead of a model name.
  *
  * Whether hooks are installed is a host fact: the CLI runs in a container that cannot see
  * `~/.claude`, so `bin/aion` computes it and passes it through, and a run reached any other way
@@ -314,7 +311,7 @@ export function hooksRouteCheck(config: Config, env: NodeJS.ProcessEnv): CheckRe
     return { ok: true, detail: 'no hooks installed' };
   }
   const routing = resolveProviderRouting(config);
-  if (acceptsHookCapture(routing)) {
+  if (routing.keyPresent) {
     return {
       ok: true,
       detail: `hooks installed; capture digests on ${routing.roles.reflect.model}`,
@@ -323,7 +320,6 @@ export function hooksRouteCheck(config: Config, env: NodeJS.ProcessEnv): CheckRe
   return {
     ok: true,
     detail:
-      `hooks installed; capture digests locally on ${routing.roles.reflect.model}. ` +
-      'A key plus AION_REFLECT_PROVIDER route it to Anthropic instead; nothing here needs one.',
+      'hooks installed; captures are stored and queued. Enrichment waits for AION_ANTHROPIC_API_KEY.',
   };
 }

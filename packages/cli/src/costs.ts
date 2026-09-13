@@ -1,4 +1,12 @@
-import { estimateApiCost, summarizeApiCalls, type ApiUsageGroup } from '@aion/core';
+import {
+  batchWorkCounts,
+  estimateApiCost,
+  readSpendDay,
+  readSubstratePairing,
+  summarizeApiCalls,
+  type ApiUsageGroup,
+  type SqliteHandle,
+} from '@aion/core';
 
 import { CliUsageError, parseArgs, type ArgSpec } from './args.js';
 import { stdoutWriter, type Writer } from './output.js';
@@ -54,9 +62,11 @@ function reasoningShare(row: ApiUsageGroup): string {
 function renderGroups(title: string, rows: readonly ApiUsageGroup[], write: Writer): void {
   write(title);
   // `thinking` sits beside `output` rather than after the cache columns, because it is a share
-  // of the output count and a reader adding the two would double-count the reasoning.
+  // of the output count and a reader adding the two would double-count the reasoning. `rate` is
+  // the rate card the group billed on: the token counts are what the model read and wrote either
+  // way, and the batch discount is in the dollars alone.
   write(
-    'group  model  calls  input  output  thinking  cache-write  cache-read  cache-share  usage-errors  estimated USD',
+    'group  model  rate  calls  input  output  thinking  cache-write  cache-read  cache-share  usage-errors  estimated USD',
   );
   for (const row of rows) {
     const cost = estimateApiCost(row);
@@ -64,6 +74,7 @@ function renderGroups(title: string, rows: readonly ApiUsageGroup[], write: Writ
       [
         row.key,
         row.model,
+        row.pricingTier,
         row.calls,
         row.inputTokens,
         row.outputTokens,
@@ -77,6 +88,47 @@ function renderGroups(title: string, rows: readonly ApiUsageGroup[], write: Writ
       ].join('  '),
     );
   }
+}
+
+/**
+ * Today against the ceiling, which is the number that decides whether anything else runs.
+ *
+ * It is the reservation ledger rather than the bill above: a request in flight has committed its
+ * conservative maximum and nothing has been charged for it yet, and the ceiling is consulted
+ * before dispatch, so what it reads is what a caller asking to spend more would be measured on.
+ */
+function renderCeiling(db: SqliteHandle, ceilingUsd: number, write: Writer): void {
+  const day = readSpendDay(db, new Date());
+  const unpriced =
+    day.unpriced === 0
+      ? ''
+      : `; ${String(day.unpriced)} dispatch(es) on an unpriced model bound nothing`;
+  write(
+    `today against the ceiling: $${day.committedUsd.toFixed(6)} of $${ceilingUsd.toFixed(2)} ` +
+      `committed (${String(day.inFlight)} request(s) in flight holding ` +
+      `$${day.inFlightUsd.toFixed(6)})${unpriced}`,
+  );
+}
+
+/**
+ * What has been submitted and not yet billed. A batch runs for up to 24 hours, so the total
+ * above is what has landed rather than what is owed, and a reader deciding whether to spend more
+ * needs the commitment beside it. Batched requests bill at half the ordinary rate, which is why
+ * the outstanding count is a count and not a price.
+ */
+function renderOutstanding(db: SqliteHandle, write: Writer): void {
+  const substrateId = readSubstratePairing(db)?.substrateId;
+  if (substrateId === undefined) {
+    return;
+  }
+  const counts = batchWorkCounts(db, substrateId);
+  if (counts.pending === 0 && counts.submitted === 0) {
+    return;
+  }
+  write(
+    `batch commitments: ${String(counts.submitted)} request(s) outstanding at the remote, ` +
+      `${String(counts.pending)} queued to send; neither is billed above yet`,
+  );
 }
 
 export function runCosts(
@@ -97,6 +149,8 @@ export function runCosts(
       write(`API costs since ${since.toISOString()} (UTC; today included)`);
       if (report.days.length === 0) {
         write('no metered API calls in this period');
+        renderCeiling(substrate.db(), substrate.config.anthropic.dailyCeilingUsd, write);
+        renderOutstanding(substrate.db(), write);
         return Promise.resolve(0);
       }
       renderGroups('per day', report.days, write);
@@ -127,6 +181,8 @@ export function runCosts(
           ? 'cache effectiveness unavailable: usage parse failures'
           : `cache effectiveness: ${String(reads)} / ${String(input)} input tokens (${(input === 0 ? 0 : (reads / input) * 100).toFixed(1)}%)`,
       );
+      renderCeiling(substrate.db(), substrate.config.anthropic.dailyCeilingUsd, write);
+      renderOutstanding(substrate.db(), write);
       return Promise.resolve(0);
     },
   });

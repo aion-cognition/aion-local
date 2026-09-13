@@ -154,17 +154,17 @@ describe('renderStatus', () => {
 
   it('reports the resolved route and what Ollama is holding in memory', () => {
     const { lines, write } = collector();
-    const snapshot: StatusSnapshot = { ...healthy, resident: ['qwen3:1.7b'] };
+    const keyed: Config = { ...DEFAULTS, anthropic: { ...DEFAULTS.anthropic, apiKey: 'sk-test' } };
+    const snapshot: StatusSnapshot = { ...healthy, resident: [DEFAULTS.models.embed] };
 
-    renderStatus(snapshot, DEFAULTS, write);
+    renderStatus(snapshot, keyed, write);
 
     const text = lines.join('\n');
     expect(text).toContain(
-      `routing  cue=ollama:${DEFAULTS.models.cue} reflect=ollama:${DEFAULTS.models.reflect}`,
+      `routing  cue=anthropic:${DEFAULTS.anthropic.model} reflect=anthropic:${DEFAULTS.anthropic.model}`,
     );
-    expect(text).toContain('resident   qwen3:1.7b');
-    // Nothing leaves a fully local install, so there is no banner to read past.
-    expect(text).not.toContain('Anthropic API');
+    expect(text).toContain(`resident   ${DEFAULTS.models.embed}`);
+    expect(text).toContain('Anthropic API');
   });
 
   it('says nothing is loaded rather than leaving the resident line blank', () => {
@@ -193,13 +193,14 @@ describe('renderStatus', () => {
     expect(text).not.toContain('sk-ant-test');
   });
 
-  it('says so when a role is pinned to a provider no key backs', () => {
+  it('says generation queues when no key backs it', () => {
     const { lines, write } = collector();
-    const pinned: Config = { ...DEFAULTS, routing: { cue: 'auto', reflect: 'anthropic' } };
 
-    renderStatus(healthy, pinned, write);
+    renderStatus(healthy, DEFAULTS, write);
 
-    expect(lines.join('\n')).toContain('reflect is pinned to anthropic with no key set');
+    const text = lines.join('\n');
+    expect(text).toContain('routing  cue=queued reflect=queued');
+    expect(text).toContain('Generation work queues');
   });
 
   it('reports the edge-weight distribution per type, and n=0 for a type with no live edge', () => {

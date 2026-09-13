@@ -50,9 +50,7 @@ import { healthFixture } from '../../domain/test-support/health.fixture.js';
  * Written out rather than imported: this is the read the gate batteries make, and `core` does
  * not import from `mcp`, where that constant lives.
  */
-const REMOTE_JUDGE_ABSENT =
-  (process.env.AION_ANTHROPIC_API_KEY ?? '').trim() === '' ||
-  process.env.TEST_AION_GENERATION === 'local';
+const REMOTE_JUDGE_ABSENT = (process.env.AION_ANTHROPIC_API_KEY ?? '').trim() === '';
 
 const PRIOR_TEXT = 'The Zephyr ingest worker polls its queue every 45 seconds.';
 const NEXT_TEXT = 'The Zephyr ingest worker polls its queue every 5 seconds now.';
@@ -101,13 +99,11 @@ beforeAll(async () => {
       memberId: backbone.member.id,
       workspaceId: backbone.workspace.id,
     }),
-    provider: live,
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
     publications: directIntakePublisher(harness.driver, db),
-    acceptHookCapture: true,
   };
 
   // One identity for both, so the two observations share a session and the resolver's window

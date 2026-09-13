@@ -16,7 +16,6 @@ import {
   type Neo4jHarness,
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
-import type { Provider, Vector } from '../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { listStatedLinks } from '../../infrastructure/sqlite/evidence-links.js';
 import { recordSourceRecord } from '../../infrastructure/sqlite/source-identity.js';
@@ -43,17 +42,6 @@ const REPORTED_AT = new Date('2026-06-02T10:00:00.000Z');
 const RESTATED_AT = new Date('2026-06-04T10:00:00.000Z');
 const CONFIRMER = 'Ryan Huber';
 
-function vector(): Vector {
-  const raw = new Array<number>(EMBED_DIMENSION).fill(0);
-  raw[0] = 1;
-  return raw;
-}
-
-const provider: Provider = {
-  embed: (texts) => Promise.resolve(texts.map(() => vector())),
-  generate: () => Promise.reject(new Error('intake spends no generation call')),
-};
-
 let harness: Neo4jHarness;
 let db: SqliteHandle;
 let dataDir: string;
@@ -66,7 +54,6 @@ async function push(payload: ReflectionInput, now: Date, identity = SESSION): Pr
       driver: harness.driver,
       db,
       sessions,
-      provider,
       logger,
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),
@@ -74,7 +61,6 @@ async function push(payload: ReflectionInput, now: Date, identity = SESSION): Pr
       // The acceptance clock is the push's, so a confirmation that stated no moment carries a
       // time this file can name rather than the moment the run happened.
       publications: directIntakePublisher(harness.driver, db, () => now),
-      acceptHookCapture: true,
     },
     payload,
     { identity, now },

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ReflectionNotStoredError } from './errors.js';
+import { VECTOR_JOB_TYPE } from './intake-queue.js';
 import { handleReflection, type ReflectionIntakeDeps } from './intake.js';
 import { LaneAssigner } from './lanes.js';
 import { attachContentVectors, findPendingVectorNodes } from './vectors.js';
@@ -55,7 +56,6 @@ let db: SqliteHandle;
 let dataDir: string;
 let enqueuedJobIds: string[];
 let embed: ReturnType<typeof vi.fn<Provider['embed']>>;
-let generate: ReturnType<typeof vi.fn<Provider['generate']>>;
 let deps: ReflectionIntakeDeps;
 
 function fakeVectors(texts: readonly string[]): Vector[] {
@@ -75,13 +75,11 @@ beforeEach(() => {
   enqueuedJobIds = [];
 
   embed = vi.fn((texts: readonly string[]) => Promise.resolve(fakeVectors(texts)));
-  generate = vi.fn(() => Promise.reject(new Error('intake must never call generate')));
 
   deps = {
     driver: graph.driver,
     db,
     sessions: new SessionManager(graph.driver, { memberId: MEMBER_ID, workspaceId: WORKSPACE_ID }),
-    provider: { embed, generate },
     onJobEnqueued: (jobId: string) => {
       enqueuedJobIds.push(jobId);
     },
@@ -90,7 +88,6 @@ beforeEach(() => {
     lanes: new LaneAssigner(LANE_LIMITS),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
     publications: directIntakePublisher(graph.driver, db),
-    acceptHookCapture: true,
   };
 });
 
@@ -122,7 +119,7 @@ describe('reflection intake dedupe', () => {
     expect(graph.nodes.size).toBe(nodesAfterFirst);
     expect(integrateJobs(db)).toHaveLength(1);
     expect(enqueuedJobIds).toHaveLength(1);
-    expect(embed).toHaveBeenCalledTimes(1);
+    expect(embed).not.toHaveBeenCalled();
   });
 
   // The member lock serializes session creation, the session lock serializes intake for
@@ -137,9 +134,10 @@ describe('reflection intake dedupe', () => {
   it('queues nothing again for a payload whose work a worker already finished', async () => {
     const first = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
 
-    // The job ran to completion, which discards the row. The episode is still the record.
+    // The integrate job ran to completion, which discards the row. The episode is still the
+    // record. The vector row is a different handler's and is left alone.
     const claimant = new ReflectionQueueClaimant();
-    const claimed = claimant.claimNext(db);
+    const claimed = claimant.claimNext(db, undefined, ['integrate']);
     expect(claimant.complete(db, claimed?.id ?? '')).toBe(true);
 
     const second = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
@@ -172,32 +170,27 @@ describe('reflection intake dedupe', () => {
   });
 });
 
-describe('reflection intake store-before-embed order', () => {
-  it('has the episode committed and the job queued before it embeds anything', async () => {
-    let jobsAtEmbedTime = -1;
-    let episodesAtEmbedTime = -1;
-    embed.mockImplementationOnce((texts: readonly string[]) => {
-      jobsAtEmbedTime = integrateJobs(db).length;
-      episodesAtEmbedTime = graph.nodesWithLabel('Episode').length;
-      return Promise.resolve(fakeVectors(texts));
-    });
-
-    await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
-
-    expect(episodesAtEmbedTime).toBe(1);
-    expect(jobsAtEmbedTime).toBe(1);
-    expect(enqueuedJobIds).toHaveLength(1);
-  });
-
-  it('attaches a vector to the episode and to every turn', async () => {
+describe('reflection intake leaves the embedding to the queue', () => {
+  it('commits the episode and queues its work without embedding anything', async () => {
     const result = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
 
-    const vectored = graph
-      .nodesWithLabel('Memory')
-      .filter((node) => Array.isArray(node.properties.content_vec));
+    expect(graph.nodesWithLabel('Episode')).toHaveLength(1);
+    expect(integrateJobs(db)).toHaveLength(1);
+    expect(enqueuedJobIds).toHaveLength(1);
+    expect(embed).not.toHaveBeenCalled();
+    expect(
+      graph.nodesWithLabel('Memory').filter((node) => Array.isArray(node.properties.content_vec)),
+    ).toEqual([]);
+    expect(result.queued).toBe(true);
+  });
 
-    expect(vectored.map((node) => node.id)).toContain(result.episode_id);
-    expect(vectored).toHaveLength(3);
+  it("writes a vector row for the source, in the acceptance's own lane", async () => {
+    const result = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
+
+    const vectorJob = listReflectionJobs(db).find((job) => job.jobType === VECTOR_JOB_TYPE);
+
+    expect(vectorJob?.episodeId).toBe(result.episode_id);
+    expect(vectorJob?.lane).toBe('interactive');
   });
 });
 
@@ -250,16 +243,15 @@ describe('reflection intake when a dependency is down', () => {
     expect(enqueuedJobIds).toHaveLength(1);
   });
 
-  it('leaves every pending node findable, so a later drain can backfill it', async () => {
-    embed.mockRejectedValueOnce(new Error('fetch failed'));
-
+  it('leaves every node of an acceptance pending, and embeds none of them', async () => {
     const result = await handleReflection(deps, PAYLOAD, { identity: 'session-a' });
     const pending = await findPendingVectorNodes(graph.driver, 10);
 
+    expect(embed).not.toHaveBeenCalled();
     expect(pending.map((node) => node.id)).toContain(result.episode_id);
     expect(pending).toHaveLength(3);
 
-    const attached = await attachContentVectors(graph.driver, deps.provider, pending);
+    const attached = await attachContentVectors(graph.driver, { embed }, pending);
 
     expect(attached).toHaveLength(3);
     expect(await findPendingVectorNodes(graph.driver, 10)).toEqual([]);

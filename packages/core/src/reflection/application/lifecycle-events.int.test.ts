@@ -102,13 +102,11 @@ beforeAll(async () => {
     driver: harness.driver,
     db,
     sessions: new SessionManager(harness.driver, { memberId, workspaceId }),
-    provider,
     logger,
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
     publications: directIntakePublisher(harness.driver, db),
-    acceptHookCapture: true,
   };
 
   await recordLifecycleEvent(deps, {

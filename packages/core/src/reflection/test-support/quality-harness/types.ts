@@ -24,7 +24,7 @@ export type CognitiveExtractionResult = {
   readonly nodes: readonly ExtractedCognitiveNode[];
 };
 
-export type ExtractionRoute = 'local' | 'anthropic';
+export type ExtractionRoute = 'anthropic';
 
 export type ExtractorOutcome<T> =
   | { readonly ok: true; readonly value: T; readonly latencyMs: number }

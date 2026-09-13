@@ -4,7 +4,7 @@ import { renderJsonReport, renderMarkdownReport, type QualityReport } from './re
 
 const FIXED_REPORT: QualityReport = {
   generatedAt: '2026-08-28T00:00:00.000Z',
-  routesRun: ['local', 'anthropic'],
+  routesRun: ['anthropic'],
   routesSkipped: [],
   fixtures: [
     {
@@ -13,22 +13,10 @@ const FIXED_REPORT: QualityReport = {
       charCount: 512,
       routes: [
         {
-          route: 'local',
-          model: 'qwen3:8b',
-          entities: { ok: true, count: 2, byType: { tool: 1, topic: 1 }, latencyMs: 4200 },
-          cognitive: { ok: true, count: 1, byType: { Decision: 1 }, latencyMs: 5100 },
-        },
-        {
           route: 'anthropic',
           model: 'claude-haiku-4-5',
-          entities: {
-            ok: false,
-            count: 0,
-            byType: {},
-            latencyMs: 800,
-            error: 'Error: request failed',
-          },
-          cognitive: { ok: true, count: 1, byType: { Decision: 1 }, latencyMs: 900 },
+          entities: { ok: true, count: 2, byType: { tool: 1, topic: 1 }, latencyMs: 4200 },
+          cognitive: { ok: true, count: 1, byType: { Decision: 1 }, latencyMs: 5100 },
         },
       ],
       agreement: { entityNameOverlap: undefined, cognitiveTextOverlap: 1 },
@@ -42,11 +30,9 @@ describe('renderMarkdownReport', () => {
 
     expect(markdown).toContain('Migration deadlock diagnosis');
     expect(markdown).toContain('`migration-deadlock`');
-    expect(markdown).toContain('qwen3:8b');
     expect(markdown).toContain('claude-haiku-4-5');
     expect(markdown).toContain('4200');
     expect(markdown).toContain('5100');
-    expect(markdown).toContain('error: Error: request failed');
     expect(markdown).toContain('Cognitive node text agreement: 100%');
   });
 
@@ -59,7 +45,7 @@ describe('renderMarkdownReport', () => {
   it('renders a skip notice by route and reason', () => {
     const withSkip: QualityReport = {
       ...FIXED_REPORT,
-      routesRun: ['local'],
+      routesRun: ['anthropic'],
       routesSkipped: [{ route: 'anthropic', reason: 'AION_ANTHROPIC_API_KEY not set' }],
     };
 

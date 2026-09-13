@@ -45,7 +45,7 @@ vi.mock('@aion/core', async (importOriginal) => {
   class FakeProviderRouter {
     // The reflect route is the one boot reads off the router itself, since hook capture
     // follows it. The rest of the routing reaches boot through stubs below.
-    readonly routing = { roles: { reflect: { provider: 'ollama' } } };
+    readonly routing = { roles: { reflect: { provider: 'anthropic' } } };
     forRole(): unknown {
       return {};
     }

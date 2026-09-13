@@ -36,6 +36,7 @@ import { testGenerationProvider } from '@aion/core/infrastructure/providers/test
 import {
   directCompletionPublisher,
   directIntakePublisher,
+  drainAcceptedVectors,
 } from '@aion/core/reflection/test-support/direct-intake.fixture.js';
 import type { MemoryPack, MemoryPackItem, ReflectionOutput } from '@aion/protocol';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -90,15 +91,11 @@ export type GateSubstrateOptions = {
 };
 
 /**
- * The batteries measure the shipped configuration, whose generations run on the remote route.
- * With no key `testGenerationProvider` falls back to the local model silently, and every floor
- * and pinned default gets judged against a benchmark it was never measured on: the local judge
- * reads as product regressions. The batteries skip, visibly, instead. `TEST_AION_GENERATION=local`
- * counts as absent for the same reason.
+ * The batteries measure the shipped configuration, and every generation in it needs a key. With
+ * none, there is nothing to measure against: a pinned default judged on a substrate that made no
+ * model call is a number about nothing. The batteries skip, visibly, instead.
  */
-export const REMOTE_JUDGE_ABSENT =
-  (process.env.AION_ANTHROPIC_API_KEY ?? '').trim() === '' ||
-  process.env.TEST_AION_GENERATION === 'local';
+export const REMOTE_JUDGE_ABSENT = (process.env.AION_ANTHROPIC_API_KEY ?? '').trim() === '';
 
 export class GateSubstrate {
   readonly label: string;
@@ -228,7 +225,6 @@ export class GateSubstrate {
       driver: this.driver,
       db: this.db,
       sessions: this.sessions,
-      provider: this.provider,
       onJobEnqueued: () => {
         this.#worker?.wake();
       },
@@ -240,7 +236,6 @@ export class GateSubstrate {
       lanes: this.#lanes,
       workerMaxAttempts: this.config.operational.workerMaxAttempts,
       publications: directIntakePublisher(this.driver, this.db),
-      acceptHookCapture: true,
     };
   }
 
@@ -296,11 +291,16 @@ export class GateSubstrate {
     return this.#worker;
   }
 
-  store(payload: unknown, options: GateStoreOptions): Promise<ReflectionOutput> {
-    return handleReflection(this.intakeDeps(), payload, {
+  async store(payload: unknown, options: GateStoreOptions): Promise<ReflectionOutput> {
+    const stored = await handleReflection(this.intakeDeps(), payload, {
       identity: options.identity,
       ...(options.now === undefined ? {} : { now: options.now }),
     });
+    // Intake queues the embedding rather than performing it. Every battery here measures a
+    // recall, and a recall over unvectorized episodes measures the fixture rather than the
+    // substrate, so the row the worker would run is run here.
+    await drainAcceptedVectors(this.driver, this.provider);
+    return stored;
   }
 
   /**

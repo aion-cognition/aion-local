@@ -25,15 +25,18 @@ import type { Provider, Vector } from '../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { handleReflection } from '../../reflection/application/intake.js';
 import { LaneAssigner } from '../../reflection/application/lanes.js';
-import { directIntakePublisher } from '../../reflection/test-support/direct-intake.fixture.js';
+import {
+  directIntakePublisher,
+  drainAcceptedVectors,
+} from '../../reflection/test-support/direct-intake.fixture.js';
 import { SessionManager } from '../../session/session-manager.js';
 
 /**
  * R4's disclosed path-strength lane, against a live substrate: one episode reachable by graph
  * path alone. It carries no content vector, so no floor ever measures it and no exact match ever
  * finds it, which is exactly the population `droppedUnmeasuredArrival` counts and the lane
- * exists to disclose a few of. Written directly rather than through intake, since intake always
- * embeds; the point of the fixture is a node the embedding pipeline has not reached yet.
+ * exists to disclose a few of. Written directly rather than through intake, so that no vector
+ * job is ever queued for it; the point of the fixture is a node the embedding never reaches.
  */
 
 const EMBED_DIMENSION = 8;
@@ -114,24 +117,25 @@ beforeAll(async () => {
     logger,
   };
 
-  // The anchor, through intake: it embeds, it enters the fulltext index, and intake connects it
-  // to a real Session node the normal way (PARTICIPATES_IN).
+  // The anchor, through intake: it enters the fulltext index, and intake connects it to a real
+  // Session node the normal way (PARTICIPATES_IN). Its embedding is a queue row, drained below.
   await handleReflection(
     {
       driver: harness.driver,
       db,
       sessions,
-      provider,
       logger,
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),
       workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
       publications: directIntakePublisher(harness.driver, db),
-      acceptHookCapture: true,
     },
     { observations: [ANCHOR_TEXT] },
     { identity: WRITE_SESSION, now: STARTED_AT },
   );
+  // The anchor's vectors, and only the anchor's: the path-only node below is written after this
+  // and stays bare, which is the whole point of the fixture.
+  await drainAcceptedVectors(harness.driver, provider);
 
   // The path-only episode, written directly: real text to render, no `content_vec` at all, so
   // arrival scoring has nothing to measure it against the query with. Wired into the same
@@ -161,12 +165,20 @@ beforeAll(async () => {
   });
 
   await waitFor('the vector index to cover the anchor episode', async () => {
-    const rows = await vectorSeeds(harness.driver, { vector: axis(0), limit: 10, mode: withCurrency() });
+    const rows = await vectorSeeds(harness.driver, {
+      vector: axis(0),
+      limit: 10,
+      mode: withCurrency(),
+    });
     return rows.length >= 1;
   });
 
   await waitFor('the fulltext index to cover the anchor episode', async () => {
-    const rows = await fulltextSeeds(harness.driver, { query: CUE, limit: 10, mode: withCurrency() });
+    const rows = await fulltextSeeds(harness.driver, {
+      query: CUE,
+      limit: 10,
+      mode: withCurrency(),
+    });
     return rows.some((row) => row.id !== pathOnlyEpisodeId);
   });
 }, 300_000);
@@ -178,13 +190,21 @@ afterAll(async () => {
 });
 
 function recall(pathStrengthSlots: number): Promise<Awaited<ReturnType<typeof handleRecall>>> {
-  const deps: RecallDeps = { ...baseDeps, config: config(pathStrengthSlots), cueCache: new CueCache() };
+  const deps: RecallDeps = {
+    ...baseDeps,
+    config: config(pathStrengthSlots),
+    cueCache: new CueCache(),
+  };
   return handleRecall(deps, { query: QUERY }, { identity: READ_SESSION, now: RECALLED_AT });
 }
 
 describe('the disclosed path-strength lane against a live substrate', () => {
   it('is out of reach of every measured leg: no content vector, no shared words', async () => {
-    const lexical = await fulltextSeeds(harness.driver, { query: CUE, limit: 10, mode: withCurrency() });
+    const lexical = await fulltextSeeds(harness.driver, {
+      query: CUE,
+      limit: 10,
+      mode: withCurrency(),
+    });
     expect(lexical.map((row) => row.id)).not.toContain(pathOnlyEpisodeId);
   });
 

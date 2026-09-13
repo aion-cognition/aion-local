@@ -102,6 +102,54 @@ export async function findStaleDescriptionEntities(
   );
 }
 
+/**
+ * The description state one entity is in right now: what it says, what baseline that description
+ * was written against, and how many mentions it has.
+ *
+ * It is the same reading the stale-description scan makes, for one node rather than the
+ * population, and it exists because a request that left the machine has to be checked against the
+ * substrate before its answer is applied. A batched refresh is asked hours before it is answered,
+ * and in that time the entity can be merged away, forgotten, refreshed by another pass, or have
+ * its gloss retired by a correction. Each of those makes the answer about a question nobody is
+ * asking any more.
+ */
+const READ_ENTITY_DESCRIPTION_STATE = [
+  `MATCH (e:${BASE_NODE_LABEL}:${ENTITY_LABEL} { id: $id })`,
+  `WHERE ${currentOnly('e')}`,
+  `OPTIONAL MATCH (ep:Episode)-[:${ENTITY_MENTION_TYPE}]->(e)`,
+  // `count(ep)` for the reason the population read uses it: an entity with no mention edge still
+  // yields one row with `ep` bound to null, which `count(*)` would read as one.
+  'WITH e, count(ep) AS mentions',
+  `RETURN e.${MEMORY_PROPERTIES.text} AS text, mentions,`,
+  `       coalesce(e.${DESCRIPTION_MENTION_COUNT_PROPERTY}, $implicitBaseline) AS baseline`,
+].join('\n');
+
+export type EntityDescriptionState = {
+  /** Empty where a correction retired the gloss, which is a different question from the one asked. */
+  readonly text: string;
+  readonly mentions: number;
+  readonly baseline: number;
+};
+
+export async function readEntityDescriptionState(
+  driver: Driver,
+  id: string,
+): Promise<EntityDescriptionState | undefined> {
+  const rows = await runRead(
+    driver,
+    {
+      cypher: READ_ENTITY_DESCRIPTION_STATE,
+      parameters: { id, implicitBaseline: toGraphInteger(IMPLICIT_BASELINE_MENTIONS) },
+    },
+    (row: Row) => ({
+      text: (row.text as string | null) ?? '',
+      mentions: typeof row.mentions === 'number' ? row.mentions : Number(row.mentions ?? 0),
+      baseline: typeof row.baseline === 'number' ? row.baseline : Number(row.baseline ?? 0),
+    }),
+  );
+  return rows[0];
+}
+
 export type UndescribedEntity = {
   readonly id: string;
   readonly name: string;

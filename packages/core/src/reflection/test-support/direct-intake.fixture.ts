@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { MergePublisher } from '../../evidence/application/merge-recovery.js';
 import { GraphTransaction } from '../../infrastructure/graph/connection.js';
+import type { Embedder } from '../../infrastructure/providers/types.js';
 import {
   PUBLICATION_KINDS,
   type PublicationOutcome,
@@ -13,6 +14,7 @@ import { reflectionCompletionPublication } from '../application/completion-publi
 import { intakePublication } from '../application/intake-publication.js';
 import type { IntakePublisher } from '../application/intake-transport.js';
 import { claimMergePublication } from '../application/merge-publication.js';
+import { attachSourceVectors, drainPendingVectors } from '../application/vectors.js';
 import type { CompletionPublisher } from '../application/worker.js';
 
 /**
@@ -177,4 +179,35 @@ function ensureCoverageRegistry(db: SqliteHandle): void {
     `INSERT INTO coverage_contract (contract_version, epoch, field_policy_version, state)
      VALUES (1, ?, 1, 'preparing')`,
   ).run(randomUUID());
+}
+
+/**
+ * Runs the embedding an acceptance queued, the way the reflection worker runs it.
+ *
+ * Intake returns before anything embeds, so a fixture that goes on to assert on vector search
+ * has to run the queued work itself. Draining the whole pending set rather than one source's
+ * row is deliberate: a fixture pushing a corpus wants every one of them vectored, and that is
+ * the same operation the worker's startup drain performs.
+ */
+export function drainAcceptedVectors(
+  driver: Driver,
+  provider: Embedder,
+  batchSize = 100,
+): Promise<number> {
+  return drainPendingVectors({ driver, provider, logger: { warn: () => undefined } }, batchSize);
+}
+
+/**
+ * The same, narrowed to one accepted source.
+ *
+ * A fixture that also writes nodes by hand needs this one: the whole-backlog drain would embed
+ * a node the fixture deliberately left without a vector, which is the state several of them are
+ * built to measure.
+ */
+export function drainSourceVectors(
+  driver: Driver,
+  provider: Embedder,
+  sourceId: string,
+): Promise<number> {
+  return attachSourceVectors({ driver, provider, logger: { warn: () => undefined } }, sourceId);
 }

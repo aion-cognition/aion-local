@@ -3,7 +3,7 @@ import type { Driver } from 'neo4j-driver';
 import type { ReflectionRun, ReflectionRunOptions } from './orchestrator.js';
 import type { EvidenceResolver } from '../../evidence/application/resolver.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
-import type { Provider } from '../../infrastructure/providers/types.js';
+import type { Embedder } from '../../infrastructure/providers/types.js';
 import type { PublicationOutcome } from '../../infrastructure/publication/types.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 
@@ -26,7 +26,7 @@ export type CompletionPublisher = {
 export type ReflectionWorkerDeps = {
   readonly driver: Driver;
   readonly db: SqliteHandle;
-  readonly provider: Provider;
+  readonly provider: Embedder;
   readonly runner: ReflectionRunner;
   readonly logger: Logger;
   /** Where a finished run settles what it owed. There is no second way to complete a job. */

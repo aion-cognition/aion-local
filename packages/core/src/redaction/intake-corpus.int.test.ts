@@ -14,7 +14,6 @@ import {
   type Neo4jHarness,
 } from '../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger } from '../infrastructure/logging/logger.js';
-import { OllamaProvider } from '../infrastructure/providers/ollama-provider.js';
 import { openSqliteHandle, type SqliteHandle } from '../infrastructure/sqlite/database.js';
 import { listReflectionJobs } from '../infrastructure/sqlite/reflection-queue.js';
 import { handleReflection, type ReflectionIntakeDeps } from '../reflection/application/intake.js';
@@ -51,16 +50,11 @@ beforeAll(async () => {
       memberId: backbone.member.id,
       workspaceId: backbone.workspace.id,
     }),
-    provider: new OllamaProvider({
-      baseUrl: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
-      embedModel: DEFAULTS.models.embed,
-    }),
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
     publications: directIntakePublisher(harness.driver, db),
-    acceptHookCapture: true,
   };
 
   for (const [index, shape] of LEAKED_SHAPES.entries()) {
@@ -98,7 +92,8 @@ describe('redaction through a real intake, read back from the substrate', () => 
     for (const shape of LEAKED_SHAPES) {
       expect(queuedPayloads).not.toContain(shape.material);
     }
-    expect(listReflectionJobs(db)).toHaveLength(LEAKED_SHAPES.length + 1);
+    // Three rows an acceptance: the integrate job, the vector job, and the index job.
+    expect(listReflectionJobs(db)).toHaveLength((LEAKED_SHAPES.length + 1) * 3);
   });
 
   for (const [label, text] of Object.entries(SURVIVING_TEXT)) {

@@ -109,7 +109,6 @@ function reflectionDeps(overrides: Partial<Parameters<typeof handleReflection>[0
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
     publications: directIntakePublisher(substrate.driver, db),
-    acceptHookCapture: true,
     ...overrides,
   };
 }

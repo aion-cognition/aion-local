@@ -14,7 +14,7 @@ import { getMeta, setMeta } from './meta.js';
  */
 export const GENERATION_COUNTER_ROLES = ['cue', 'reflect'] as const;
 
-export const GENERATION_COUNTER_PROVIDERS = ['ollama', 'anthropic'] as const;
+export const GENERATION_COUNTER_PROVIDERS = ['anthropic'] as const;
 
 export type GenerationCounterRole = (typeof GENERATION_COUNTER_ROLES)[number];
 

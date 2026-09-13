@@ -121,13 +121,11 @@ beforeAll(async () => {
       memberId: backbone.member.id,
       workspaceId: backbone.workspace.id,
     }),
-    provider: provider(),
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
     publications: directIntakePublisher(harness.driver, db),
-    acceptHookCapture: true,
   };
 
   const stored = await handleReflection(intake, PAYLOAD, { identity: SESSION_IDENTITY });
@@ -158,7 +156,7 @@ describe('CognitiveExtractionStage against a live graph and a live model', () =>
       publications: new RecordingPublisher().asCoordinator(),
     };
 
-    const stage = new CognitiveExtractionStage({ model: DEFAULTS.models.reflect });
+    const stage = new CognitiveExtractionStage({ model: DEFAULTS.anthropic.model });
     const outcome = await stage.run(ctx);
 
     expect(outcome.status).toBe('ok');
@@ -216,13 +214,11 @@ describe('CognitiveExtractionStage against a live graph and a live model', () =>
         memberId: backbone.member.id,
         workspaceId: backbone.workspace.id,
       }),
-      provider: provider(),
       logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),
       workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
       publications: directIntakePublisher(harness.driver, db),
-      acceptHookCapture: true,
     };
 
     const stored = await handleReflection(intake, payload, { identity });
@@ -245,7 +241,9 @@ describe('CognitiveExtractionStage against a live graph and a live model', () =>
       publications: new RecordingPublisher().asCoordinator(),
     };
 
-    const outcome = await new CognitiveExtractionStage({ model: DEFAULTS.models.reflect }).run(ctx);
+    const outcome = await new CognitiveExtractionStage({ model: DEFAULTS.anthropic.model }).run(
+      ctx,
+    );
 
     expect(outcome.status).not.toBe('failed');
     const nodes = await findEpisodeCognitiveNodes(harness.driver, lightEpisodeId);
@@ -307,7 +305,7 @@ describe('CognitiveExtractionStage against a live graph and a live model', () =>
     };
 
     const outcome = await new CognitiveExtractionStage({
-      model: DEFAULTS.models.reflect,
+      model: DEFAULTS.anthropic.model,
       readingHorizonDays: 30,
     }).run(ctx);
 

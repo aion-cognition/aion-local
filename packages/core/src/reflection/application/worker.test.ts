@@ -3,12 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { VECTOR_JOB_TYPE } from './intake-queue.js';
 import { INTEGRATE_JOB_TYPE } from './intake.js';
 import type { ReflectionRun, ReflectionRunOptions } from './orchestrator.js';
 import { backoffDelayMs, ReflectionWorker, type ReflectionWorkerOptions } from './worker.js';
 import { EvidenceResolver } from '../../evidence/application/resolver.js';
 import { MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
+import { GenerationUnavailableError } from '../../infrastructure/providers/errors.js';
 import type { Provider, Vector } from '../../infrastructure/providers/types.js';
 import { ReflectionQueueClaimant } from '../../infrastructure/sqlite/claim.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
@@ -415,6 +417,130 @@ describe('retry with backoff', () => {
     await started.start();
 
     expect(runner.episodeIds).toEqual([]);
+    expect(started.retrying).toBe(1);
+    expect(getReflectionJob(store.db, jobId)?.claimedBy).toBe(started.claimantId);
+  });
+});
+
+describe('generation with no key', () => {
+  it('puts the job back without spending an attempt, and pauses claiming', async () => {
+    const runner = new StubRunner();
+    runner.outcome = (): ReflectionRun => {
+      throw new GenerationUnavailableError('cognitive');
+    };
+    const started = build(runner, { breakerCooldownMs: 60_000 });
+
+    const jobId = enqueue();
+    await started.start();
+    await started.whenIdle();
+
+    // Still queued, still claimable, and no attempt burned: a key set an hour from now revives
+    // this row rather than finding it exhausted.
+    const held = getReflectionJob(store.db, jobId);
+    expect(held?.attempts).toBe(0);
+    expect(held?.claimedBy).toBeNull();
+    expect(held?.lastError).toContain('AION_ANTHROPIC_API_KEY');
+    // No backoff timer holds it either: the claim went straight back.
+    expect(started.retrying).toBe(0);
+    // Not paused: the breaker is for failures, and nothing here failed.
+    expect(started.paused).toBe(false);
+  });
+
+  it('keeps vectoring what it captured, because embedding is not generation', async () => {
+    const runner = new StubRunner();
+    runner.outcome = (): ReflectionRun => {
+      throw new GenerationUnavailableError('cognitive');
+    };
+    const started = build(runner, { breakerCooldownMs: 60_000 });
+
+    const integrateId = enqueue();
+    const vectorId = enqueueReflectionJob(store.db, VECTOR_JOB_TYPE, {
+      episode_id: EPISODE_ID,
+    });
+    await started.start();
+    await started.whenIdle();
+
+    // The enrichment went back unclaimed and unspent.
+    const integrate = getReflectionJob(store.db, integrateId);
+    expect(integrate?.attempts).toBe(0);
+    expect(integrate?.claimedBy).toBeNull();
+
+    // The embedding was taken anyway: it reaches the local model, so a missing key is not its
+    // problem. It is either finished (its row deleted) or running under this worker's claim.
+    const vector = getReflectionJob(store.db, vectorId);
+    expect(vector === undefined || vector.claimedBy === started.claimantId).toBe(true);
+  });
+
+  /**
+   * The shape the real pipeline produces. Stages catch the refusal and report a failed outcome,
+   * so the run comes back rather than throwing, and what tells the two apart is the typed field
+   * the orchestrator attaches. `review-D-keyless.int.test.ts` runs the whole composition.
+   */
+  it('puts a job back when every failed stage was refused rather than broken', async () => {
+    const runner = new StubRunner();
+    runner.outcome = (episodeId): ReflectionRun => ({
+      episodeId,
+      status: 'completed',
+      applied: false,
+      summary: {
+        episodeId,
+        durationMs: 1,
+        stages: [
+          {
+            name: 'entities',
+            status: 'failed',
+            summary: 'entity extraction failed',
+            durationMs: 1,
+            unavailable: { surface: 'entities', reason: 'the day is spent' },
+          },
+        ],
+        counts: {},
+        skippedStages: [],
+      },
+    });
+    const started = build(runner, { breakerCooldownMs: 60_000 });
+
+    const jobId = enqueue();
+    await started.start();
+    await started.whenIdle();
+
+    const held = getReflectionJob(store.db, jobId);
+    expect(held?.attempts).toBe(0);
+    expect(held?.claimedBy).toBeNull();
+    expect(held?.lastError).toContain('the day is spent');
+    expect(started.retrying).toBe(0);
+  });
+
+  it('charges the attempt when something in the same run actually failed', async () => {
+    const runner = new StubRunner();
+    runner.outcome = (episodeId): ReflectionRun => ({
+      episodeId,
+      status: 'completed',
+      applied: false,
+      summary: {
+        episodeId,
+        durationMs: 1,
+        stages: [
+          {
+            name: 'entities',
+            status: 'failed',
+            summary: 'entity extraction failed',
+            durationMs: 1,
+            unavailable: { surface: 'entities', reason: 'no key' },
+          },
+          { name: 'cognitive', status: 'failed', summary: 'the model timed out', durationMs: 1 },
+        ],
+        counts: {},
+        skippedStages: [],
+      },
+    });
+    const started = build(runner, { retryBaseMs: 60_000 });
+
+    const jobId = enqueue();
+    await started.start();
+    await started.whenIdle();
+
+    // A timeout is a failure a retry can answer, and the run owes that retry either way.
     expect(started.retrying).toBe(1);
     expect(getReflectionJob(store.db, jobId)?.claimedBy).toBe(started.claimantId);
   });

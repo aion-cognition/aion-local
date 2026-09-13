@@ -1,9 +1,8 @@
 import {
   reconcileResidentModels,
   type Config,
+  type Embedder,
   type Logger,
-  type Provider,
-  type ProviderRouter,
   type ReconciliationReport,
 } from '@aion/core';
 
@@ -13,24 +12,22 @@ import {
  */
 
 /**
- * Boot's half of model reconciliation: a local model no role still routes to leaves memory,
- * so a key-covered install does not hold instruct weights it will never call. `aion init` runs
- * the other half. Failures are logged and nothing else: the service does not depend on this,
- * and a machine with Ollama down has nothing resident to unload.
+ * Boot's half of model reconciliation: it reads whether the embedding model is already in
+ * memory, which is the difference between a first recall that waits for a model load and one
+ * that does not. Nothing is unloaded, because the embedder is the only model this program asks
+ * Ollama for and it is the vector index. `aion init` runs the other half. Failures are logged
+ * and nothing else: the service does not depend on this.
  */
 export async function reconcileModels(
   config: Config,
-  router: ProviderRouter,
   logger: Logger,
 ): Promise<ReconciliationReport | undefined> {
   try {
     const report = await reconcileResidentModels({
       baseUrl: config.ollama.url,
-      routing: router.routing,
+      embedModel: config.models.embed,
     });
-    if (report.checked) {
-      logger.info({ reconciliation: report }, `model reconciliation: ${report.detail}`);
-    }
+    logger.info({ reconciliation: report }, `model reconciliation: ${report.detail}`);
     return report;
   } catch (err) {
     logger.warn({ err }, 'model reconciliation failed');
@@ -44,7 +41,7 @@ export async function reconcileModels(
  * duration is the cold/warm tell: seconds is a load, milliseconds is a model already resident.
  * Fail-open like reconciliation: the service never depends on the warm having happened.
  */
-export async function warmEmbedModel(embedder: Provider, logger: Logger): Promise<void> {
+export async function warmEmbedModel(embedder: Embedder, logger: Logger): Promise<void> {
   const started = Date.now();
   try {
     await embedder.embed(['embed warm-up probe']);

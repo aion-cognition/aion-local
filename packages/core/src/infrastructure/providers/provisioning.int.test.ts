@@ -8,15 +8,12 @@ import {
 } from './provisioning.js';
 import { DEFAULTS } from '../config/defaults.js';
 
-/** The models come from the config defaults, so a default change is exercised here too. */
+/** The model comes from the config defaults, so a default change is exercised here too. */
 const TARGET: OllamaProvisionTarget = {
   baseUrl: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
   embedModel: DEFAULTS.models.embed,
   embedDimension: DEFAULTS.models.embedDimension,
-  chatModels: [DEFAULTS.models.cue, DEFAULTS.models.reflect],
 };
-
-const [CUE_MODEL, REFLECT_MODEL] = TARGET.chatModels;
 
 function collect(events: readonly ProvisionEvent[], type: ProvisionEvent['type']): string[] {
   return events.flatMap((event) => {
@@ -31,7 +28,7 @@ function collect(events: readonly ProvisionEvent[], type: ProvisionEvent['type']
 }
 
 describe('provisionOllama against live host Ollama', () => {
-  it('streams a pull and a round-trip verification for every configured model', async () => {
+  it('streams a pull and a round-trip verification for the embedding model', async () => {
     const events: ProvisionEvent[] = [];
 
     await expect(
@@ -39,13 +36,9 @@ describe('provisionOllama against live host Ollama', () => {
     ).resolves.toBeUndefined();
 
     expect(events[0]).toEqual({ type: 'reachable' });
-    expect(collect(events, 'pull_done')).toEqual([TARGET.embedModel, CUE_MODEL, REFLECT_MODEL]);
+    expect(collect(events, 'pull_done')).toEqual([TARGET.embedModel]);
     expect(collect(events, 'pull_progress').length).toBeGreaterThan(0);
-    expect(collect(events, 'verify_done')).toEqual([
-      `${TARGET.embedModel}:embed`,
-      `${String(CUE_MODEL)}:chat`,
-      `${String(REFLECT_MODEL)}:chat`,
-    ]);
+    expect(collect(events, 'verify_done')).toEqual([`${TARGET.embedModel}:embed`]);
   }, 600_000);
 
   it('names the model when a pull cannot be satisfied', async () => {

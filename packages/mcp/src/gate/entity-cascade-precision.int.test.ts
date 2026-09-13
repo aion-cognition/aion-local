@@ -102,8 +102,7 @@ let proposals: EntityMergeProposal[] = [];
  * model this battery never called.
  */
 function batteryApiKey(): string {
-  const key = process.env.AION_ANTHROPIC_API_KEY ?? '';
-  return process.env.TEST_AION_GENERATION === 'local' ? '' : key;
+  return process.env.AION_ANTHROPIC_API_KEY ?? '';
 }
 
 function cosine(left: readonly number[], right: readonly number[]): number {
@@ -218,7 +217,7 @@ async function embedNames(
 /** The pipeline's stage, on the pipeline's knobs, with only the mode pinned. */
 function batteryStage(): EntityDedupStage {
   return new EntityDedupStage({
-    model: DEFAULTS.models.reflect,
+    model: DEFAULTS.anthropic.model,
     timeoutMs: DEFAULTS.reflection.stageTimeoutMs,
     similarityThreshold: DEFAULTS.reflection.entityDedupThreshold,
     sharedEpisodeJaccardFloor: DEFAULTS.reflection.entityNominationJaccardFloor,
@@ -296,8 +295,8 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('the 24-pair entity cascade battery', () =>
   it('names the route it measured, so the number belongs to a model', () => {
     const route = resolveProviderRouting(substrate.config).roles.reflect;
     console.log(
-      `cascade battery route: provider ${route.provider}, model ${route.model}, ` +
-        `reason ${route.reason}, local tag ${route.localModel}; embeddings on ` +
+      `cascade battery route: model ${route.model}, ` +
+        `available ${String(route.available)}; embeddings on ` +
         `${substrate.config.models.embed} at ${String(substrate.config.models.embedDimension)} dimensions`,
     );
 

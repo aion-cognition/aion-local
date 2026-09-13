@@ -3,11 +3,15 @@ import { z } from 'zod';
 import {
   findEntityMentionContexts,
   findStaleDescriptionEntities,
+  readEntityDescriptionState,
   refreshEntityDescription,
   type StaleDescriptionEntity,
 } from '../../../infrastructure/graph/entity-description-queries.js';
-import { deadlineFor } from '../../../infrastructure/providers/deadline-signal.js';
+import { batchMessagesBody } from '../../../infrastructure/providers/anthropic-provider.js';
+import type { BatchWorkHandler } from '../../../infrastructure/providers/batch-adapter.js';
 import type { ChatMessage, JsonSchema } from '../../../infrastructure/providers/types.js';
+import { enqueueBatchWork, type BatchWorkItem } from '../../../infrastructure/sqlite/batch-work.js';
+import { readSubstratePairing } from '../../../infrastructure/sqlite/publication-control.js';
 import {
   KEYED as FRESHNESS_KEYED,
   KEYED_MAX_TOKENS,
@@ -15,7 +19,12 @@ import {
   LOCAL_MAX_TOKENS,
 } from '../../../prompts/description-freshness.js';
 import { promptMode, type PromptMode } from '../../../prompts/index.js';
-import type { IntrospectionOperation, OperationOutcome } from '../../domain/operation.js';
+import { hashContent } from '../../../reflection/domain/content.js';
+import type {
+  IntrospectionOperation,
+  OperationContext,
+  OperationOutcome,
+} from '../../domain/operation.js';
 
 /**
  * An entity's description is written once, by whichever episode first named it, and ordinary
@@ -23,12 +32,22 @@ import type { IntrospectionOperation, OperationOutcome } from '../../domain/oper
  * a year-old sentence read as current fact (`recall/domain/pack.ts` renders its age precisely
  * because it never changes on its own). This operation is the thing that changes it.
  *
+ * It is the substrate's first batch producer, and it is the right first one: nobody is waiting
+ * for a gloss to be rewritten, every input is ready before the request is built, and the write at
+ * the end is already guarded. The run nominates and enqueues; the `batch_settlement` operation
+ * sends what is owed and hands each answer back to the handler below, which revalidates it
+ * against the substrate and applies it. Submission is not completion, so nothing here counts a
+ * description as refreshed until the write says it wrote one.
+ *
  * It carries its own kill switch. Every other operation either closes a node and writes a new
  * one or moves a number; this one replaces stored text with model output in place, so an
  * operator who wants the rewrite stopped needs a knob rather than a deploy.
  */
 
 export const DESCRIPTION_FRESHNESS_OPERATION = 'description_freshness';
+
+/** The surface a batched refresh is enqueued under, and the surface its bill is grouped by. */
+export const DESCRIPTION_FRESHNESS_SURFACE = 'description_freshness';
 
 /** How many recent mentioning episodes ground the re-synthesis prompt. */
 const MENTION_CONTEXT_LIMIT = 5;
@@ -48,6 +67,23 @@ const DESCRIPTION_JSON_SCHEMA: JsonSchema = {
 };
 
 const DescriptionSchema = z.object({ description: z.string() });
+
+/**
+ * What the entity looked like where the request was built, read back before the answer is used.
+ *
+ * `baseline` moves whenever anything refreshes the description, and the gloss itself is carried
+ * whole rather than as a count, because a correction can retire it without moving any number.
+ * `mentions` is the count the refresh writes as the new baseline, so it has to be the count the
+ * prompt was grounded in rather than whatever the entity has reached by the time it lands.
+ */
+const RevalidationSchema = z.object({
+  entityId: z.string().min(1),
+  baseline: z.number().int().nonnegative(),
+  mentions: z.number().int().nonnegative(),
+  text: z.string(),
+});
+
+type FreshnessRevalidation = z.infer<typeof RevalidationSchema>;
 
 function clip(text: string, maxChars: number): string {
   return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
@@ -89,6 +125,22 @@ function buildMessages(
   ];
 }
 
+/** How much of the description digest the work key carries. Collision-free at this population. */
+const WORK_KEY_DIGEST_CHARS = 16;
+
+/**
+ * The identity of one question: this entity, this gloss, this baseline.
+ *
+ * Stable, so a nomination the next pass makes again finds the row it already wrote instead of
+ * paying for the same question twice. It moves the moment any of the three inputs does, so an
+ * entity whose gloss a correction retired, or whose baseline another refresh advanced, is a new
+ * question rather than one the terminal row blocks forever.
+ */
+export function descriptionFreshnessWorkKey(entity: StaleDescriptionEntity): string {
+  const digest = hashContent(entity.text).slice(0, WORK_KEY_DIGEST_CHARS);
+  return `${DESCRIPTION_FRESHNESS_SURFACE}:${entity.id}:${String(entity.baseline)}:${digest}`;
+}
+
 /**
  * Standing relevance, like `memory_decay`: candidates are counted fresh inside `run`, not
  * carried in the health snapshot, so relevance answers from the same waiting-time cadence
@@ -112,6 +164,15 @@ export function descriptionFreshnessOperation(): IntrospectionOperation {
             'description freshness disabled by AION_MAINTENANCE_DESCRIPTION_FRESHNESS; no entity examined',
         };
       }
+      const substrate = readSubstratePairing(ctx.db);
+      if (substrate === undefined) {
+        return {
+          status: 'noop',
+          itemsProcessed: 0,
+          itemsAffected: 0,
+          detail: 'no substrate identity, so batched work would belong to no store',
+        };
+      }
 
       const prompt = promptFor(promptMode(ctx.provider));
       const batch = ctx.config.maintenance.descriptionRefreshBatch;
@@ -120,8 +181,8 @@ export function descriptionFreshnessOperation(): IntrospectionOperation {
         limit: batch,
       });
 
-      let refreshed = 0;
-      let failed = 0;
+      let enqueued = 0;
+      let held = 0;
 
       for (const entity of candidates) {
         if (ctx.signal.aborted) {
@@ -132,62 +193,110 @@ export function descriptionFreshnessOperation(): IntrospectionOperation {
           entity.id,
           MENTION_CONTEXT_LIMIT,
         );
-
-        let description: string;
-        try {
-          const deadline = deadlineFor(ctx.config.reflection.stageTimeoutMs, ctx.signal);
-          try {
-            const raw = await ctx.provider.generate({
-              surface: 'description_freshness',
-              model: ctx.config.models.reflect,
-              messages: buildMessages(entity, contexts, prompt.system),
-              schema: DESCRIPTION_JSON_SCHEMA,
-              maxTokens: prompt.maxTokens,
-              temperature: DESCRIPTION_TEMPERATURE,
-              think: false,
-              signal: deadline.signal,
-            });
-            description = DescriptionSchema.parse(raw).description.trim();
-          } finally {
-            deadline.clear();
-          }
-        } catch (err) {
-          failed += 1;
-          ctx.logger.warn(
-            { err, entityId: entity.id },
-            'description freshness generation failed; leaving the description in place',
-          );
+        if (contexts.length === 0) {
+          // Nothing newer to fold in that a reader can still see. The growth count includes
+          // mentions from episodes a forget has since closed, and a prompt grounded in none of
+          // them would ask the model to rewrite a gloss from the gloss.
+          held += 1;
           continue;
         }
-
-        if (description.length === 0 || description === entity.text) {
-          continue;
-        }
-
-        const [contentVector] = await ctx.provider.embed([description]);
-        if (contentVector === undefined) {
-          failed += 1;
-          continue;
-        }
-
-        const applied = await refreshEntityDescription(ctx.driver, {
-          id: entity.id,
-          text: description,
-          contentVector,
-          mentionCount: entity.mentions,
+        const revalidation: FreshnessRevalidation = {
+          entityId: entity.id,
+          baseline: entity.baseline,
+          mentions: entity.mentions,
+          text: entity.text,
+        };
+        const wrote = enqueueBatchWork(ctx.db, {
+          workKey: descriptionFreshnessWorkKey(entity),
+          substrateId: substrate.substrateId,
+          surface: DESCRIPTION_FRESHNESS_SURFACE,
+          revalidation,
+          request: batchMessagesBody({
+            surface: DESCRIPTION_FRESHNESS_SURFACE,
+            model: ctx.config.anthropic.model,
+            messages: buildMessages(entity, contexts, prompt.system),
+            schema: DESCRIPTION_JSON_SCHEMA,
+            maxTokens: prompt.maxTokens,
+            temperature: DESCRIPTION_TEMPERATURE,
+            think: false,
+          }),
           now: ctx.now,
         });
-        if (applied) {
-          refreshed += 1;
+        if (wrote) {
+          enqueued += 1;
         }
       }
 
       return {
-        status: refreshed === 0 ? 'noop' : 'applied',
+        status: enqueued === 0 ? 'noop' : 'applied',
         itemsProcessed: candidates.length,
-        itemsAffected: refreshed,
-        detail: `${String(refreshed)} of ${String(candidates.length)} stale description(s) refreshed, ${String(failed)} generation failure(s)`,
+        itemsAffected: enqueued,
+        detail:
+          `${String(enqueued)} of ${String(candidates.length)} stale description(s) enqueued for ` +
+          `batched re-synthesis, ${String(held)} held for want of readable mentions; ` +
+          'a description is refreshed when its answer lands, not when it is asked for',
       };
+    },
+  };
+}
+
+/**
+ * What the surface does with its own answers.
+ *
+ * Both halves take the run's own driver and provider, so the embed and the write are the ones the
+ * loop would have made inline. `isCurrent` is a real reading of the substrate rather than a
+ * formality: it refuses an answer about a gloss that has moved, an entity that has gone, and a
+ * question whose grounding mentions are no longer readable. `apply` writes through the same
+ * guarded statement the inline path used, and throws when that statement matched nothing, which
+ * leaves the work owed rather than recording a refresh that did not happen.
+ */
+export function descriptionFreshnessHandler(ctx: OperationContext): BatchWorkHandler {
+  return {
+    surface: DESCRIPTION_FRESHNESS_SURFACE,
+    isCurrent: async (_db, revalidation): Promise<boolean> => {
+      const parsed = RevalidationSchema.safeParse(revalidation);
+      if (!parsed.success) {
+        return false;
+      }
+      const state = await readEntityDescriptionState(ctx.driver, parsed.data.entityId);
+      if (state === undefined) {
+        return false;
+      }
+      if (state.baseline !== parsed.data.baseline || state.text !== parsed.data.text) {
+        return false;
+      }
+      const contexts = await findEntityMentionContexts(ctx.driver, parsed.data.entityId, 1);
+      return contexts.length > 0;
+    },
+    apply: async (item: BatchWorkItem, answer: unknown): Promise<void> => {
+      const revalidation = RevalidationSchema.parse(item.revalidation);
+      const description = DescriptionSchema.parse(answer).description.trim();
+      if (description.length === 0 || description === revalidation.text) {
+        // An answer, and a complete one: the model read the newer mentions and had nothing to
+        // add. The row settles applied because the question is answered, and the entity keeps
+        // the gloss it had.
+        ctx.logger.debug(
+          { entityId: revalidation.entityId },
+          'batched description refresh returned the gloss the entity already has',
+        );
+        return;
+      }
+      const [contentVector] = await ctx.provider.embed([description]);
+      if (contentVector === undefined) {
+        throw new Error('the embedder returned no vector for the refreshed description');
+      }
+      const applied = await refreshEntityDescription(ctx.driver, {
+        id: revalidation.entityId,
+        text: description,
+        contentVector,
+        mentionCount: revalidation.mentions,
+        now: ctx.now,
+      });
+      if (!applied) {
+        // The guarded write is the last word, and it matched no current node: the entity moved
+        // between the revalidation above and this statement. The work stays owed.
+        throw new Error(`entity ${revalidation.entityId} is no longer current`);
+      }
     },
   };
 }

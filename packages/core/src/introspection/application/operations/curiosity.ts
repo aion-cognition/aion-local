@@ -143,7 +143,7 @@ async function draftQuestion(
   try {
     const raw = await ctx.provider.generate({
       surface: 'curiosity',
-      model: ctx.config.models.reflect,
+      model: ctx.config.anthropic.model,
       messages: buildMessages(entity, contexts),
       schema: QUESTION_JSON_SCHEMA,
       maxTokens: QUESTION_MAX_TOKENS,

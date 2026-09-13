@@ -58,7 +58,7 @@ export function claimConsolidationOperation(): IntrospectionOperation {
           ...(ctx.narratives === undefined ? {} : { publications: ctx.narratives.publications }),
         },
         {
-          model: ctx.config.models.reflect,
+          model: ctx.config.anthropic.model,
           timeoutMs: ctx.config.reflection.stageTimeoutMs,
           reflection: ctx.config.reflection,
           now: ctx.now,

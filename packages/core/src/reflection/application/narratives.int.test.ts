@@ -408,13 +408,11 @@ beforeAll(async () => {
       memberId: backbone.member.id,
       workspaceId: backbone.workspace.id,
     }),
-    provider: provider(),
     logger,
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
     publications,
-    acceptHookCapture: true,
   };
   deps = { driver: harness.driver, db, provider: provider(), logger, publications };
   structuralDeps = {

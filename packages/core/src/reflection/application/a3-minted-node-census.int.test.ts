@@ -25,7 +25,6 @@ import {
   type Neo4jHarness,
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
-import type { Provider, Vector } from '../../infrastructure/providers/types.js';
 import { PublicationCoordinator } from '../../infrastructure/publication/coordinator.js';
 import type { PublicationBoundary } from '../../infrastructure/publication/types.js';
 import { activateCoverageContract } from '../../infrastructure/sqlite/coverage-contract.js';
@@ -74,13 +73,6 @@ const REFUSED_PAYLOAD = {
 const OWNERSHIP_SCOPE_NAMES = OWNERSHIP_SCOPES.map(({ role, direction }) =>
   durableRoleScope(role, direction),
 );
-
-const vector: Vector = new Array<number>(EMBED_DIMENSION).fill(0.1);
-
-const provider: Provider = {
-  embed: (texts) => Promise.resolve(texts.map(() => vector)),
-  generate: () => Promise.reject(new Error('intake never generates')),
-};
 
 let harness: Neo4jHarness;
 let db: SqliteHandle;
@@ -142,13 +134,11 @@ beforeAll(async () => {
       memberId: backbone.member.id,
       workspaceId: backbone.workspace.id,
     }),
-    provider,
     logger,
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
     publications: coordinator,
-    acceptHookCapture: true,
   };
 
   episodeId = await push(WRITING_SESSION);

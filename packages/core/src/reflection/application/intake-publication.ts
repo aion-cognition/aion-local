@@ -61,12 +61,14 @@ import { hashContent, prepareEpisode, type ReflectionContent } from '../domain/c
  * The order is what the crash cases turn on. The occurrence is selected under the guard, so a
  * forget landing between a caller's first look and this decision changes the answer rather than
  * being missed. Everything durable is written before the graph is touched, so a crash between
- * the two resumes the ids that were already minted. The queue enqueue is an acknowledgment
- * effect, so no worker can claim a job for an episode that does not exist.
+ * the two resumes the ids that were already minted. Every queue enqueue is an acknowledgment
+ * effect, so no worker can claim a job for an episode that does not exist. The embedding is one
+ * of them: it is work the acceptance owes rather than something the caller waits on.
  */
 export const INTAKE_EFFECTS = {
   projection: 'graph_projection',
   enqueue: 'reflection_queue_enqueue',
+  vectors: 'content_vector_enqueue',
   watermark: 'session_watermark',
   index: 'search_index_enqueue',
   references: 'reference_batch',
@@ -157,6 +159,7 @@ function acceptanceEffects(data: IntakeData): PublicationPlan<IntakeData>['effec
     ...referenceEffects,
     { kind: INTAKE_EFFECTS.projection, detail: detail({ sourceId: data.sourceId }) },
     { kind: INTAKE_EFFECTS.enqueue, detail: detail({ sourceId: data.sourceId }) },
+    { kind: INTAKE_EFFECTS.vectors, detail: detail({ sourceId: data.sourceId }) },
     { kind: INTAKE_EFFECTS.watermark, detail: detail({ sessionId: data.sessionId }) },
     {
       kind: INTAKE_EFFECTS.index,
@@ -226,6 +229,7 @@ export const intakePublication = new PublicationOperation({
   effectKinds: [
     INTAKE_EFFECTS.projection,
     INTAKE_EFFECTS.enqueue,
+    INTAKE_EFFECTS.vectors,
     INTAKE_EFFECTS.watermark,
     INTAKE_EFFECTS.index,
     INTAKE_EFFECTS.references,

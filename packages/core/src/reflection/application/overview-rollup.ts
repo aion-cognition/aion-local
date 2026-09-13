@@ -264,7 +264,7 @@ async function rollUpWindow(
   let synthesis;
   try {
     synthesis = await synthesizeGrounded(deps.provider, source, buildMessages(source, options), {
-      model: options.model ?? DEFAULTS.models.reflect,
+      model: options.model ?? DEFAULTS.anthropic.model,
       surface: 'narrative_overview',
       timeoutMs: options.timeoutMs ?? DEFAULTS.reflection.stageTimeoutMs,
       ...(options.signal === undefined ? {} : { signal: options.signal }),

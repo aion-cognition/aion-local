@@ -166,7 +166,7 @@ async function regroundChunkFamilies(
       head.chunkId,
       {
         now: ctx.now,
-        model: ctx.config.models.reflect,
+        model: ctx.config.anthropic.model,
         timeoutMs: ctx.config.reflection.stageTimeoutMs,
         signal: ctx.signal,
       },
@@ -205,7 +205,7 @@ export function narrativeRegroundingOperation(batch: number): IntrospectionOpera
         },
         {
           limit: ctx.config.maintenance.narrativeCleanupBatch,
-          model: ctx.config.models.reflect,
+          model: ctx.config.anthropic.model,
           timeoutMs: ctx.config.reflection.stageTimeoutMs,
           reflection: ctx.config.reflection,
           now: ctx.now,

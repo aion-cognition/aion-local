@@ -1,9 +1,7 @@
 import {
-  ApiUsageRecorder,
   EvidenceResolver,
   INSTALLED_PUBLICATION_HANDLERS,
   LaneAssigner,
-  ProviderRouter,
   PublicationCoordinator,
   SessionManager,
   type Config,
@@ -58,18 +56,12 @@ export async function lifecycleIntakeDeps(target: LifecycleTarget): Promise<Refl
       memberId: target.memberId,
       workspaceId: target.workspaceId,
     }),
-    // Intake only embeds, so the role it borrows changes nothing about where its calls go.
-    provider: new ProviderRouter({
-      config: target.config,
-      recordApiCall: new ApiUsageRecorder(target.db, target.logger).recordApiCall,
-    }).forRole('reflect'),
     logger: target.logger,
     entropyThreshold: target.config.redaction.entropyThreshold,
     lanes: new LaneAssigner(target.config.lanes),
     workerMaxAttempts: target.config.operational.workerMaxAttempts,
     // The gate exists to keep a hook from flooding a local model with transcript. A command
     // recording one observation about itself is neither.
-    acceptHookCapture: true,
   };
 }
 

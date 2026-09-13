@@ -154,7 +154,6 @@ async function push(observation: string, now: Date, acceptedAt: Date = now): Pro
       driver: harness.driver,
       db,
       sessions,
-      provider,
       logger,
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),
@@ -163,7 +162,6 @@ async function push(observation: string, now: Date, acceptedAt: Date = now): Pro
       // the wall clock every source is accepted at the moment the run happens, and the cut a
       // day behind the probed moment selects nothing at all.
       publications: directIntakePublisher(harness.driver, db, () => acceptedAt),
-      acceptHookCapture: true,
     },
     { observations: [observation] },
     { identity: WRITE_SESSION, now },

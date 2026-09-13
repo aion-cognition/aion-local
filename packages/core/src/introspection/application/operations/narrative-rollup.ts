@@ -72,7 +72,7 @@ function narrativeRollupOperation(
                 now: ctx.now,
                 windowLimit: ctx.config.maintenance.narrativeRollupWindows,
                 renderedInputAllowance: ctx.config.maintenance.chunkRenderedInputAllowance,
-                model: ctx.config.models.reflect,
+                model: ctx.config.anthropic.model,
                 timeoutMs: ctx.config.reflection.stageTimeoutMs,
                 signal: ctx.signal,
               },

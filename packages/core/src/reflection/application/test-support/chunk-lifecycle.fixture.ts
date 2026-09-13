@@ -267,16 +267,11 @@ beforeAll(async () => {
       memberId: backbone.member.id,
       workspaceId: backbone.workspace.id,
     }),
-    provider: {
-      embed: () => Promise.reject(new Error('no embedding in this battery')),
-      generate: () => Promise.reject(new Error('no generation in this battery')),
-    },
     publications: coordinator,
     logger,
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
-    acceptHookCapture: true,
   };
   chunks = {
     driver,

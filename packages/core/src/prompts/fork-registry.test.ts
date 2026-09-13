@@ -217,10 +217,8 @@ describe('promptMode', () => {
     expect(promptMode({ route: { provider: 'anthropic' } })).toBe('keyed');
   });
 
-  it('reads the local text on the Ollama route', () => {
-    expect(promptMode({ route: { provider: 'ollama' } })).toBe('local');
-  });
-
+  // Only a provider that states no route reads as local now: every routed provider is the one
+  // remote model, and a test fake is what the small-model shapes are still written for.
   it('reads the local text when a provider states no route', () => {
     expect(promptMode({})).toBe('local');
   });

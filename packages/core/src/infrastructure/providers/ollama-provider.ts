@@ -1,6 +1,6 @@
 import { maxEmbedInputChars } from './embed-models.js';
 import { OllamaRequestError } from './errors.js';
-import type { Provider, StructuredRequest, Vector } from './types.js';
+import type { Embedder, Vector } from './types.js';
 import { foldForIdentity } from '../../reflection/domain/name-fold.js';
 
 export type OllamaProviderOptions = {
@@ -35,11 +35,10 @@ function capForEmbedding(text: string, cap: number): string {
 }
 
 /**
- * Local-only implementation of `Provider` over Ollama's HTTP API. `generate` always
- * sets the chat `format` field to the caller's JSON Schema (structured output), kept
- * generic here since the caller that drives it belongs to a later stage of the pipeline.
+ * The local embedder, over Ollama's HTTP API. It has no `generate`: every generation runs on
+ * the remote model, and the embedding model is the vector index rather than a route.
  */
-export class OllamaProvider implements Provider {
+export class OllamaProvider implements Embedder {
   private readonly baseUrl: string;
   private readonly embedModel: string;
   private readonly embedInputCap: number;
@@ -77,44 +76,5 @@ export class OllamaProvider implements Provider {
       throw new Error('Ollama embed response missing or mismatched embeddings');
     }
     return body.embeddings;
-  }
-
-  async generate(req: StructuredRequest): Promise<unknown> {
-    const modelOptions: Record<string, number> = {};
-    if (req.maxTokens !== undefined) {
-      modelOptions.num_predict = req.maxTokens;
-    }
-    if (req.temperature !== undefined) {
-      modelOptions.temperature = req.temperature;
-    }
-    // The window is always stated, never left to the model. `StructuredRequest.numCtx` carries
-    // what a silent overrun costs; `role-provider.ts` is what guarantees a role call names one.
-    if (req.numCtx !== undefined) {
-      modelOptions.num_ctx = req.numCtx;
-    }
-
-    const response = await this.fetchImpl(`${this.baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model: req.model,
-        messages: req.messages,
-        format: req.schema,
-        stream: false,
-        ...(req.think === undefined ? {} : { think: req.think }),
-        ...(Object.keys(modelOptions).length > 0 ? { options: modelOptions } : {}),
-      }),
-      ...(req.signal === undefined ? {} : { signal: req.signal }),
-    });
-    if (!response.ok) {
-      throw new OllamaRequestError('generate', response.status, await response.text());
-    }
-
-    const body = (await response.json()) as { message?: { content?: string } };
-    const content = body.message?.content;
-    if (content === undefined) {
-      throw new Error('Ollama generate response missing message content');
-    }
-    return JSON.parse(content) as unknown;
   }
 }

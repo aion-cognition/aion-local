@@ -34,6 +34,12 @@ import { SessionManager } from '../../session/session-manager.js';
 import { stageLedgerKey } from '../domain/stage.js';
 import { PIPELINE_VERSION } from '../domain/version.js';
 
+/** Nothing in this battery generates or embeds; a call that reaches it is a fault the test wants to see. */
+const batteryEmbedder = {
+  embed: (): Promise<never[]> => Promise.reject(new Error('no embedding in this battery')),
+  generate: (): Promise<never> => Promise.reject(new Error('no generation in this battery')),
+};
+
 /**
  * The two converted writers, driven through a real coordinator against real stores.
  *
@@ -104,17 +110,11 @@ beforeAll(async () => {
       memberId: backbone.member.id,
       workspaceId: backbone.workspace.id,
     }),
-    // Never called: intake embeds after acknowledgment and every case here asserts before that.
-    provider: {
-      embed: () => Promise.reject(new Error('no embedding in this battery')),
-      generate: () => Promise.reject(new Error('no generation in this battery')),
-    },
     publications: coordinator,
     logger,
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
-    acceptHookCapture: true,
   };
 }, 120_000);
 
@@ -149,7 +149,7 @@ async function runWorker(runner: { run(id: string): Promise<ReflectionRun> }): P
     {
       driver: substrate.harness.driver,
       db: store.db,
-      provider: intake.provider,
+      provider: batteryEmbedder,
       runner,
       logger: intake.logger,
       publications: coordinator,
@@ -181,7 +181,7 @@ it('does not reuse a pass after new stage continuation work lands in the same ge
     {
       driver: substrate.harness.driver,
       db: store.db,
-      provider: intake.provider,
+      provider: batteryEmbedder,
       logger: intake.logger,
     },
     STAGES.map((name) => ({
@@ -240,7 +240,7 @@ it('does not rerun an applied stage whose stored legacy outcome cannot be decode
     {
       driver: substrate.harness.driver,
       db: store.db,
-      provider: intake.provider,
+      provider: batteryEmbedder,
       logger: intake.logger,
     },
     STAGES.map((name) => ({
@@ -318,7 +318,7 @@ it('keeps a late reference whose publication starts at the completion acknowledg
     {
       driver: substrate.harness.driver,
       db: store.db,
-      provider: intake.provider,
+      provider: batteryEmbedder,
       logger: intake.logger,
     },
     STAGES.map((name) => ({

@@ -5,16 +5,13 @@ import {
   EmbedDimensionMismatchError,
   embedQueryPrefix,
   appliedGraphSchemaVersion,
-  localChatModels,
   measureAdmissionFloor,
   OllamaProvider,
   queueLagSnapshot,
   readVectorIndexes,
   reconcileEnrichment,
-  remoteRoutes,
   resolveProviderRouting,
   scanRedactionResidue,
-  verifyOllamaChatModel,
   type Config,
   type GraphConnection,
   type SqliteHandle,
@@ -231,10 +228,9 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
     },
     {
       /**
-       * The embed model is checked under every route: it is the vector index. Chat models are
-       * checked only where a role still routes to Ollama, so a key-covered install that never
-       * pulled the instruct weights reads as healthy rather than as a missing model, and the
-       * same install with the key removed reports the model it now needs.
+       * The embed model is the only model Ollama serves here, and it is the vector index, so a
+       * round trip through it is the whole of what this check has to prove. Generation is the
+       * next check's subject and reaches a different machine.
        */
       name: 'ollama-round-trip',
       run: async () => {
@@ -256,20 +252,12 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
         }
 
         const routing = resolveProviderRouting(config);
-        const local = localChatModels(routing);
-        for (const model of local) {
-          await verifyOllamaChatModel(config.ollama.url, model);
-        }
-        const remote = remoteRoutes(routing);
-        const chat =
-          local.length === 0 ? 'no chat model routes locally' : `chat ${local.join(', ')} ok`;
-        const routed =
-          remote.length === 0
-            ? ''
-            : `; ${remote.map((route) => route.role).join(', ')} routed to anthropic (${remote[0]?.model ?? ''})`;
+        const generation = routing.keyPresent
+          ? `generation on anthropic (${routing.roles.reflect.model})`
+          : 'generation queued: no AION_ANTHROPIC_API_KEY set';
         return {
           ok: true,
-          detail: `${config.models.embed} → ${vector.length} dimensions, ${chat}${routed}`,
+          detail: `${config.models.embed} → ${vector.length} dimensions, ${generation}`,
         };
       },
     },

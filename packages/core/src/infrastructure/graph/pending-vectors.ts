@@ -2,7 +2,7 @@ import type { Driver } from 'neo4j-driver';
 
 import { BITEMPORAL_PROPERTIES, currentOnly } from './bitemporal.js';
 import { runRead, runWrite } from './connection.js';
-import { MEMORY_PROPERTIES } from './episodes.js';
+import { CONTAINMENT_TYPE, MEMORY_PROPERTIES } from './episodes.js';
 import { MEMORY_LABEL } from './labels.js';
 import { toGraphInteger, toGraphVector } from './values.js';
 import type { Vector } from '../providers/types.js';
@@ -67,6 +67,36 @@ export async function findPendingVectorNodes(
     return [];
   }
   return runRead(driver, FIND_PENDING_VECTOR_NODES, { limit: toGraphInteger(limit) }, (row) => ({
+    id: row.id as string,
+    text: row.text as string,
+  }));
+}
+
+/**
+ * The same pending set, narrowed to one accepted source: the episode node itself and the turns
+ * contained by it. This is what the queued vector job reads, so a job that lands after another
+ * writer already vectorized the episode finds nothing and completes, and one that lands while a
+ * turn is still bare picks up exactly that turn.
+ *
+ * Unbounded on purpose, unlike the backlog drain above: a source has as many turns as the
+ * capture carried, and embedding half of them would leave the rest with no job pointing at them.
+ */
+const FIND_PENDING_VECTOR_NODES_FOR_SOURCE = [
+  `MATCH (n:${MEMORY_LABEL})`,
+  `WHERE (n.id = $sourceId OR (n)-[:${CONTAINMENT_TYPE}]->(:Episode { id: $sourceId }))`,
+  `  AND (n.${MEMORY_PROPERTIES.contentVector} IS NULL` +
+    ` OR n.${MEMORY_PROPERTIES.contentVectorHash} IS NULL)`,
+  `  AND n.${MEMORY_PROPERTIES.text} IS NOT NULL`,
+  `  AND ${currentOnly('n')}`,
+  `RETURN n.id AS id, n.${MEMORY_PROPERTIES.text} AS text`,
+  `ORDER BY n.${BITEMPORAL_PROPERTIES.txFrom}, n.id`,
+].join('\n');
+
+export async function findPendingVectorNodesForSource(
+  driver: Driver,
+  sourceId: string,
+): Promise<PendingVectorNode[]> {
+  return runRead(driver, FIND_PENDING_VECTOR_NODES_FOR_SOURCE, { sourceId }, (row) => ({
     id: row.id as string,
     text: row.text as string,
   }));

@@ -12,7 +12,7 @@ export type { ReflectionIntakeDeps } from './application/intake.js';
  * The other row an acceptance writes. Exported because `aion queue` is the surface that has to
  * tell the reflection backlog apart from the index obligations a different handler owns.
  */
-export { SOURCE_INDEX_JOB_TYPE } from './application/intake-queue.js';
+export { SOURCE_INDEX_JOB_TYPE, VECTOR_JOB_TYPE } from './application/intake-queue.js';
 
 /** The one installed handler set, shared by every process that publishes. */
 export { INSTALLED_PUBLICATION_HANDLERS } from './application/installed-publications.js';

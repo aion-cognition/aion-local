@@ -104,7 +104,7 @@ function settingsOf(options: NarrativeOptions, provider: Provider): NarrativeSet
   );
   return {
     ...(options.chunkPolicy === undefined ? {} : { chunkPolicy: options.chunkPolicy }),
-    model: options.model ?? DEFAULTS.models.reflect,
+    model: options.model ?? DEFAULTS.anthropic.model,
     idleMs: options.idleMs ?? DEFAULT_SESSION_IDLE_MS,
     timeoutMs: options.timeoutMs ?? DEFAULTS.reflection.stageTimeoutMs,
     maxSourceEpisodes: scale.maxSourceEpisodes,

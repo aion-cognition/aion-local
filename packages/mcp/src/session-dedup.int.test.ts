@@ -30,7 +30,10 @@ import {
   type Neo4jHarness,
 } from '@aion/core/infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import type { Vector } from '@aion/core/infrastructure/providers/types.js';
-import { directIntakePublisher } from '@aion/core/reflection/test-support/direct-intake.fixture.js';
+import {
+  directIntakePublisher,
+  drainAcceptedVectors,
+} from '@aion/core/reflection/test-support/direct-intake.fixture.js';
 import type { MemoryPack } from '@aion/protocol';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -114,17 +117,18 @@ async function push(observation: string, now: Date): Promise<string> {
       driver: harness.driver,
       db,
       sessions,
-      provider,
       logger,
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),
       workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
       publications: directIntakePublisher(harness.driver, db),
-      acceptHookCapture: true,
     },
     { observations: [observation] },
     { identity: WRITE_SESSION, now },
   );
+  // Intake queues the embedding rather than performing it, so the fixture runs the row the
+  // worker would run: what this file asserts on is vector search, which needs the vectors.
+  await drainAcceptedVectors(harness.driver, provider);
   return result.episode_id;
 }
 

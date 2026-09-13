@@ -1,5 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 
+import { DEFAULT_ANTHROPIC_MODEL } from '../../infrastructure/providers/anthropic-provider.js';
 import { deadlineFor } from '../../infrastructure/providers/deadline-signal.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import {
@@ -69,8 +70,8 @@ export type ChunkSynthesis = {
 };
 
 const DEFAULT_TIMEOUT_MS = 120_000;
-/** The `models.reflect` default, for the caller that names no model. Keep the two in step. */
-const DEFAULT_MODEL = 'qwen3:4b-instruct-2507-q4_K_M';
+/** The routed model's default, for the caller that names no model. Keep the two in step. */
+const DEFAULT_MODEL = DEFAULT_ANTHROPIC_MODEL;
 
 /** The gap the render's own selection proves, rather than the one the plan guessed at. */
 function gapsWithRanges(

@@ -1,5 +1,6 @@
 import {
   ApiUsageRecorder,
+  GenerationSpendGuard,
   introspectionOperations,
   markLedgerApplied,
   observeHealth,
@@ -115,6 +116,10 @@ async function runOne(substrate: Substrate, name: string): Promise<number> {
     provider: new ProviderRouter({
       config,
       recordApiCall: new ApiUsageRecorder(db, logger).recordApiCall,
+      // The forced run holds against the same day's ceiling the service does. The ledger is the
+      // substrate's own table, so an operator forcing an operation while the service runs cannot
+      // spend the day twice.
+      spending: new GenerationSpendGuard({ db, ceilingUsd: config.anthropic.dailyCeilingUsd }),
     }).forRole('reflect'),
     narratives,
     health,

@@ -3,7 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { descriptionFreshnessOperation } from './description-freshness-operation.js';
+import {
+  descriptionFreshnessHandler,
+  descriptionFreshnessOperation,
+} from './description-freshness-operation.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { writeStampedNode } from '../../../infrastructure/graph/bitemporal.js';
@@ -18,9 +21,7 @@ import {
 import { linkEntityMentions, mergeEntities } from '../../../infrastructure/graph/entity-queries.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import {
-  closeEntityValidity,
   nodeProperties,
-  reopenEntityValidity,
   storedEntity,
 } from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
@@ -28,15 +29,30 @@ import {
   stopNeo4jHarness,
   type Neo4jHarness,
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
-import { openLogger } from '../../../infrastructure/logging/logger.js';
-import { testGenerationProvider } from '../../../infrastructure/providers/test-support/generation-provider.js';
-import { refusingProvider } from '../../../infrastructure/providers/test-support/refusing-provider.fixture.js';
-import type { Provider, StructuredRequest } from '../../../infrastructure/providers/types.js';
+import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
+import {
+  consumeBatchWork,
+  submitBatchWork,
+  type BatchAdapterDeps,
+} from '../../../infrastructure/providers/batch-adapter.js';
+import { GenerationSpendGuard } from '../../../infrastructure/providers/spending.js';
+import type { Provider } from '../../../infrastructure/providers/types.js';
+import { summarizeApiCalls } from '../../../infrastructure/sqlite/api-usage.js';
+import { readBatchWork, type BatchWorkItem } from '../../../infrastructure/sqlite/batch-work.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import { beginSubstratePairing } from '../../../infrastructure/sqlite/publication-control.js';
+import { readSpendDay } from '../../../infrastructure/sqlite/spend-ledger.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
 
 /**
+ * The producer and the consumer, end to end, with the remote injected.
+ *
+ * This is the whole batch lane against a live graph: the operation nominates stale glosses and
+ * writes the requests down, the pump submits them, the store is reopened the way a restart would
+ * reopen it, answers come back out of order, and each one is revalidated before it is applied.
+ * No batch is sent and no model is called; what is injected is the results file.
+ *
  * Mentions are seeded as plain Episode nodes linked directly, not through the full reflection
  * pipeline: the operation reads `MENTIONS` edges and episode text, and neither depends on
  * anything else the pipeline would have written.
@@ -45,32 +61,19 @@ import { healthFixture } from '../../domain/test-support/health.fixture.js';
 let harness: Neo4jHarness;
 let db: SqliteHandle;
 let dataDir: string;
-let entityId: string;
-
-/**
- * The keyed text is the one the remote route reads, so a run on the local model would measure
- * words nothing ships to it. Written out rather than imported, the way the gate batteries write
- * it: `core` does not import from `mcp`, where that constant lives.
- */
-const REMOTE_JUDGE_ABSENT =
-  (process.env.AION_ANTHROPIC_API_KEY ?? '').trim() === '' ||
-  process.env.TEST_AION_GENERATION === 'local';
+let dbPath: string;
+let logger: Logger;
+let substrateId: string;
+let poolId: string;
+let workerId: string;
 
 const NOW = new Date('2026-08-29T12:00:00.000Z');
-const ORIGINAL_DESCRIPTION = 'a Postgres connection pool (concept)';
-const REFRESHED_DESCRIPTION = 'a Postgres connection pool, resized after the June incident';
+const POOL_DESCRIPTION = 'a Postgres connection pool (concept)';
+const WORKER_DESCRIPTION = 'a queue worker (concept)';
+const POOL_REFRESHED = 'a Postgres connection pool, resized after the June incident';
+const WORKER_REFRESHED = 'the ingest worker, fed by the Valkey queue Priya moved it behind';
 const MENTION_COUNT = 5;
 const EMBED_DIMENSION = DEFAULTS.models.embedDimension;
-
-function stubProvider(calls: StructuredRequest[]): Provider {
-  return {
-    embed: async (texts) => texts.map(() => new Array(EMBED_DIMENSION).fill(0.01)),
-    generate: async (req: StructuredRequest) => {
-      calls.push(req);
-      return { description: REFRESHED_DESCRIPTION };
-    },
-  };
-}
 
 const config: Config = {
   ...DEFAULTS,
@@ -81,21 +84,22 @@ const config: Config = {
   },
 };
 
-beforeAll(async () => {
-  harness = await startNeo4jHarness();
-  dataDir = mkdtempSync(join(tmpdir(), 'aion-description-freshness-int-'));
-  db = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
-  await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
+/** The embed the handler takes at publication. Nothing here generates. */
+const localEmbedder: Provider = {
+  embed: (texts) => Promise.resolve(texts.map(() => new Array<number>(EMBED_DIMENSION).fill(0.01))),
+  generate: () => Promise.reject(new Error('the batch lane must not reach the Messages route')),
+};
 
+async function seedEntity(name: string, description: string, prefix: string): Promise<string> {
   const [entity] = await mergeEntities(
     harness.driver,
     [
       {
-        name: 'connection pool',
-        nameNorm: 'connection pool',
+        name,
+        nameNorm: name,
         type: 'concept',
-        text: ORIGINAL_DESCRIPTION,
-        sourceEpisodeId: 'seed-episode-0',
+        text: description,
+        sourceEpisodeId: `${prefix}-seed-episode`,
         extractionMethod: 'test-seed',
         confidence: 1,
         occurredAt: NOW,
@@ -103,24 +107,36 @@ beforeAll(async () => {
     ],
     NOW,
   );
-  entityId = entity!.id;
-
+  const { id } = entity!;
   for (let index = 0; index < MENTION_COUNT; index += 1) {
-    const episodeId = `mention-episode-${String(index)}`;
+    const episodeId = `${prefix}-mention-${String(index)}`;
     await writeStampedNode(harness.driver, {
       label: 'Episode',
       id: episodeId,
       now: NOW,
-      properties: { text: `mention ${String(index)} of the connection pool` },
+      properties: { text: `mention ${String(index)} of the ${name}` },
     });
     await linkEntityMentions(harness.driver, {
       episodeId,
-      entityIds: [entityId],
+      entityIds: [id],
       now: NOW,
       confidence: 1,
       provenance: ['test-seed'],
     });
   }
+  return id;
+}
+
+beforeAll(async () => {
+  harness = await startNeo4jHarness();
+  dataDir = mkdtempSync(join(tmpdir(), 'aion-description-freshness-int-'));
+  dbPath = join(dataDir, 'aion.sqlite');
+  db = openSqliteHandle({ filePath: dbPath });
+  logger = openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' });
+  await runGraphMigrations(harness.driver, db, { embedDimension: EMBED_DIMENSION });
+  ({ substrateId } = beginSubstratePairing(db, 1));
+  poolId = await seedEntity('connection pool', POOL_DESCRIPTION, 'pool');
+  workerId = await seedEntity('ingest worker', WORKER_DESCRIPTION, 'worker');
 }, 300_000);
 
 afterAll(async () => {
@@ -129,70 +145,213 @@ afterAll(async () => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
-function contextFor(provider: Provider = refusingProvider): OperationContext {
+function contextFor(handle: SqliteHandle = db): OperationContext {
   return {
     driver: harness.driver,
-    db,
+    db: handle,
     config,
-    logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
-    provider,
+    logger,
+    provider: localEmbedder,
     health: healthFixture(),
     now: NOW,
     signal: new AbortController().signal,
   };
 }
 
-describe('descriptionFreshnessOperation against a live graph', () => {
-  it('refreshes a description that outgrew its mention baseline and keeps the old value', async () => {
-    const calls: StructuredRequest[] = [];
-    const outcome = await descriptionFreshnessOperation().run(contextFor(stubProvider(calls)));
+/** One succeeded line of a results file, with the usage the remote reports beside it. */
+function answer(workKey: string, description: string): Record<string, unknown> {
+  return {
+    custom_id: workKey,
+    result: {
+      type: 'succeeded',
+      message: {
+        id: `message-${workKey}`,
+        model: DEFAULTS.anthropic.model,
+        content: [{ type: 'text', text: JSON.stringify({ description }) }],
+        usage: {
+          input_tokens: 100,
+          output_tokens: 20,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        },
+      },
+    },
+  };
+}
+
+/** The three batch endpoints, from a script. Nothing leaves the machine. */
+function batchApi(results: readonly Record<string, unknown>[]): typeof fetch {
+  const impl = (url: string | URL): Promise<Response> => {
+    const target = String(url);
+    if (target.endsWith('/results')) {
+      return Promise.resolve(new Response(results.map((line) => JSON.stringify(line)).join('\n')));
+    }
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          id: 'msgbatch_freshness',
+          processing_status: target.endsWith('/batches') ? 'in_progress' : 'ended',
+          results_url: 'https://api.anthropic.com/v1/messages/batches/msgbatch_freshness/results',
+        }),
+      ),
+    );
+  };
+  return impl as unknown as typeof fetch;
+}
+
+function adapterDeps(handle: SqliteHandle, fetchImpl: typeof fetch): BatchAdapterDeps {
+  return {
+    db: handle,
+    substrateId,
+    client: { apiKey: 'injected-test-key', fetchImpl },
+    handlers: [descriptionFreshnessHandler(contextFor(handle))],
+    logger,
+    spending: new GenerationSpendGuard({
+      db: handle,
+      ceilingUsd: config.anthropic.dailyCeilingUsd,
+    }),
+    now: () => NOW,
+  };
+}
+
+function workKeys(handle: SqliteHandle): string[] {
+  return (
+    handle.prepare('SELECT work_key FROM batch_work ORDER BY work_key').all() as {
+      work_key: string;
+    }[]
+  ).map((row) => row.work_key);
+}
+
+function keyFor(handle: SqliteHandle, entityId: string): string {
+  const key = workKeys(handle).find((candidate) => candidate.includes(entityId));
+  if (key === undefined) {
+    throw new Error(`no batch work was enqueued for ${entityId}`);
+  }
+  return key;
+}
+
+describe('description freshness on the batch lane', () => {
+  it('nominates the stale glosses and writes their requests down', async () => {
+    const outcome = await descriptionFreshnessOperation().run(contextFor());
 
     expect(outcome.status).toBe('applied');
-    expect(outcome.itemsAffected).toBe(1);
-    expect(calls).toHaveLength(1);
-    const prompt = calls[0]!.messages.map((message) => message.content).join('\n');
-    expect(prompt).toContain(ORIGINAL_DESCRIPTION);
+    expect(outcome.itemsProcessed).toBe(2);
+    expect(outcome.itemsAffected).toBe(2);
 
-    const entity = await storedEntity(harness.driver, entityId);
-    expect(entity?.text).toBe(REFRESHED_DESCRIPTION);
-    expect(entity?.contentVectorLength).toBe(EMBED_DIMENSION);
-
-    const props = await nodeProperties(harness.driver, entityId);
-    expect(props[PRIOR_DESCRIPTIONS_PROPERTY]).toEqual([ORIGINAL_DESCRIPTION]);
-    expect(Number(props[DESCRIPTION_MENTION_COUNT_PROPERTY])).toBe(MENTION_COUNT);
-    expect(props[DESCRIPTION_REFRESH_METHOD_PROPERTY]).toBe(DESCRIPTION_REFRESH_METHOD);
-    expect(props[DESCRIPTION_REFRESHED_AT_PROPERTY]).toBeDefined();
+    const row = readBatchWork(db, keyFor(db, poolId));
+    expect(row?.state).toBe('pending');
+    // The request carries the gloss it was built against, which is what the model is asked to
+    // revise rather than to invent.
+    expect(JSON.stringify(row?.request)).toContain(POOL_DESCRIPTION);
+    // Nothing is refreshed by asking. The entity still says what it said.
+    const entity = await storedEntity(harness.driver, poolId);
+    expect(entity?.text).toBe(POOL_DESCRIPTION);
   }, 120_000);
 
-  it('leaves the freshly refreshed entity alone on the next run', async () => {
-    const calls: StructuredRequest[] = [];
-    const outcome = await descriptionFreshnessOperation().run(contextFor(stubProvider(calls)));
+  it('submits the work and completes nothing by submitting it', async () => {
+    const report = await submitBatchWork(adapterDeps(db, batchApi([])));
 
-    expect(outcome.status).toBe('noop');
-    expect(outcome.itemsAffected).toBe(0);
-    expect(calls).toHaveLength(0);
-  }, 60_000);
+    expect(report.submitted).toBe(2);
+    expect(readBatchWork(db, keyFor(db, poolId))?.state).toBe('submitted');
+    expect((await storedEntity(harness.driver, poolId))?.text).toBe(POOL_DESCRIPTION);
+    // The submission committed its conservative maximum against the day before it was sent.
+    expect(readSpendDay(db, NOW).inFlight).toBe(1);
+  }, 120_000);
 
-  it('will not rewrite an entity that lost currency while the model was answering', async () => {
-    // The two model calls are long enough for a merge, a decay, or a forget to close the
-    // entity. The write is an in-place replacement with no close to undo, so it carries the
-    // currency test itself.
-    await closeEntityValidity(harness.driver, entityId, NOW);
+  it('applies shuffled answers to the right entities across a restart, and refuses a stale one', async () => {
+    // The gloss the worker request was built against is rewritten under it, the way another pass
+    // or a correction would. Its answer is then about a question nobody is asking.
+    const moved = await refreshEntityDescription(harness.driver, {
+      id: workerId,
+      text: 'a gloss something else wrote while the batch was out',
+      contentVector: new Array<number>(EMBED_DIMENSION).fill(0.02),
+      mentionCount: MENTION_COUNT,
+      now: NOW,
+    });
+    expect(moved).toBe(true);
+
+    // The restart: the process that submitted is gone, and everything the next one needs is a
+    // row. Nothing is carried over in memory.
+    const reopened = openSqliteHandle({ filePath: dbPath });
     try {
-      const applied = await refreshEntityDescription(harness.driver, {
-        id: entityId,
-        text: 'a rewrite nobody should be able to write',
-        contentVector: new Array<number>(EMBED_DIMENSION).fill(0.02),
-        mentionCount: MENTION_COUNT,
-        now: NOW,
-      });
+      const poolKey = keyFor(reopened, poolId);
+      const workerKey = keyFor(reopened, workerId);
+      expect(readBatchWork(reopened, poolKey)?.state).toBe('submitted');
 
-      expect(applied).toBe(false);
-      const props = await nodeProperties(harness.driver, entityId);
-      expect(props.text).toBe(REFRESHED_DESCRIPTION);
+      // Reverse order, because the API answers in whatever order it finished.
+      const report = await consumeBatchWork(
+        adapterDeps(
+          reopened,
+          batchApi([answer(workerKey, WORKER_REFRESHED), answer(poolKey, POOL_REFRESHED)]),
+        ),
+      );
+
+      expect(report).toMatchObject({ applied: 1, discarded: 1, returned: 0, failed: 0 });
+      expect(readBatchWork(reopened, poolKey)?.state).toBe('applied');
+      expect(readBatchWork(reopened, workerKey)?.state).toBe('discarded');
+
+      const pool = await storedEntity(harness.driver, poolId);
+      expect(pool?.text).toBe(POOL_REFRESHED);
+      expect(pool?.contentVectorLength).toBe(EMBED_DIMENSION);
+      const props = await nodeProperties(harness.driver, poolId);
+      expect(props[PRIOR_DESCRIPTIONS_PROPERTY]).toEqual([POOL_DESCRIPTION]);
+      expect(Number(props[DESCRIPTION_MENTION_COUNT_PROPERTY])).toBe(MENTION_COUNT);
+      expect(props[DESCRIPTION_REFRESH_METHOD_PROPERTY]).toBe(DESCRIPTION_REFRESH_METHOD);
+      expect(props[DESCRIPTION_REFRESHED_AT_PROPERTY]).toBeDefined();
+
+      // The entity whose question moved kept the gloss that displaced it.
+      const worker = await storedEntity(harness.driver, workerId);
+      expect(worker?.text).toBe('a gloss something else wrote while the batch was out');
     } finally {
-      await reopenEntityValidity(harness.driver, entityId);
+      reopened.close();
     }
+  }, 120_000);
+
+  it('publishes once however often the answers are consumed, and bills both of them once', async () => {
+    const poolKey = keyFor(db, poolId);
+    const workerKey = keyFor(db, workerId);
+
+    const report = await consumeBatchWork(
+      adapterDeps(
+        db,
+        batchApi([
+          answer(poolKey, 'a second rewrite nobody asked for'),
+          answer(workerKey, 'and another'),
+        ]),
+      ),
+    );
+
+    // Nothing of this batch is outstanding any more, so the re-poll reads nothing and applies
+    // nothing. The gloss the first pass wrote stands.
+    expect(report).toMatchObject({ applied: 0, discarded: 0, returned: 0 });
+    expect((await storedEntity(harness.driver, poolId))?.text).toBe(POOL_REFRESHED);
+    expect(await nodeProperties(harness.driver, poolId)).toMatchObject({
+      [PRIOR_DESCRIPTIONS_PROPERTY]: [POOL_DESCRIPTION],
+    });
+
+    // Paid is paid, and paid once: the applied answer and the stale one are both on the bill,
+    // each exactly once, at the batch rate.
+    const bill = summarizeApiCalls(
+      db,
+      new Date('2026-08-29T00:00:00.000Z'),
+      new Date('2026-08-30T00:00:00.000Z'),
+    );
+    const batched = bill.surfaces.filter((row) => row.pricingTier === 'batch');
+    expect(batched.reduce((total, row) => total + row.calls, 0)).toBe(2);
+    expect(batched.reduce((total, row) => total + row.inputTokens, 0)).toBe(200);
+    // The submission's conservative hold is replaced by what the answers cost, not added to it:
+    // two answers at 100 input and 20 output on Haiku 4.5, halved for the batch rate, is
+    // (100 × $1 + 20 × $5) ÷ 1e6 × 0.5 × 2 = $0.0002.
+    const day = readSpendDay(db, NOW);
+    expect(day.inFlight).toBe(0);
+    expect(day.committedUsd).toBeCloseTo(0.0002, 8);
+  }, 120_000);
+
+  it('leaves a refreshed entity alone on the next nomination', async () => {
+    const outcome = await descriptionFreshnessOperation().run(contextFor());
+
+    expect(outcome.itemsProcessed).toBe(0);
+    expect(outcome.itemsAffected).toBe(0);
   }, 60_000);
 
   it('does nothing at all with AION_MAINTENANCE_DESCRIPTION_FRESHNESS off', async () => {
@@ -212,79 +371,53 @@ describe('descriptionFreshnessOperation against a live graph', () => {
   }, 60_000);
 });
 
-const KEYED_ENTITY_DESCRIPTION = 'a queue worker (concept)';
-
 /**
- * Every mention names the same upstream queue and the same person, so the connections the keyed
- * text asks for are in the sources rather than left to the model to supply.
+ * What the handler refuses, one reason at a time. Each of these is a way the substrate can move
+ * between the question and the answer, and the answer is discarded rather than applied.
  */
-const KEYED_ENTITY_MENTIONS = [
-  'Priya moved the ingest worker behind the Valkey queue so its retries stopped doubling',
-  'the ingest worker takes its jobs from the Valkey queue and writes each result to the ledger service',
-  'after the June incident the ingest worker ran on two replicas, both fed by the Valkey queue',
-  'Priya owns the ingest worker rota, and the Valkey queue is the only thing upstream of it',
-  'the ingest worker drains the Valkey queue every night before the ledger service closes the day',
-];
+describe('what the publication revalidates', () => {
+  const handler = (): ReturnType<typeof descriptionFreshnessHandler> =>
+    descriptionFreshnessHandler(contextFor());
 
-describe.skipIf(REMOTE_JUDGE_ABSENT)('a keyed-route refresh of the same shape', () => {
-  let keyedEntityId: string;
-  let live: Provider;
+  it('refuses an answer whose revalidation record it cannot read', async () => {
+    expect(await handler().isCurrent(db, { entityId: poolId })).toBe(false);
+  }, 60_000);
 
-  beforeAll(async () => {
-    live = testGenerationProvider({
-      baseUrl: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
-      embedModel: DEFAULTS.models.embed,
-    });
+  it('refuses an answer about an entity the store no longer holds', async () => {
+    expect(
+      await handler().isCurrent(db, {
+        entityId: 'an-entity-that-was-never-minted',
+        baseline: 1,
+        mentions: 5,
+        text: POOL_DESCRIPTION,
+      }),
+    ).toBe(false);
+  }, 60_000);
 
-    const [entity] = await mergeEntities(
-      harness.driver,
-      [
-        {
-          name: 'ingest worker',
-          nameNorm: 'ingest worker',
-          type: 'concept',
-          text: KEYED_ENTITY_DESCRIPTION,
-          sourceEpisodeId: 'keyed-seed-episode-0',
-          extractionMethod: 'test-seed',
-          confidence: 1,
-          occurredAt: NOW,
-        },
-      ],
-      NOW,
-    );
-    keyedEntityId = entity!.id;
+  it('accepts an answer about the gloss and baseline the entity still carries', async () => {
+    expect(
+      await handler().isCurrent(db, {
+        entityId: poolId,
+        baseline: MENTION_COUNT,
+        mentions: MENTION_COUNT,
+        text: POOL_REFRESHED,
+      }),
+    ).toBe(true);
+  }, 60_000);
 
-    for (const [index, text] of KEYED_ENTITY_MENTIONS.entries()) {
-      const episodeId = `keyed-mention-episode-${String(index)}`;
-      await writeStampedNode(harness.driver, {
-        label: 'Episode',
-        id: episodeId,
-        now: NOW,
-        properties: { text },
-      });
-      await linkEntityMentions(harness.driver, {
-        episodeId,
-        entityIds: [keyedEntityId],
-        now: NOW,
-        confidence: 1,
-        provenance: ['test-seed'],
-      });
-    }
-  }, 300_000);
+  it('leaves the work owed when the guarded write matches no current entity', async () => {
+    const item = {
+      workKey: 'description_freshness:gone:1:0000',
+      revalidation: {
+        entityId: 'an-entity-that-was-never-minted',
+        baseline: 1,
+        mentions: 5,
+        text: POOL_DESCRIPTION,
+      },
+    } as unknown as BatchWorkItem;
 
-  it('writes a longer gloss that names what the entity connects to, and keeps the old one', async () => {
-    const outcome = await descriptionFreshnessOperation().run(contextFor(live));
-
-    expect(outcome.status).toBe('applied');
-    expect(outcome.itemsAffected).toBe(1);
-
-    const entity = await storedEntity(harness.driver, keyedEntityId);
-    const refreshed = entity?.text ?? '';
-    expect(refreshed.length).toBeGreaterThan(KEYED_ENTITY_DESCRIPTION.length);
-    expect(refreshed.toLowerCase()).toContain('valkey');
-    expect(entity?.contentVectorLength).toBe(EMBED_DIMENSION);
-
-    const props = await nodeProperties(harness.driver, keyedEntityId);
-    expect(props[PRIOR_DESCRIPTIONS_PROPERTY]).toEqual([KEYED_ENTITY_DESCRIPTION]);
-  }, 120_000);
+    await expect(
+      handler().apply(item, { description: 'a rewrite with nowhere to land' }),
+    ).rejects.toThrow('no longer current');
+  }, 60_000);
 });

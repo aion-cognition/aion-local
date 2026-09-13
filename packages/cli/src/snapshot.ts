@@ -17,7 +17,6 @@ import {
   remoteBannerLines,
   resolveProviderRouting,
   routingSummary,
-  unbackedPins,
   type Config,
   type EdgeWeightDistribution,
   type GenerationCounters,
@@ -226,15 +225,8 @@ export function renderSnapshot(
 
   write('');
   const routing = resolveProviderRouting(config);
-  write(
-    `models   embed=${config.models.embed} cue=${config.models.cue} reflect=${config.models.reflect}`,
-  );
+  write(`models   embed=${config.models.embed} generation=${config.anthropic.model}`);
   write(`routing  ${routingSummary(routing)} (embeddings always ${config.models.embed}, local)`);
-  for (const route of unbackedPins(routing)) {
-    write(
-      `         ${route.role} is pinned to anthropic with no key set, so it runs on ${route.localModel}`,
-    );
-  }
   if (snapshot.ollama.models.length > 0) {
     write(`installed  ${snapshot.ollama.models.join(', ')}`);
   }

@@ -10,6 +10,7 @@ import {
   reconcileEnrichment,
   REFLECTION_LANES,
   SOURCE_INDEX_JOB_TYPE,
+  VECTOR_JOB_TYPE,
   sourceReadDeps,
   type ReflectionJob,
   type ReflectionLane,
@@ -39,7 +40,7 @@ type Subcommand = (typeof SUBCOMMANDS)[number];
 const DEFAULT_LIST_LIMIT = 50;
 
 /** The two rows an acceptance writes, which is the whole population this command can act on. */
-const JOB_TYPES = [INTEGRATE_JOB_TYPE, SOURCE_INDEX_JOB_TYPE] as const;
+const JOB_TYPES = [INTEGRATE_JOB_TYPE, VECTOR_JOB_TYPE, SOURCE_INDEX_JOB_TYPE] as const;
 
 const SPEC: ArgSpec<Subcommand> = {
   command: 'queue',
@@ -219,6 +220,10 @@ function renderCounts(substrate: Substrate, flags: QueueFlags): void {
       workerMaxAttempts,
     );
     substrate.write(`index    ${String(index.pending)} ${SOURCE_INDEX_JOB_TYPE} rows pending`);
+    // Counted apart from the enrichment depth for the same reason: one embed call a source is
+    // not the backlog a caller asking "how far behind is my turn" wants reported to it.
+    const vectors = countQueueJobs(db, { ...filter, jobType: VECTOR_JOB_TYPE }, workerMaxAttempts);
+    substrate.write(`vectors  ${String(vectors.pending)} ${VECTOR_JOB_TYPE} rows pending`);
   }
 }
 

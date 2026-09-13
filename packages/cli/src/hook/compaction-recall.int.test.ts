@@ -25,7 +25,10 @@ import {
   type Neo4jHarness,
 } from '@aion/core/infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import type { Vector } from '@aion/core/infrastructure/providers/types.js';
-import { directIntakePublisher } from '@aion/core/reflection/test-support/direct-intake.fixture.js';
+import {
+  directIntakePublisher,
+  drainAcceptedVectors,
+} from '@aion/core/reflection/test-support/direct-intake.fixture.js';
 import { AionMcpService, MCP_PATH, type ToolBackend } from '@aion/mcp';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -140,17 +143,18 @@ beforeAll(async () => {
       driver: harness.driver,
       db,
       sessions,
-      provider,
       logger,
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),
       workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
       publications: directIntakePublisher(harness.driver, db),
-      acceptHookCapture: true,
     },
     { observations: [OBSERVATION] },
     { identity: WRITE_SESSION, now: STORED_AT },
   );
+  // Intake queues the embedding rather than performing it, so the fixture runs the row the
+  // worker would run: what this file asserts on is vector search, which needs the vectors.
+  await drainAcceptedVectors(harness.driver, provider);
 
   await waitFor('the vector index to cover the stored episode', READY_MS, async () => {
     const rows = await vectorSeeds(harness.driver, {

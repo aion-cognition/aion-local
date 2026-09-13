@@ -160,7 +160,7 @@ async function reasonForOrdinaryResidue(
       rightType: proposal.rightType,
     },
     {
-      model: ctx.config.models.reflect,
+      model: ctx.config.anthropic.model,
       timeoutMs: ctx.config.reflection.stageTimeoutMs,
       signal: ctx.signal,
     },

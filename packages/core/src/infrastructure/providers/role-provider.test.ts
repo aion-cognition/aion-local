@@ -1,21 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { GenerationUnavailableError } from './errors.js';
 import { ProviderRouter, type GenerationEvent } from './role-provider.js';
-import type { ProviderPin } from './routing.js';
 import type { Provider } from './types.js';
 import { DEFAULTS } from '../config/defaults.js';
 import type { Config } from '../config/schema.js';
 
 const SCHEMA = { type: 'object' };
 
-type Setup = { readonly key?: string; readonly cue?: ProviderPin; readonly reflect?: ProviderPin };
-
-function config(setup: Setup = {}): Config {
+function config(key = ''): Config {
   return {
     ...DEFAULTS,
     ollama: { ...DEFAULTS.ollama, url: 'http://ollama.test:11434' },
-    anthropic: { ...DEFAULTS.anthropic, apiKey: setup.key ?? '' },
-    routing: { cue: setup.cue ?? 'auto', reflect: setup.reflect ?? 'auto' },
+    anthropic: { ...DEFAULTS.anthropic, apiKey: key },
   };
 }
 
@@ -37,102 +34,81 @@ function recordingFetch(): {
     if (target.includes('/api/embed')) {
       return Promise.resolve(new Response(JSON.stringify({ embeddings: [[0.1, 0.2]] })));
     }
-    if (target.includes('anthropic.com')) {
-      return Promise.resolve(
-        new Response(
-          JSON.stringify({ content: [{ type: 'text', text: '{"from": "anthropic"}' }] }),
-        ),
-      );
-    }
     return Promise.resolve(
-      new Response(JSON.stringify({ message: { content: '{"from": "ollama"}' } })),
+      new Response(JSON.stringify({ content: [{ type: 'text', text: '{"from": "anthropic"}' }] })),
     );
   });
   return { calls, impl: impl as unknown as typeof fetch };
 }
 
 function request(model: string): Parameters<ReturnType<ProviderRouter['forRole']>['generate']>[0] {
-  return { model, messages: [{ role: 'user', content: 'hello' }], schema: SCHEMA };
+  return {
+    surface: 'probe',
+    model,
+    messages: [{ role: 'user', content: 'hello' }],
+    schema: SCHEMA,
+  };
 }
 
 describe('what each role generates against', () => {
-  it('sends both roles to Ollama with their own models when no key is set', async () => {
-    const { calls, impl } = recordingFetch();
-    const router = new ProviderRouter({ config: config(), fetchImpl: impl });
-
-    await router.forRole('cue').generate(request(DEFAULTS.models.cue));
-    await router.forRole('reflect').generate(request(DEFAULTS.models.reflect));
-
-    expect(calls.map((call) => call.url)).toEqual([
-      'http://ollama.test:11434/api/chat',
-      'http://ollama.test:11434/api/chat',
-    ]);
-    expect(calls.map((call) => call.body.model)).toEqual([
-      DEFAULTS.models.cue,
-      DEFAULTS.models.reflect,
-    ]);
-  });
-
-  it('states each role own context window on every local call, unasked', async () => {
-    // The invariant behind the knob: no stage has to remember to size its call, and none of them
-    // reaches Ollama on whatever default that build derives. Two numbers because the two roles
-    // send different things — a query string against rendered episode text.
-    const { calls, impl } = recordingFetch();
-    const router = new ProviderRouter({ config: config(), fetchImpl: impl });
-
-    await router.forRole('cue').generate(request(DEFAULTS.models.cue));
-    await router.forRole('reflect').generate(request(DEFAULTS.models.reflect));
-
-    expect(calls.map((call) => (call.body.options as Record<string, number>).num_ctx)).toEqual([
-      DEFAULTS.models.cueNumCtx,
-      DEFAULTS.models.reflectNumCtx,
-    ]);
-  });
-
-  it('leaves a window the call site sized for itself alone', async () => {
-    const { calls, impl } = recordingFetch();
-    const router = new ProviderRouter({ config: config(), fetchImpl: impl });
-
-    await router
-      .forRole('reflect')
-      .generate({ ...request(DEFAULTS.models.reflect), numCtx: 40_960 });
-
-    expect((calls[0]?.body.options as Record<string, number>).num_ctx).toBe(40_960);
-  });
-
   it('sends both roles to Anthropic under the configured model when the key is set', async () => {
     const { calls, impl } = recordingFetch();
-    const router = new ProviderRouter({ config: config({ key: 'sk-ant-test' }), fetchImpl: impl });
+    const router = new ProviderRouter({ config: config('sk-ant-test'), fetchImpl: impl });
 
-    const answer = await router.forRole('reflect').generate(request(DEFAULTS.models.reflect));
+    const cue = await router.forRole('cue').generate(request('whatever the caller named'));
+    const reflect = await router.forRole('reflect').generate(request('whatever the caller named'));
 
-    expect(answer).toEqual({ from: 'anthropic' });
-    expect(calls[0]?.url).toContain('api.anthropic.com');
-    expect(calls[0]?.body.model).toBe(DEFAULTS.anthropic.model);
+    expect(cue).toEqual({ from: 'anthropic' });
+    expect(reflect).toEqual({ from: 'anthropic' });
+    expect(calls.map((call) => call.url)).toEqual([
+      'https://api.anthropic.com/v1/messages',
+      'https://api.anthropic.com/v1/messages',
+    ]);
+    // The caller's model name is substituted, so no call site carries a second model knob.
+    expect(calls.map((call) => call.body.model)).toEqual([
+      DEFAULTS.anthropic.model,
+      DEFAULTS.anthropic.model,
+    ]);
   });
 
-  it('splits the roles when one is pinned back to Ollama', async () => {
+  it('refuses to generate with no key rather than reaching anything else', async () => {
     const { calls, impl } = recordingFetch();
-    const router = new ProviderRouter({
-      config: config({ key: 'sk-ant-test', cue: 'ollama' }),
-      fetchImpl: impl,
-    });
+    const router = new ProviderRouter({ config: config(), fetchImpl: impl });
 
-    await router.forRole('cue').generate(request(DEFAULTS.models.cue));
-    await router.forRole('reflect').generate(request(DEFAULTS.models.reflect));
-
-    expect(calls[0]?.url).toContain('ollama.test');
-    expect(calls[1]?.url).toContain('anthropic.com');
+    await expect(router.forRole('reflect').generate(request('m'))).rejects.toBeInstanceOf(
+      GenerationUnavailableError,
+    );
+    expect(calls).toEqual([]);
   });
 
-  it('embeds locally under every route', async () => {
-    const { calls, impl } = recordingFetch();
-    const router = new ProviderRouter({ config: config({ key: 'sk-ant-test' }), fetchImpl: impl });
+  it('names the surface in the refusal, so a queued job records what could not run', async () => {
+    const { impl } = recordingFetch();
+    const router = new ProviderRouter({ config: config(), fetchImpl: impl });
 
-    await router.forRole('reflect').embed(['the episode text']);
+    const err: Error = await router
+      .forRole('reflect')
+      .generate(request('m'))
+      .then(
+        () => {
+          throw new Error('the call was expected to reject');
+        },
+        (error: unknown) => error as Error,
+      );
 
-    expect(calls[0]?.url).toBe('http://ollama.test:11434/api/embed');
-    expect(calls[0]?.body.model).toBe(DEFAULTS.models.embed);
+    expect(err.message).toContain('probe');
+    expect(err.message).toContain('AION_ANTHROPIC_API_KEY');
+  });
+
+  it('embeds locally with a key and without one', async () => {
+    for (const key of ['sk-ant-test', '']) {
+      const { calls, impl } = recordingFetch();
+      const router = new ProviderRouter({ config: config(key), fetchImpl: impl });
+
+      await router.forRole('reflect').embed(['the episode text']);
+
+      expect(calls[0]?.url).toBe('http://ollama.test:11434/api/embed');
+      expect(calls[0]?.body.model).toBe(DEFAULTS.models.embed);
+    }
   });
 
   it('threads the keep-alive knob into the embed request', async () => {
@@ -162,19 +138,19 @@ describe('the telemetry a caller reads the route from', () => {
     const { impl } = recordingFetch();
     const events: GenerationEvent[] = [];
     const router = new ProviderRouter({
-      config: config({ key: 'sk-ant-test', cue: 'ollama' }),
+      config: config('sk-ant-test'),
       fetchImpl: impl,
       onGeneration: (event) => events.push(event),
     });
 
-    await router.forRole('cue').generate(request(DEFAULTS.models.cue));
-    await router.forRole('reflect').generate(request(DEFAULTS.models.reflect));
+    await router.forRole('cue').generate(request('m'));
+    await router.forRole('reflect').generate(request('m'));
 
     expect(events).toEqual([
       expect.objectContaining({
         role: 'cue',
-        provider: 'ollama',
-        model: DEFAULTS.models.cue,
+        provider: 'anthropic',
+        model: DEFAULTS.anthropic.model,
         ok: true,
       }),
       expect.objectContaining({
@@ -186,26 +162,35 @@ describe('the telemetry a caller reads the route from', () => {
     ]);
   });
 
-  it('carries the resolved provider on the role provider under a keyed config', () => {
+  it('carries the resolved provider on the role provider', () => {
     const { impl } = recordingFetch();
-    const router = new ProviderRouter({ config: config({ key: 'sk-ant-test' }), fetchImpl: impl });
+    const router = new ProviderRouter({ config: config('sk-ant-test'), fetchImpl: impl });
 
     const reflect: Provider = router.forRole('reflect');
 
     expect(reflect.route?.provider).toBe('anthropic');
   });
 
-  it('carries the resolved provider on the role provider under a keyless config', () => {
-    const { impl } = recordingFetch();
-    const router = new ProviderRouter({ config: config(), fetchImpl: impl });
+  it('reports a failed generation rather than swallowing it', async () => {
+    const impl = vi.fn(() => Promise.resolve(new Response('nope', { status: 400 })));
+    const events: GenerationEvent[] = [];
+    const router = new ProviderRouter({
+      config: config('sk-ant-test'),
+      fetchImpl: impl,
+      onGeneration: (event) => events.push(event),
+    });
 
-    const reflect: Provider = router.forRole('reflect');
+    await expect(router.forRole('cue').generate(request('m'))).rejects.toThrow();
 
-    expect(reflect.route?.provider).toBe('ollama');
+    expect(events).toEqual([
+      expect.objectContaining({ role: 'cue', provider: 'anthropic', ok: false }),
+    ]);
   });
 
-  it('reports a failed generation rather than swallowing it', async () => {
-    const impl = vi.fn(() => Promise.resolve(new Response('nope', { status: 500 })));
+  // A substrate that never called anything has no failure rate, and counting the refusal would
+  // give it one for the life of the install.
+  it('counts no generation at all when there is no key', async () => {
+    const { impl } = recordingFetch();
     const events: GenerationEvent[] = [];
     const router = new ProviderRouter({
       config: config(),
@@ -213,10 +198,8 @@ describe('the telemetry a caller reads the route from', () => {
       onGeneration: (event) => events.push(event),
     });
 
-    await expect(router.forRole('cue').generate(request(DEFAULTS.models.cue))).rejects.toThrow();
+    await expect(router.forRole('cue').generate(request('m'))).rejects.toThrow();
 
-    expect(events).toEqual([
-      expect.objectContaining({ role: 'cue', provider: 'ollama', ok: false }),
-    ]);
+    expect(events).toEqual([]);
   });
 });

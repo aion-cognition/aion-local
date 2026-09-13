@@ -260,7 +260,7 @@ export type ModelAdvisorDeps = {
 export function modelAdvisor(deps: ModelAdvisorDeps): Tier3Advisor {
   return async (request) => {
     const outcome = await adviseTier3(deps.provider, request, {
-      model: deps.config.models.reflect,
+      model: deps.config.anthropic.model,
       timeoutMs: deps.config.reflection.stageTimeoutMs,
       ...(request.signal === undefined ? {} : { signal: request.signal }),
     });

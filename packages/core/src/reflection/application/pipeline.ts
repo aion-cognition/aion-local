@@ -49,7 +49,7 @@ export type NarrativeSweepOptions = WiredNarrativeOptions & { readonly limit: nu
 
 export function entityOptions(config: Config): EntityStageOptions {
   return {
-    model: config.models.reflect,
+    model: config.anthropic.model,
     timeoutMs: config.reflection.stageTimeoutMs,
     maxEntities: config.reflection.maxEntities,
     minExtractionChars: config.reflection.minExtractionChars,
@@ -59,7 +59,7 @@ export function entityOptions(config: Config): EntityStageOptions {
 /** `maxJudgments` is absent because the cascade's judged-pair ceiling is a constructor option and not a knob. */
 export function entityDedupOptions(config: Config): Omit<EntityDedupStageOptions, 'maxJudgments'> {
   return {
-    model: config.models.reflect,
+    model: config.anthropic.model,
     timeoutMs: config.reflection.stageTimeoutMs,
     similarityThreshold: config.reflection.entityDedupThreshold,
     sharedEpisodeJaccardFloor: config.reflection.entityNominationJaccardFloor,
@@ -81,7 +81,7 @@ export function associationOptions(config: Config): AssociationStageOptions {
  */
 export function cognitiveOptions(config: Config): CognitiveExtractionStageOptions {
   return {
-    model: config.models.reflect,
+    model: config.anthropic.model,
     timeoutMs: config.reflection.stageTimeoutMs,
     maxNodes: config.reflection.maxCognitiveNodes,
     keyedCloseMode: config.reflection.keyedCloseMode,
@@ -96,7 +96,7 @@ export function semanticRelationshipOptions(
   config: Config,
 ): Required<SemanticRelationshipStageOptions> {
   return {
-    model: config.models.reflect,
+    model: config.anthropic.model,
     timeoutMs: config.reflection.stageTimeoutMs,
     maxRelationships: config.reflection.maxRelationships,
   };
@@ -104,7 +104,7 @@ export function semanticRelationshipOptions(
 
 export function supersessionOptions(config: Config): SupersessionStageOptions {
   return {
-    model: config.models.reflect,
+    model: config.anthropic.model,
     timeoutMs: config.reflection.stageTimeoutMs,
     mode: config.reflection.supersedeMode,
     autoConfidence: config.reflection.supersedeAutoConfidence,
@@ -130,7 +130,7 @@ export function narrativeOptions(config: Config): WiredNarrativeOptions {
       renderedInputAllowance: config.maintenance.chunkRenderedInputAllowance,
       maxSpanMs: config.maintenance.chunkMaxSpanMs,
     },
-    model: config.models.reflect,
+    model: config.anthropic.model,
     idleMs: config.reflection.narrativeIdleMinutes * MINUTE_MS,
     timeoutMs: config.reflection.stageTimeoutMs,
     reflection: config.reflection,

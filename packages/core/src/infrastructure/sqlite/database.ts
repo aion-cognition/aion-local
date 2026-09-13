@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
+import { BATCH_INDEX_STATEMENTS, BATCH_SCHEMA_STATEMENTS } from './batch-schema.js';
 import { IDENTITY_INDEX_STATEMENTS, IDENTITY_SCHEMA_STATEMENTS } from './identity-schema.js';
 import { NARRATIVE_INDEX_STATEMENTS, NARRATIVE_SCHEMA_STATEMENTS } from './narrative-schema.js';
 import { PUBLICATION_SCHEMA_STATEMENTS } from './publication-schema.js';
@@ -10,6 +11,7 @@ import {
   SOURCE_SEARCH_INDEX_STATEMENTS,
   SOURCE_SEARCH_SCHEMA_STATEMENTS,
 } from './source-search-schema.js';
+import { SPEND_INDEX_STATEMENTS, SPEND_SCHEMA_STATEMENTS } from './spend-schema.js';
 
 /** Name for the config registry, which is the only place the variable is read. */
 export const SQLITE_PATH_ENV_VAR = 'AION_SQLITE_PATH';
@@ -44,7 +46,16 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     thinking_tokens INTEGER CHECK (thinking_tokens >= 0),
     duration_ms REAL NOT NULL CHECK (duration_ms >= 0),
     attempts INTEGER NOT NULL CHECK (attempts > 0),
-    usage_error TEXT
+    usage_error TEXT,
+    -- The remote request this usage is for, unique where the route names one. A batch is read
+    -- again on every settlement pass, so without an identity to record it under, one answer
+    -- would be charged once per polling round. Null on the synchronous route, and SQLite lets
+    -- a unique index hold as many nulls as there are calls.
+    request_id TEXT,
+    -- Batched requests bill at half the ordinary rate for the same tokens. The discount is a
+    -- rate, so it lives here rather than in the counts: halving the tokens would misreport
+    -- every reading that is not about money.
+    pricing_tier TEXT NOT NULL DEFAULT 'standard' CHECK (pricing_tier IN ('standard', 'batch'))
   )`,
   `CREATE TABLE IF NOT EXISTS ops_ledger (
     key TEXT PRIMARY KEY,
@@ -260,6 +271,7 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     occurred_at TEXT NOT NULL,
     recorded_at TEXT NOT NULL
   )`,
+  ...BATCH_SCHEMA_STATEMENTS,
   ...IDENTITY_SCHEMA_STATEMENTS,
   ...NARRATIVE_SCHEMA_STATEMENTS,
   ...PUBLICATION_SCHEMA_STATEMENTS,
@@ -267,11 +279,15 @@ const SCHEMA_STATEMENTS: readonly string[] = [
   // The search projection's ordinary tables only. Its virtual table needs a capability this
   // binary may not have, and a failure creating it here would close every other door too.
   ...SOURCE_SEARCH_SCHEMA_STATEMENTS,
+  ...SPEND_SCHEMA_STATEMENTS,
 ];
 
 /** Indexes, declared after the tables they cover. */
 const INDEX_STATEMENTS: readonly string[] = [
   `CREATE INDEX IF NOT EXISTS api_calls_occurred_at_idx ON api_calls (occurred_at)`,
+  // What makes "recorded once by remote request identity" a property of the store rather than a
+  // promise the caller keeps. Not partial: the nulls the synchronous route writes never conflict.
+  `CREATE UNIQUE INDEX IF NOT EXISTS api_calls_request_idx ON api_calls (request_id)`,
   // The claim's whole ORDER BY, so a claim seeks the first unclaimed row instead of sorting
   // every pending one. The lane CASE is indexed as the expression the statement writes, since
   // an index on `lane` alone sorts bulk ahead of interactive.
@@ -304,10 +320,12 @@ const INDEX_STATEMENTS: readonly string[] = [
   // backfill has not reached and the old payload lookup still answers for it.
   `CREATE INDEX IF NOT EXISTS reflection_queue_episode_idx
      ON reflection_queue (episode_id, job_type) WHERE episode_id IS NOT NULL`,
+  ...BATCH_INDEX_STATEMENTS,
   ...IDENTITY_INDEX_STATEMENTS,
   ...NARRATIVE_INDEX_STATEMENTS,
   ...READINESS_INDEX_STATEMENTS,
   ...SOURCE_SEARCH_INDEX_STATEMENTS,
+  ...SPEND_INDEX_STATEMENTS,
 ];
 
 function ensureDirectoryExists(filePath: string): void {

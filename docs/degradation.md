@@ -54,25 +54,21 @@ pass (`npx vitest run --project unit packages/core/src/recall/application/cues.t
 
 ### Full Ollama outage: recall
 
-**Trigger.** `AION_OLLAMA_URL` points at nothing reachable. Both the cue-model call and
-the embedding call fail.
+**Trigger.** `AION_OLLAMA_URL` points at nothing reachable. The embedding call fails. Cue
+extraction is unaffected: it runs remotely.
 
-**What happens.** Cue extraction degrades as above (`reason: model_error`). `embedCues`
+**What happens.** `embedCues`
 (`packages/core/src/recall/application/stage-reads.ts:50-69`) then tries to embed the
 degraded cues, fails, and returns them without vectors, logging `cue embedding failed`
 (`stage-reads.ts:58`). `handleRecall` collects every rung that fired, in stage order, into
 one list (`recall.ts:208-217`). With no vectors, BM25, entity resolution, recency, and
 graph traversal carry the recall alone.
 
-**What the caller sees.** A `MemoryPack` with `metadata.degraded` holding **two** entries:
-`[{stage: "cues", reason: "model_error"}, {stage: "embed", reason: "model_error"}]`. Before
-the fix, `metadata.degraded` could only ever hold one `cues` entry. A dead cue model and a
-dead Ollama then produced an identical pack, and the caller could not tell "ranking is
-thinner" from "the whole inference stack is down."
-
-Re-verified live (`AION_OLLAMA_URL=http://127.0.0.1:9`, throwaway Neo4j, real episode
-seeded): `metadata.degraded` came back exactly
-`[{"stage":"cues","reason":"model_error"},{"stage":"embed","reason":"model_error"}]`.
+**What the caller sees.** A `MemoryPack` with `metadata.degraded` holding an `embed` entry.
+A dead embedder and a failed cue call are separate rungs and read separately, which is what lets
+a caller tell "ranking is thinner" from "the model leg is down". With no key as well, both
+entries are present: `[{stage: "cues", reason: "unavailable"}, {stage: "embed", reason:
+"model_error"}]`.
 
 **Diagnose.** `aion doctor`'s `ollama-round-trip` check. Live, both log lines above fire
 in the same request. `aion last` prints two `degraded` lines.
@@ -81,52 +77,42 @@ in the same request. `aion last` prints two `degraded` lines.
 
 ### Full Ollama outage: reflection
 
-**Trigger.** Same outage, on the write path. Intake makes one embedding call, and it makes
-it after the write transaction has already committed (`intake.ts:291`, the `attachVectors`
-call).
+**Trigger.** Same outage, on the write path.
 
-**What happens.** Nothing happens to the experience. `projectEpisodeInTransaction` commits
-the `Episode`, its `Turn` nodes, and every backbone edge with no `content_vec` property at
-all, run from the publication's graph-apply phase
-(`reflection/application/experience-store.ts:126-168`, called from `applyGraph` at
-`reflection/application/intake-publication.ts:396`). `enqueueSourceWork`, inside the
-publication's `acknowledgeSqlite` phase, inserts the integrate job
-(`reflection/application/intake-publication.ts:481`), and `notifyEnqueued` wakes the worker
-(`intake.ts:113-127`, called at `intake.ts:329`). Only then does `attachVectors` embed
-(`intake.ts:291`). The call throws, is caught inside `attachVectors` itself, logged as
-`content vectors deferred; the episode is stored and queued`, and intake returns normally
-(`intake.ts:199-211`). A `:Memory` node without `content_vec` is itself the pending marker;
-there is no flag property to keep in sync with it
-(`packages/core/src/infrastructure/graph/pending-vectors.ts`). The older `storeEpisode` path
-in `experience-store.ts` still exists. Only `aion replay` uses it now, not live intake.
+**What happens.** Nothing at all happens to the intake call. Intake makes no embedding call:
+`projectEpisodeInTransaction` commits the `Episode`, its `Turn` nodes and every backbone edge
+with no `content_vec` property, and the acknowledgment writes three queue rows, one of them the
+`attach_vectors` job that owes the embedding
+(`reflection/application/intake-queue.ts`). A `:Memory` node without `content_vec` is itself the
+pending marker; there is no flag property to keep in sync with it
+(`packages/core/src/infrastructure/graph/pending-vectors.ts`).
 
-**What the caller sees.** The ordinary ack, `{episode_id, queued: true}`. No MCP error.
-`ReflectionNotStoredError` no longer has an `embed` stage at all: the only way intake can
-refuse is an unreachable graph.
+The outage lands on that queue row instead. The worker claims it, the embed call fails, and the
+job goes back on its ordinary backoff with its attempts counted, the same as any other failure.
 
-Until the backfill runs, the episode is reachable by BM25, entity resolution, recency, and
-traversal, and invisible to vector search, the same shape as the recall-side outage above,
-and for the same reason.
+**What the caller sees.** The ordinary ack, `{episode_id, queued: true}`, and no wait on the
+embedding service at all. `ReflectionNotStoredError` has no `embed` stage: the only way intake
+can refuse is an unreachable graph.
 
-**Diagnose.** `aion doctor`'s `ollama-round-trip` check. Live, the warn line above names the
-episode id and how many nodes are waiting. `findPendingVectorNodes(driver, limit)` returns
-the outstanding set directly.
+Until the row runs, the episode is reachable by BM25, entity resolution, recency and traversal,
+and invisible to vector search, the same shape as the recall-side outage above and for the same
+reason.
 
-**Recovers.** Automatically, once Ollama answers. `attachContentVectors` over
-`findPendingVectorNodes` is the backfill (`reflection/application/vectors.ts`); the
-reflection worker runs it in its startup drain (P3) and `vector_backfill` schedules it as a
-maintenance operation (P5). Re-running it over already-vectorized nodes is a no-op, so a
-partial drain resumes.
+**Diagnose.** `aion doctor`'s `ollama-round-trip` check. `aion queue ls` shows the
+`attach_vectors` rows and their last error. `findPendingVectorNodes(driver, limit)` returns the
+outstanding set directly.
 
-Verified against a throwaway Neo4j plus an Ollama pointed at the discard port
-(`reflection/application/intake-vectors.int.test.ts`, 9/9 pass): the episode, both turns,
-`PARTICIPATES_IN`, and the turn `FOLLOWS` chain all present, the queue row present, the
-enqueue callback fired, and `content_vec` absent on all three nodes.
-`findPendingVectorNodes` then returned exactly those three ids, and `attachContentVectors`
-against live Ollama filled all three at the configured dimension (1024,
-`snowflake-arctic-embed2`). A second pass wrote the same vectors and left the pending set
-empty. The failing embed call itself costs 12ms (`TypeError: fetch failed`), measured
-against `http://127.0.0.1:9`.
+**Recovers.** Automatically, once Ollama answers. Three paths run the same operation: the queued
+job for one source, the reflection worker's startup drain over the whole backlog, and the
+`vector_backfill` maintenance operation. Re-running any of them over already-vectorized nodes is
+a no-op, so a partial drain resumes.
+
+Verified against a throwaway Neo4j
+(`reflection/application/intake-vectors.int.test.ts`): the episode, both turns,
+`PARTICIPATES_IN` and the turn `FOLLOWS` chain all present the moment the call returns, all three
+queue rows present, the enqueue callback fired, and `content_vec` absent on all three nodes.
+`attachSourceVectors` against live Ollama then filled all three at the configured dimension
+(1024, `snowflake-arctic-embed2`), and a second run found nothing left to do.
 
 ### Anthropic outage, on the keyed profile
 
@@ -166,48 +152,34 @@ the same routing line, and `aion queue ls` shows the backlog the outage is build
 episodes that failed while it was open. Nothing is lost: every episode was stored before its
 enrichment was attempted.
 
-### Cue extraction pinned local
+### No API key set
 
-`AION_CUE_PROVIDER=ollama` keeps cue generation on the host model while reflection stays
-on Anthropic. Status reports the cue route as `pinned-local`; embeddings already run locally.
-Hooks remain enabled because their eligibility reads the reflect route.
+**Trigger.** `AION_ANTHROPIC_API_KEY` is empty or unset. There is no second route: generation
+runs on the Anthropic model or it waits.
 
-The pin removes all API charges for the `cues` surface. It does not remove local generation
-latency or embedding work. A cache hit avoids the cue call on either route.
+**What happens.** Capture, embedding, the graph and the archive are untouched. Every `generate`
+raises `GenerationUnavailableError` before it reaches the network
+(`packages/core/src/infrastructure/providers/role-provider.ts`), and each caller answers it in
+its own way. Recall degrades to the raw-query path it already had and records
+`{stage: "cues", reason: "unavailable"}`. The reflection worker releases the job **without
+spending an attempt**: burning three attempts against a missing key would leave the queue holding
+exhausted rows a later key could never revive.
 
-The operational pin was applied on 2026-09-06. The shipped default remains `auto`.
-The before/after day of `aion costs` and the recall-quality comparison are pending after
-metering and hardening merge, so no dollar-per-day saving or pack-quality result is measured
-yet. Earlier local cue measurements were 527-937ms warm and 2288ms cold; those numbers do not
-establish the pin's quality or its latency under current load.
+Claiming then narrows rather than stops. The enrichment rows are all about to refuse for the same
+reason, so the worker leaves them for a cooldown and keeps claiming `attach_vectors` rows, which
+reach the local embedder and have no reason to wait. A keyless substrate goes on vectoring
+everything it captures.
 
-Compare the recall batteries and cue latency against the 2000ms evaluation target before
-changing the default. `AION_CUE_BUDGET_MS` remains the separate 8000ms hang guard.
+**What the caller sees.** Ordinary answers with thinner ranking, and a queue that is not
+draining. Nothing fails, and nothing runs on a smaller model instead.
 
-### A role pinned to Anthropic with no key
+**Diagnose.** One warn line at boot. `aion status` prints `routing cue=queued reflect=queued`
+and a banner saying what still works. `aion doctor` says `generation queued: no
+AION_ANTHROPIC_API_KEY set` under `ollama-round-trip`, and `hooks-route` says captures are
+stored and queued. `aion queue ls` shows the depth.
 
-**Trigger.** `AION_CUE_PROVIDER` or `AION_REFLECT_PROVIDER` is set to `anthropic` and
-`AION_ANTHROPIC_API_KEY` is empty or unset.
-
-**What happens.** The role routes local rather than failing the boot. `resolveRole` returns the
-role's Ollama model with `reason: 'pin-without-key'`
-(`packages/core/src/infrastructure/providers/routing.ts:66-68`), and boot logs one warn line per
-such role naming the model it runs on instead (`packages/mcp/src/bootstrap.ts:225-229`). Routing
-local is the safe direction of the mistake: nothing leaves the machine. The consequences follow
-the local profile everywhere else, hook capture included, because every rule reads the resolved
-route rather than the key.
-
-**What the caller sees.** Ordinary answers, on the local models. Narratives are written at the
-local scale (40 source episodes, 6 sentences) rather than the keyed one, and hook-origin
-reflections are refused, since reflection resolved local.
-
-**Diagnose.** The boot warn line above. `aion status` prints
-`<role> is pinned to anthropic with no key set, so it runs on <model>`
-(`packages/cli/src/snapshot.ts`), and `aion doctor`'s `hooks-route` check reports the route when
-hooks are installed against a locally routed reflect role.
-
-**Recovers.** Not automatically; nothing is broken. Set the key or drop the pin, then restart
-the service: routing is resolved once, at boot.
+**Recovers.** Not automatically; nothing is broken. Put the key in `.env` and restart the
+service: routing is resolved once, at boot, and the queued work drains.
 
 ### Neo4j down: recall
 
@@ -447,8 +419,8 @@ Every knob below is `AION_*`-overridable; the catalog is
 | Knob | Default | Buys (raising it) | Costs (raising it) | Vs. spec |
 |---|---|---|---|---|
 | `AION_CUE_CACHE_TTL_MINUTES` (`recall.cueCacheTtlMinutes`) | 30 | Reuses successful cue results longer and avoids repeated generation calls. `0` disables storage and reuse. | Results can persist longer after model behavior changes. Entries expire from insertion time; the 256-entry FIFO limit still bounds memory. | Only this process shares the cache. Full request content and route identify an entry; failed extractions are not cached. |
+| `AION_ANTHROPIC_DAILY_CEILING_USD` (`anthropic.dailyCeilingUsd`) | 5 | Raised, more generation may be committed in one UTC day before both routes start refusing. Every dispatch holds its conservative maximum against this before it is sent and settles at what it cost, so what it bounds is committed spend and not reported spend. | Lowered under a day's ordinary work, reflection queues and recall serves raw-query packs for the rest of the day; the substrate keeps capturing, embedding and reading the graph either way. Refusal is the missing-key shape, so nothing burns attempts against it. | New with the batch producer. The whole 2026-09-13 build round spent $5.12 across every chunk, so five is a runaway backstop rather than a working budget. A model the price table does not carry cannot be held against it; those calls are dispatched and counted separately by `aion costs`. |
 | `AION_ANTHROPIC_PROMPT_CACHE` (`anthropic.promptCache`) | true | Repeated eligible system prefixes use five-minute provider caching at the read rate. | Cache creation costs 1.25x ordinary input. Short prefixes do not cache; per-call schemas in `system_prompt` mode can prevent reuse. | Inert on every production surface today under shipped Haiku 4.5 prompts and defaults. [Live measurements](operations.md#prompt-cache-measurements) verified reuse with long synthetic controls in both modes. `false` disables the marker. |
-| `AION_CUE_PROVIDER` (`routing.cue`) | `auto` | `ollama` reports `pinned-local` and removes all cue generation API charges while keyed reflection and hooks continue. | Local model latency and any pack-quality difference. The comparison is pending; earlier warm/cold timings are not a current-load measurement. | The operational pin is local; the shipped default stays `auto`. |
 | `AION_CUE_BUDGET_MS` (`recall.cueBudgetMs`) | 8000 | Headroom past a cold cue-model start (measured 2288ms cold vs. 527-937ms warm), so the hang guard stays a hang guard instead of firing on ordinary recalls. | A call that has actually hung blocks recall that much longer before the ladder degrades it. | PRD §14 pins 2000. Raised to 5000 in the original build, then to 8000 after a live gate rerun busted 2000 at a measured 2030ms. |
 | `AION_EMBED_KEEP_ALIVE` (`ollama.embedKeepAlive`) | -1 | Raised to a positive number of seconds, Ollama gives the embed model's 1.2GB of unified memory back after that idle window instead of holding it resident forever. | Every reload after the window lands inside recall's embed stage, which the harness hooks await synchronously: measured against warm embeds under a second, reloads added 1 to 16 seconds, and the worst carried a session-start hook past its 10s timeout. Boot softens the first hit either way: `warmEmbedModel` (`packages/mcp/src/bootstrap.ts`) embeds one probe at service start, fail-open, so a cold Ollama pays its load there rather than on the first recall. | New; no spec pin. |
 | `AION_RECALL_MAX_EPISODES` (`recall.maxEpisodes`) | 20 | Room for a graph-traversal item to survive fusion against near-tie vector hits. The checkpoint's one traversal-reached item ranked 13th: absent from the pack at 5, 8, and 12, present at 20. | A bigger `episodes` bucket before the token budget trims it; `episodes` is the pack's largest bucket. | Whitepaper Appendix E pins 5. Checked live at 5/8/12/20; only 20 passed. |
@@ -462,7 +434,7 @@ Every knob below is `AION_*`-overridable; the catalog is
 | `activation.maxNodesVisited` / `.hubThreshold` | 500 / 10 | Bounds worst-case traversal cost; the hub threshold keeps one high-degree node from flooding the frontier. | A legitimate multi-hop path through a dense area can be cut before it is explored. | Not flagged as a deviation. |
 | Other bucket caps: `maxFacts` / `maxNarratives` / `maxIntentions` / `maxPreferences` / `maxResonant` / `vectorLimit` | 15 / 5 / 3 / 3 / 5 / 5 | Same shape as `maxEpisodes`: each decides what survives fusion for its bucket. | Same cost as `maxEpisodes`, unverified at other values: only the episode cap has a live pass/fail checkpoint behind it. `resonant` gained its producer with the second recall pass; `preferences` still has none, so that one cap is inert today. | Not flagged as a deviation. |
 | `AION_RECALL_INTENTIONS` / `AION_RECALL_INTENTION_SITUATION_FLOOR` | true / 0.5 | The kill switch on standing intentions coming back on their own trigger, and the cosine a situation trigger has to clear against the centroid the second pass built. Off restores the pack exactly as it was before intentions had triggers. | The floor is borrowed from `contextSearchThreshold` rather than measured: a situation trigger reads an episode's content vector against a mean of context vectors, which is not the comparison that number was derived on. Too low and every open intention resonates with everything; the entity and temporal triggers are unaffected either way. | New; no spec pin, and the floor is a starting value to re-derive. |
-| `AION_WORKER_COUNT` (`operational.workerCount`) | 1 | Concurrent reflection claim-and-run slots on one shared queue claimant, so more than one episode enriches at once. | Every worker still calls the same host Ollama for its model stages (`AION_REFLECT_MODEL`), and nothing prioritizes between them; see the contention note below. | PRD §7 pins 1. |
+| `AION_WORKER_COUNT` (`operational.workerCount`) | 1 | Concurrent reflection claim-and-run slots on one shared queue claimant, so more than one episode enriches at once. | Every worker calls the same remote model for its stages, and nothing prioritizes between them; see the contention note below. | PRD §7 pins 1. |
 | `AION_LANE_SESSION_ARRIVAL_MAX` (`lanes.sessionArrivalMax`) | 10 | Head-room for a legitimate session-end flush of a long conversation, which arrives as several episodes at once and must stay interactive. | Raised far enough, a client flooding from one session keeps priority for longer before the backstop sees it. The measured flood ran 51 arrivals per session per minute. | New in the fix round. |
 | `AION_LANE_GLOBAL_ARRIVAL_MAX` (`lanes.globalArrivalMax`) | 120 | Arrivals across every session inside the window before the substrate counts as hot. Twelve busy sessions' worth. | Below ordinary multi-agent load, every session drops to the hot allowance for no reason. | New in the fix round. |
 | `AION_LANE_HOT_SESSION_ARRIVAL_MAX` (`lanes.hotSessionArrivalMax`) | 3 | The per-session allowance while the substrate is hot; what stops enough fresh sessions from reproducing the flood with every per-session counter reading green. | At 1, a single retry during someone else's flood costs a legitimate session its lane. | New in the fix round. |
@@ -473,7 +445,7 @@ Every knob below is `AION_*`-overridable; the catalog is
 | `AION_PROPOSAL_RESOLUTION` / `AION_RESOLUTION_BATCH` (`maintenance.proposalResolution`, `.resolutionBatch`) | true / 10 | Open proposals decided on their merits in the run that reads them, oldest first across both queues, instead of waiting for a person and then for the hygiene horizon. Each row costs two model calls and a handful of graph reads, so ten is an hour's modest spend. | A larger batch puts more of one window into model calls, and a wrong verdict reaches the graph an hour after the row was filed rather than a fortnight. Off, both queues wait for `aion proposals`. | New with the autonomous queues. Nothing about it is one-way: every verdict is ledgered under `introspection:resolution:` with both passes' reasons, and `aion unsupersede`, `aion unmerge`, and `aion proposals reopen` reverse a resolver decision the same way they reverse a person's. |
 | `AION_REFLECTION_MIN_EXTRACTION_CHARS` (`reflection.minExtractionChars`) | 64 | More subagent-stop progress lines (a short status line, a small tool result) skip extraction and its model call, since a capture under the floor is stored and embedded but not read by the generating stages. Bounds one capture class only: an ordinary short turn, observation, or tool result is still extracted as before. | A subagent synthesis long enough to carry real structure, but still under the floor, is stored with no entities or cognitive nodes pulled out of it. | New; no spec pin. Unmeasured, a deliberately low starting value. |
 | `AION_REFLECTION_MAX_CONTRADICTION_JUDGMENTS` (`reflection.maxContradictionJudgments`) | 24 | Room for a full six-subject, three-neighbor supersession search (up to eighteen pairs) to finish in one run, with headroom for the keyed leg's own candidates on top, instead of starving on whichever subjects sort first in `text_norm` order. | More judge calls (up to two per pair under `unanimous`: the judgment and the second pass arguing the other side) spent per reflection run that reaches this stage. | Raised from 8, which starved a correction sorting past the fourth subject. Measured on the keyed route (claude-haiku-4-5): single judgments 1.5-1.7s, a full 24-judgment run extrapolates to roughly 35-40s, inside both the per-call 60s stage-timeout guard and the 600s stale-claim reclaim window. |
-| `AION_MAINTENANCE_DESCRIPTION_REFRESH_BATCH` (`maintenance.descriptionRefreshBatch`) | 10 | More stale entity glosses refresh in one maintenance pass instead of trickling in three at a time; a measured substrate already had 23 qualified and waiting. | One generation call plus one embed per entity, so a bigger batch spends more of a tick's model budget rewriting stored text in place. | New; no spec pin. |
+| `AION_MAINTENANCE_DESCRIPTION_REFRESH_BATCH` (`maintenance.descriptionRefreshBatch`) | 10 | More stale entity glosses are nominated onto the batch lane in one maintenance pass instead of trickling in three at a time; a measured substrate already had 23 qualified and waiting. | One batched generation plus one embed per entity, at half the ordinary rate and settled on a later tick, so a bigger batch spends more of the day's ceiling rewriting stored text in place. | New; no spec pin. |
 | `AION_MAINTENANCE_DESCRIPTION_REFRESH_MENTION_GROWTH` (`maintenance.descriptionRefreshMentionGrowth`) | 2 | Fewer stale glosses need refreshing on a given pass, since a description stays fresh until it has accumulated the higher mention count a bigger value would require. | A gloss that gained real traffic since its last write keeps reading stale for longer before it qualifies for a rewrite. | New; no spec pin. Lowered from 5, which left a slow-moving entity's gloss stale indefinitely; 2 is low enough that a slow-moving entity still qualifies within a few sessions. |
 | `AION_MAINTENANCE_NARRATIVE_EDGE_REPAIR_BATCH` (`maintenance.narrativeEdgeRepairBatch`) | 500 | Clears more of the backlog of `SUMMARIZED_BY` edges left pointing at an already-superseded narrative per run (measured 90.6% of 3,043 stored edges, about 2,757, against 285 live edges doing the work); at 500 an hour the backlog drains in about six runs. | One relationship scan plus two property writes per edge in a single run, no model call and no node write, so a larger batch spends graph write volume rather than model spend. | New; no spec pin. Higher than the 10-session `narrativeCleanupBatch` beside it because the per-edge work is cheaper and the backlog is a multiple of the narrative count. |
 | `AION_SESSION_IDLE_EXPIRY_MINUTES` (`operational.sessionIdleExpiryMinutes`) | 30 | How long an MCP transport session may sit with no request before `SessionIdleSweeper` closes it, the backstop for a `client.close()` that never sends DELETE (EX-32). | Lowered, a client that legitimately pauses (an editor idle between edits) loses its session and its next call gets `unknown session` instead of resuming one. | New in the fix round. |
@@ -557,8 +529,25 @@ server-side session in the map until the 512-session cap evicts it. Neither lose
 grows unbounded.
 
 **A pending-vector node still has no expiry of its own.** Nothing in the graph ages one out:
-it stays vectorless until a drain reaches it. That is deliberate (the marker is the absence
-of the property, so there is no flag to go stale). The drain is no longer only the worker's
-startup pass: the `vector_backfill` operation reads the same parity the doctor reports and
-embeds what it finds, and a parity under 0.8 on a substrate of at least 20 vector-bearing
-nodes is a tier-1 condition that preempts the routine catalog.
+it stays vectorless until something embeds it. That is deliberate (the marker is the absence
+of the property, so there is no flag to go stale). Three things clear it: the `attach_vectors`
+queue row every acceptance writes, the worker's startup drain over the whole backlog, and the
+`vector_backfill` operation, which reads the same parity the doctor reports. A parity under 0.8
+on a substrate of at least 20 vector-bearing nodes is a tier-1 condition that preempts the
+routine catalog.
+
+**Batched generation carries one surface.** The Message Batches path is built, durable and tested
+(`docs/operations.md#batched-generation`), the `batch_settlement` operation pumps it, and
+`description_freshness` produces into it: entity glosses that fell behind their mentions are
+re-synthesized at half price, revalidated against the entity before they are applied, and applied
+through the same guarded write the inline call used. Every other generation still runs on ordinary
+Messages calls at full price. The stages whose judgments would also belong there are being
+restored, and each registers a handler when its judgment moves off the hot path.
+
+**A spent daily ceiling looks like a substrate with no key.** `AION_ANTHROPIC_DAILY_CEILING_USD`
+($5) is held against before every dispatch, by both routes, from one durable book. When a day
+cannot cover the next request, background work goes back on the queue without spending an attempt,
+batch submissions are not sent and their work stays queued, and recall answers on the raw query
+text with `degraded: cues/unavailable`. The substrate keeps capturing, embedding, reading the graph
+and serving what it already holds. Nothing retries against it: the next UTC day clears it, and so
+does raising the number. `aion costs` prints the day against the ceiling.

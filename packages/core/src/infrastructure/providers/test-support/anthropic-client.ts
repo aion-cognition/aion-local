@@ -1,7 +1,7 @@
 import { requestAnthropicJson, type SchemaDelivery } from '../anthropic-provider.js';
 import type { StructuredRequest } from '../types.js';
 
-export { jsonSpans, parseJsonPayload } from '../anthropic-provider.js';
+export { jsonSpans, parseJsonPayload } from '../anthropic-json.js';
 export type { SchemaDelivery } from '../anthropic-provider.js';
 
 export type AnthropicClientOptions = {

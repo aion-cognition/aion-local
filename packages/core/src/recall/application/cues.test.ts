@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BARE_QUERY_FIXTURES, SUMMARY_TONE_FIXTURES, SUMMARY_TONE_QUERY } from './cues.fixtures.js';
 import { CueCache, extractCues, type CueExtractionDeps } from './cues.js';
 import { openLogger } from '../../infrastructure/logging/logger.js';
+import { GenerationUnavailableError } from '../../infrastructure/providers/errors.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 
 const MODEL = 'qwen3:1.7b';
@@ -240,6 +241,33 @@ describe('degradation ladder', () => {
     });
     expect(DegradationSchema.parse(result.degradation)).toEqual(result.degradation);
     expect(CueSchema.parse(result.cues[0])).toEqual(result.cues[0]);
+  });
+
+  it('degrades to the raw query when there is no key, and says which kind of pack it is', async () => {
+    generate.mockRejectedValue(new GenerationUnavailableError('cues'));
+
+    const result = await extractCues(deps, { query: 'why did the migration deadlock' });
+
+    expect(result.degradation).toEqual({ stage: 'cues', reason: 'unavailable' });
+    expect(result.cues).toEqual([
+      { text: 'why did the migration deadlock', source: 'raw_query', weight: 3 },
+    ]);
+  });
+
+  // A substrate with no key is the configuration, not an incident. Warning on every recall for
+  // the life of the install would teach an operator to ignore the line.
+  it('reports a missing key at debug rather than as a warning', async () => {
+    generate.mockRejectedValue(new GenerationUnavailableError('cues'));
+    const warn = vi.spyOn(deps.logger, 'warn');
+    const debug = vi.spyOn(deps.logger, 'debug');
+
+    await extractCues(deps, { query: 'why did the migration deadlock' });
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(debug).toHaveBeenCalledWith(
+      { reason: 'unavailable' },
+      'cue extraction degraded to the raw query',
+    );
   });
 
   it('logs the provider error, so an outage reads differently from a rejection', async () => {

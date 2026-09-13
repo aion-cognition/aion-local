@@ -2,7 +2,7 @@ import type { Driver } from 'neo4j-driver';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { ReflectionIntakeDeps } from './intake.js';
 import { LaneAssigner } from './lanes.js';
@@ -10,7 +10,6 @@ import { recordLifecycleEvent } from './lifecycle-events.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { SYSTEM_SESSION_IDENTITY } from '../../infrastructure/graph/sessions.js';
 import { openLogger } from '../../infrastructure/logging/logger.js';
-import type { Vector } from '../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { listExperiencesAfter } from '../../infrastructure/sqlite/experience-archive.js';
 import { listReflectionJobs } from '../../infrastructure/sqlite/reflection-queue.js';
@@ -21,7 +20,6 @@ import { FakeGraph } from '../test-support/fake-graph.fixture.js';
 const MEMBER_ID = 'member-1';
 const WORKSPACE_ID = 'workspace-1';
 const SUBSTRATE_ID = 'substrate-1';
-const EMBED_DIMENSION = 8;
 
 const BIRTH_TEXT =
   'substrate initialized: 7 migrations applied, backbone created for Ryan Huber, profile full';
@@ -31,10 +29,6 @@ let graph: FakeGraph;
 let db: SqliteHandle;
 let dataDir: string;
 let deps: ReflectionIntakeDeps;
-
-function fakeVectors(texts: readonly string[]): Vector[] {
-  return texts.map(() => Array.from({ length: EMBED_DIMENSION }, () => 0.5));
-}
 
 beforeEach(() => {
   graph = new FakeGraph();
@@ -49,16 +43,11 @@ beforeEach(() => {
     driver: graph.driver,
     db,
     sessions: new SessionManager(graph.driver, { memberId: MEMBER_ID, workspaceId: WORKSPACE_ID }),
-    provider: {
-      embed: vi.fn((texts: readonly string[]) => Promise.resolve(fakeVectors(texts))),
-      generate: vi.fn(() => Promise.reject(new Error('a lifecycle event never generates'))),
-    },
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
     publications: directIntakePublisher(graph.driver, db),
-    acceptHookCapture: true,
   };
 });
 
@@ -101,7 +90,11 @@ describe('recording a lifecycle event', () => {
 
     // The integrate job and the source-index work the acceptance owes, both in the bulk lane.
     const jobs = listReflectionJobs(db);
-    expect(jobs.map((job) => job.jobType).sort()).toEqual(['integrate', 'source_index']);
+    expect(jobs.map((job) => job.jobType).sort()).toEqual([
+      'attach_vectors',
+      'integrate',
+      'source_index',
+    ]);
     expect(jobs.every((job) => job.lane === 'bulk')).toBe(true);
   });
 
@@ -120,8 +113,8 @@ describe('recording a lifecycle event', () => {
   it('chains every event in the one session', async () => {
     await recordLifecycleEvent(deps, { event: 'substrate_initialized', text: BIRTH_TEXT });
     await recordLifecycleEvent(deps, {
-      event: 'models_reconciled',
-      text: 'boot unloaded qwen3:8b from memory',
+      event: 'replay_completed',
+      text: 'replay reimported 12 sources',
     });
 
     const rows = listExperiencesAfter(db, undefined, 10);

@@ -121,20 +121,11 @@ beforeAll(async () => {
       memberId: backbone.member.id,
       workspaceId: backbone.workspace.id,
     }),
-    provider: {
-      embed: async () => {
-        throw new Error('no embedding');
-      },
-      generate: async () => {
-        throw new Error('no generation at intake');
-      },
-    },
     publications,
     logger,
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
-    acceptHookCapture: true,
   };
   chunks = {
     driver,

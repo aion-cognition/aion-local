@@ -219,7 +219,7 @@ export class SemanticRelationshipStage implements ReflectionStage {
   readonly #maxRelationships: number;
 
   constructor(options: SemanticRelationshipStageOptions = {}) {
-    this.#model = options.model ?? DEFAULTS.models.reflect;
+    this.#model = options.model ?? DEFAULTS.anthropic.model;
     this.#timeoutMs = options.timeoutMs ?? DEFAULTS.reflection.stageTimeoutMs;
     this.#maxRelationships = options.maxRelationships ?? DEFAULTS.reflection.maxRelationships;
   }

@@ -74,27 +74,11 @@ const SNAPSHOT: StatsSnapshot = {
       routes: [
         {
           role: 'cue',
-          provider: 'ollama',
+          provider: 'anthropic',
           calls: 12,
           failed: 0,
           failureRate: 0,
           meanDurationMs: 900,
-        },
-        {
-          role: 'cue',
-          provider: 'anthropic',
-          calls: 0,
-          failed: 0,
-          failureRate: undefined,
-          meanDurationMs: undefined,
-        },
-        {
-          role: 'reflect',
-          provider: 'ollama',
-          calls: 0,
-          failed: 0,
-          failureRate: undefined,
-          meanDurationMs: undefined,
         },
         {
           role: 'reflect',
@@ -259,18 +243,34 @@ describe('renderStats', () => {
 
     const text = lines.join('\n');
     expect(text).toMatch(/all routes\s+20\s+10\.0% failed/);
-    expect(text).toMatch(/cue via ollama\s+12\s+0\.0% failed\s+~0\.9s\/call/);
+    expect(text).toMatch(/cue via anthropic\s+12\s+0\.0% failed\s+~0\.9s\/call/);
     expect(text).toMatch(/reflect via anthropic\s+8\s+25\.0% failed\s+~2\.4s\/call/);
   });
 
   it('says a route nothing has called was never called, rather than reporting it clean', () => {
     const { lines, write } = collector();
+    const untouched: StatsSnapshot = {
+      ...SNAPSHOT,
+      extras: {
+        ...SNAPSHOT.extras,
+        generation: {
+          ...SNAPSHOT.extras.generation,
+          routes: SNAPSHOT.extras.generation.routes.map((route) => ({
+            ...route,
+            calls: 0,
+            failed: 0,
+            failureRate: undefined,
+            meanDurationMs: undefined,
+          })),
+        },
+      },
+    };
 
-    renderStats(SNAPSHOT, DEFAULTS, write, NOW);
+    renderStats(untouched, DEFAULTS, write, NOW);
 
     const text = lines.join('\n');
     expect(text).toMatch(/cue via anthropic\s+0\s+never called/);
-    expect(text).toMatch(/reflect via ollama\s+0\s+never called/);
+    expect(text).toMatch(/reflect via anthropic\s+0\s+never called/);
   });
 
   it('says a substrate that has generated nothing has no reading yet', () => {

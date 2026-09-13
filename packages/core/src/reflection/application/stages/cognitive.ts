@@ -196,7 +196,7 @@ export class CognitiveExtractionStage implements ReflectionStage {
 
   constructor(options: Partial<CognitiveExtractionStageOptions> = {}) {
     this.#options = {
-      model: DEFAULTS.models.reflect,
+      model: DEFAULTS.anthropic.model,
       timeoutMs: DEFAULTS.reflection.stageTimeoutMs,
       maxNodes: DEFAULTS.reflection.maxCognitiveNodes,
       keyedCloseMode: DEFAULT_KEYED_CLOSE_MODE,

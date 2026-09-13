@@ -51,7 +51,7 @@ import { healthFixture } from '../../domain/test-support/health.fixture.js';
  */
 
 const KEY = (process.env.AION_ANTHROPIC_API_KEY ?? '').trim();
-const ABSENT = KEY === '' || process.env.TEST_AION_GENERATION === 'local';
+const ABSENT = KEY === '';
 
 const EMBED_DIMENSION = 8;
 const NOW = new Date('2026-09-13T14:00:00.000Z');

@@ -213,7 +213,7 @@ export function claimDedupOperation(): IntrospectionOperation {
       );
       const recent = await findUnscannedRecentClaims(ctx.driver, scanned, scanLimit);
       const callOptions: ClaimDedupCallOptions = {
-        model: ctx.config.models.reflect,
+        model: ctx.config.anthropic.model,
         timeoutMs: ctx.config.reflection.stageTimeoutMs,
         signal: ctx.signal,
       };

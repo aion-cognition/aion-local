@@ -107,7 +107,7 @@ export class EntityExtractionStage implements ReflectionStage {
 
   constructor(options: Partial<EntityStageOptions> = {}) {
     this.#options = {
-      model: DEFAULTS.models.reflect,
+      model: DEFAULTS.anthropic.model,
       timeoutMs: DEFAULTS.reflection.stageTimeoutMs,
       maxEntities: DEFAULTS.reflection.maxEntities,
       minExtractionChars: DEFAULTS.reflection.minExtractionChars,

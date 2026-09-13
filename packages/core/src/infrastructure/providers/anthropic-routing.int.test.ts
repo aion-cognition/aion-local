@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { GenerationUnavailableError } from './errors.js';
 import { ProviderRouter, type GenerationEvent } from './role-provider.js';
 import { resolveProviderRouting } from './routing.js';
 import {
@@ -115,14 +116,11 @@ beforeAll(async () => {
       memberId: backbone.member.id,
       workspaceId: backbone.workspace.id,
     }),
-    // Intake embeds and never generates, so this is the local model under either route.
-    provider: router.forRole('reflect'),
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
     publications: directIntakePublisher(harness.driver, db),
-    acceptHookCapture: true,
   };
 
   episodeId = (await handleReflection(intake, PAYLOAD, { identity: 'anthropic-routing' }))
@@ -139,11 +137,16 @@ describe.skipIf(API_KEY === '')('enrichment on the Anthropic route', () => {
   it('resolves both generation roles to the configured Anthropic model', () => {
     const routing = resolveProviderRouting(config(API_KEY));
 
-    expect(routing.roles.cue).toMatchObject({ provider: 'anthropic', reason: 'key' });
-    expect(routing.roles.reflect).toMatchObject({
-      provider: 'anthropic',
+    expect(routing.keyPresent).toBe(true);
+    expect(routing.roles.cue).toEqual({
+      role: 'cue',
       model: DEFAULTS.anthropic.model,
-      reason: 'key',
+      available: true,
+    });
+    expect(routing.roles.reflect).toEqual({
+      role: 'reflect',
+      model: DEFAULTS.anthropic.model,
+      available: true,
     });
   });
 
@@ -187,39 +190,49 @@ describe.skipIf(API_KEY === '')('enrichment on the Anthropic route', () => {
 });
 
 describe('the same router with the key taken away', () => {
-  it('resolves every role back to its local model without touching the disk', () => {
+  it('marks every role unavailable rather than routing it somewhere else', () => {
     const routing = resolveProviderRouting(config(''));
 
-    expect(routing.roles.cue).toMatchObject({ provider: 'ollama', model: DEFAULTS.models.cue });
-    expect(routing.roles.reflect).toMatchObject({
-      provider: 'ollama',
-      model: DEFAULTS.models.reflect,
+    expect(routing.keyPresent).toBe(false);
+    expect(routing.roles.cue).toEqual({
+      role: 'cue',
+      model: DEFAULTS.anthropic.model,
+      available: false,
+    });
+    expect(routing.roles.reflect).toEqual({
+      role: 'reflect',
+      model: DEFAULTS.anthropic.model,
+      available: false,
     });
   });
 
-  it('answers a live generation from Ollama, and the telemetry says so', async () => {
-    const local = newRouter('');
+  it('refuses a generation by name, and counts it as no generation at all', async () => {
+    const keyless = newRouter('');
     const before = events.length;
 
-    const answer = await local.forRole('cue').generate({
-      model: DEFAULTS.models.cue,
-      messages: [{ role: 'user', content: 'Answer with {"ok": true} and nothing else.' }],
-      schema: {
-        type: 'object',
-        properties: { ok: { type: 'boolean' } },
-        required: ['ok'],
-      },
-      think: false,
-    });
-
-    expect(answer).toEqual({ ok: true });
-    expect(events.slice(before)).toEqual([
-      expect.objectContaining({
-        role: 'cue',
-        provider: 'ollama',
-        model: DEFAULTS.models.cue,
-        ok: true,
+    await expect(
+      keyless.forRole('cue').generate({
+        surface: 'cues',
+        model: DEFAULTS.anthropic.model,
+        messages: [{ role: 'user', content: 'Answer with {"ok": true} and nothing else.' }],
+        schema: {
+          type: 'object',
+          properties: { ok: { type: 'boolean' } },
+          required: ['ok'],
+        },
+        think: false,
       }),
-    ]);
+    ).rejects.toBeInstanceOf(GenerationUnavailableError);
+
+    // A substrate that never called anything has no failure rate.
+    expect(events.slice(before)).toEqual([]);
+  }, 180_000);
+
+  it('still embeds locally with no key, because the vector space is not a route', async () => {
+    const keyless = newRouter('');
+
+    const [vector] = await keyless.embedder.embed(['an episode summary']);
+
+    expect(vector).toHaveLength(DEFAULTS.models.embedDimension);
   }, 180_000);
 });

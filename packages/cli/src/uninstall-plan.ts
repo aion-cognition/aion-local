@@ -1,4 +1,4 @@
-import { localChatModels, resolveProviderRouting, type Config } from '@aion/core';
+import type { Config } from '@aion/core';
 import { existsSync, readFileSync } from 'node:fs';
 
 import type { InstallManifest } from './install-manifest.js';
@@ -45,13 +45,12 @@ export type UninstallPlanInput = {
 };
 
 /**
- * The tags this install pulled, read off config the way init reads it: the embed model, plus the
- * chat models routing still resolves locally. A role routed to Anthropic downloaded nothing, so
- * naming its tag would offer to remove a model something else on the machine put there.
+ * The tags this install pulled, read off config the way init reads it. One tag: generation runs
+ * remotely, so the embedder is the only model this install ever downloaded, and naming any other
+ * would offer to remove something else on the machine put there.
  */
 export function installedModelTags(config: Config): readonly string[] {
-  const routing = resolveProviderRouting(config);
-  return [...new Set([...localChatModels(routing), config.models.embed])];
+  return [config.models.embed];
 }
 
 /**

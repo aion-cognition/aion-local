@@ -1,9 +1,12 @@
-import { z } from 'zod';
-
+import { systemField } from './anthropic-cache.js';
+import { AnthropicRequestError, AnthropicResponseError } from './anthropic-errors.js';
+import { parseJsonPayload } from './anthropic-json.js';
 import { thinkingConfig } from './anthropic-thinking.js';
+import { readUsage } from './anthropic-usage.js';
+import { estimateApiCost } from './api-pricing.js';
 import { CircuitBreaker } from './circuit-breaker.js';
 import { abortRequested } from './deadline-signal.js';
-import { summarizeErrorBody } from './errors.js';
+import { conservativeTokens, type SpendingGuard } from './spending.js';
 import type {
   ApiCall,
   ChatMessage,
@@ -43,31 +46,7 @@ export type SchemaDelivery = 'output_config' | 'system_prompt';
 /** Stated once, so the service and the test-support client cannot drift onto different routes. */
 export const DEFAULT_SCHEMA_DELIVERY: SchemaDelivery = 'system_prompt';
 
-/** A non-2xx answer, after the retries. `status` is what a caller branches on. */
-export class AnthropicRequestError extends Error {
-  readonly status: number;
-
-  constructor(status: number, body: string) {
-    // Capped and flattened, never carried whole: this message reaches the logs through every
-    // `{ err }` call site, so a body that echoes the request would leak the episode text.
-    super(`Anthropic generate request failed: ${String(status)} ${summarizeErrorBody(body)}`);
-    this.name = 'AnthropicRequestError';
-    this.status = status;
-  }
-}
-
-/** A 2xx answer that carried no JSON value: no text block, or text no parse could read. */
-export class AnthropicResponseError extends Error {
-  constructor(detail: string) {
-    super(`Anthropic generate response ${detail}`);
-    this.name = 'AnthropicResponseError';
-  }
-}
-
 type AnthropicMessage = { role: 'user' | 'assistant'; content: string };
-
-/** The model wraps JSON in a fence often enough that stripping one is cheaper than a retry. */
-const FENCED_JSON = /^```(?:json)?\s*([\s\S]*?)\s*```$/;
 
 /** Anthropic takes system instructions outside the conversation messages. */
 function splitSystem(messages: readonly ChatMessage[]): {
@@ -129,91 +108,36 @@ function joinInstructions(base: string | undefined, extra: string): string {
   return `${base}\n\n${extra}`;
 }
 
-type JsonSpan = { readonly start: number; readonly end: number };
-
-/**
- * Every top-level `{...}` or `[...]` run in the text, in the order they appear. The scan
- * tracks string state and escapes, so a brace inside a string value never opens or closes a
- * span, and it reports only depth-zero runs, so a nested object is part of its parent rather
- * than a candidate of its own.
- */
-export function jsonSpans(text: string): readonly JsonSpan[] {
-  const spans: JsonSpan[] = [];
-  let depth = 0;
-  let start = -1;
-  let inString = false;
-  let escaped = false;
-
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (char === '\\') {
-        escaped = true;
-        continue;
-      }
-      if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-      continue;
-    }
-    if (char === '{' || char === '[') {
-      if (depth === 0) {
-        start = index;
-      }
-      depth += 1;
-      continue;
-    }
-    if (char !== '}' && char !== ']') {
-      continue;
-    }
-    if (depth === 0) {
-      continue;
-    }
-    depth -= 1;
-    if (depth === 0 && start >= 0) {
-      spans.push({ start, end: index + 1 });
-      start = -1;
-    }
-  }
-
-  return spans;
+/** Everything this request puts on the wire, which is what the input estimate is drawn from. */
+function promptChars(
+  instructions: string | undefined,
+  messages: readonly AnthropicMessage[],
+): number {
+  return messages.reduce(
+    (total, message) => total + message.content.length,
+    instructions?.length ?? 0,
+  );
 }
 
 /**
- * The whole reply when the whole reply is one JSON value, and otherwise the last complete
- * value in it.
+ * The Messages body a batched request carries as its `params`.
  *
- * The model sometimes answers twice: a fenced block, a line of second thoughts about its own
- * answer, then a corrected block. Requiring the reply to be one value fails outright on that
- * shape, and taking the first value hands the caller the draft the model itself rejected, which
- * is where the invalid enum values come from. The last complete value is the one it settled on.
+ * It is the system_prompt delivery the synchronous route defaults to, through the same three
+ * helpers, so a surface that moves onto the batch lane asks the model exactly what it asked
+ * before. What it leaves out is what a batch has no use for: no cache marker, since a batch of
+ * one request per entity shares no prefix inside the five-minute window, and no thinking budget,
+ * since every surface that batches its work sets `think: false`.
  */
-export function parseJsonPayload(text: string): unknown {
-  const trimmed = text.trim();
-  const fenced = FENCED_JSON.exec(trimmed);
-  try {
-    return JSON.parse(fenced?.[1] ?? trimmed) as unknown;
-  } catch {
-    // The single-value shape is the common one; anything else goes to the scan below.
-  }
-
-  for (const span of [...jsonSpans(text)].reverse()) {
-    try {
-      return JSON.parse(text.slice(span.start, span.end)) as unknown;
-    } catch {
-      continue;
-    }
-  }
-
-  throw new AnthropicResponseError('carried no complete JSON value');
+export function batchMessagesBody(req: StructuredRequest): Record<string, unknown> {
+  const { system, rest } = splitSystem(req.messages);
+  const instructions = joinInstructions(system, schemaInstruction(req.schema));
+  return {
+    model: req.model,
+    max_tokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
+    ...(req.temperature === undefined ? {} : { temperature: req.temperature }),
+    system: instructions,
+    messages: rest,
+  };
 }
 
 export type AnthropicRequestOptions = {
@@ -221,34 +145,22 @@ export type AnthropicRequestOptions = {
   readonly fetchImpl?: typeof fetch;
   readonly maxTokens?: number;
   readonly schemaDelivery?: SchemaDelivery;
+  /**
+   * Whether a prefix long enough to cache carries the marker. On by default; the marker is
+   * attached only where the rendered prefix reaches the API's floor, which today is no shipped
+   * surface (see `anthropic-cache.ts`).
+   */
   readonly promptCache?: boolean;
   /** Tokens a thinking call asks for. Clamped against the call's own `max_tokens` below. */
   readonly thinkingBudgetTokens?: number;
   readonly recordApiCall?: (call: ApiCall) => void;
+  /**
+   * The day's spending backstop, consulted before the request is sent. Absent leaves the route
+   * unbounded, which is what a caller composing a provider outside a substrate store gets.
+   */
+  readonly spending?: SpendingGuard;
   readonly now?: () => number;
 };
-
-const USAGE_SCHEMA = z.object({
-  input_tokens: z.number().int().nonnegative(),
-  output_tokens: z.number().int().nonnegative(),
-  cache_creation_input_tokens: z.number().int().nonnegative().default(0),
-  cache_read_input_tokens: z.number().int().nonnegative().default(0),
-  /**
-   * The reasoning share of `output_tokens`, never an addition to it.
-   *
-   * The API sends the breakdown on a thinking answer, `null` on answers that did not think, and
-   * nothing at all on others. All three are valid usage blocks, so all three are accepted here:
-   * refusing one of them threw away the input and output totals sitting beside it and billed the
-   * call as unknown.
-   *
-   * A breakdown that is not there leaves the share unknown rather than at zero. Zero is a fact
-   * about a call that reasoned and spent nothing on it, and a row asserting that would price and
-   * read the same as one the model actually reported.
-   */
-  output_tokens_details: z
-    .object({ thinking_tokens: z.number().int().nonnegative().optional() })
-    .nullish(),
-});
 
 function throttled(status: number): boolean {
   return status === 429 || status >= 500;
@@ -293,112 +205,125 @@ async function askAnthropic(
   const fetchImpl = options.fetchImpl ?? fetch;
   const { system, rest } = splitSystem(req.messages);
   const instructions = viaPrompt ? joinInstructions(system, schemaInstruction(req.schema)) : system;
-  // In system_prompt mode a per-call schema also changes the cached prefix.
-  const cachedInstructions =
-    options.promptCache === false || instructions === undefined
-      ? instructions
-      : [{ type: 'text', text: instructions, cache_control: { type: 'ephemeral' } }];
+  // In system_prompt mode the schema is part of the prefix, so it is stable per surface and
+  // volatile across surfaces. `anthropic-cache.ts` decides whether marking it does anything.
+  const cachedInstructions = systemField(instructions, options.promptCache !== false);
 
   const maxTokens = req.maxTokens ?? options.maxTokens ?? DEFAULT_MAX_TOKENS;
   const thinking = thinkingConfig(req.think, maxTokens, options.thinkingBudgetTokens);
 
-  let response!: Response;
-  let attempts = 1;
-  for (; ; attempts += 1) {
-    response = await fetchImpl(ANTHROPIC_API_URL, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': options.apiKey,
-        'anthropic-version': ANTHROPIC_VERSION,
-      },
-      body: JSON.stringify({
-        model: req.model,
-        // Sent only when the caller named one, and never beside thinking: the API accepts
-        // `temperature` at 1 alone once thinking is on, and answers "`temperature` may only be
-        // set to 1 when thinking is enabled" to anything else. A caller asking for both wants
-        // the reasoning, and the temperature it names is the repeatability it would have got
-        // from the default sampling anyway. The newer model families removed the parameter
-        // outright, which is the other reason it is sent only on request.
-        ...(req.temperature === undefined || thinking !== undefined
-          ? {}
-          : { temperature: req.temperature }),
-        max_tokens: maxTokens,
-        ...(thinking === undefined ? {} : { thinking }),
-        ...(cachedInstructions === undefined ? {} : { system: cachedInstructions }),
-        ...(viaPrompt
-          ? {}
-          : {
-              output_config: {
-                format: { type: 'json_schema', schema: closeObjectSchemas(req.schema) },
-              },
-            }),
-        messages: rest,
-      }),
-      ...(req.signal === undefined ? {} : { signal: req.signal }),
-    });
-    if (!throttled(response.status) || attempts >= MAX_ATTEMPTS || abortRequested(req.signal)) {
-      break;
-    }
-    const retryAfter = Number(response.headers.get('retry-after'));
-    const waitMs =
-      Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : attempts * 2000;
-    await response.text().catch(() => undefined);
-    await backoff(Math.min(waitMs, MAX_BACKOFF_MS), req.signal);
-    if (abortRequested(req.signal)) {
-      break;
-    }
-  }
-
-  req.signal?.throwIfAborted();
-
-  if (!response.ok) {
-    throw new AnthropicRequestError(response.status, await response.text());
-  }
-
-  const body = (await response.json()) as {
-    content?: { type: string; text?: string }[];
-    usage?: unknown;
-  } | null;
-  const usage = USAGE_SCHEMA.safeParse(body?.usage);
-  // A successful HTTP response is billed even if its text forces a constrained retry.
-  const counters = usage.success
-    ? usage.data
-    : {
-        input_tokens: 0,
-        output_tokens: 0,
-        cache_creation_input_tokens: 0,
-        cache_read_input_tokens: 0,
-        output_tokens_details: undefined,
-      };
-  // Left off the record entirely when the response carried no breakdown. The bill is known and
-  // the split inside it is not, and those are different facts.
-  const thinkingTokens = counters.output_tokens_details?.thinking_tokens;
-  options.recordApiCall?.({
-    occurredAt: new Date(started),
+  // Before the request is sent, not after it is billed. A throttled attempt is not billed and
+  // rides inside this one hold; the constrained retry `requestAnthropicJson` makes is a second
+  // dispatch and takes its own, which is what makes a retry cost the day what it costs the bill.
+  const surface = req.surface ?? 'unlabeled';
+  const held = options.spending?.hold({
+    surface,
     model: req.model,
-    surface: req.surface ?? 'unlabeled',
-    inputTokens: counters.input_tokens,
-    outputTokens: counters.output_tokens,
-    cacheCreationTokens: counters.cache_creation_input_tokens,
-    cacheReadTokens: counters.cache_read_input_tokens,
-    ...(thinkingTokens === undefined ? {} : { thinkingTokens }),
-    durationMs: Math.max(0, now() - started),
-    attempts,
-    ...(usage.success ? {} : { usageError: 'invalid_usage' }),
+    route: 'messages',
+    ...conservativeTokens(promptChars(instructions, rest), maxTokens),
+    now: new Date(started),
   });
-  // A thinking answer leads with its reasoning blocks and puts the JSON in a text block after
-  // them, so the answer is the first text block rather than the first block. The find already
-  // walked past everything else; naming thinking here is what says the walk is deliberate.
-  const textBlock = body?.content?.find((block) => block.type === 'text');
-  if (textBlock?.text === undefined) {
-    throw new AnthropicResponseError(
-      body?.content?.some((block) => block.type === 'thinking') === true
-        ? 'carried reasoning and no answer, which is a budget that filled max_tokens'
-        : 'missing text content',
-    );
+  if (held !== undefined && 'refused' in held) {
+    throw held.refused;
   }
-  return parseJsonPayload(textBlock.text);
+  const hold = held?.hold;
+  // Set the moment the hold is replaced by the bill. A dispatch that never reached a billed
+  // response, for any reason including the caller's own abort, gives the day its dollars back.
+  let reconciled = false;
+
+  try {
+    let response!: Response;
+    let attempts = 1;
+    for (; ; attempts += 1) {
+      response = await fetchImpl(ANTHROPIC_API_URL, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': options.apiKey,
+          'anthropic-version': ANTHROPIC_VERSION,
+        },
+        body: JSON.stringify({
+          model: req.model,
+          // Sent only when the caller named one, and never beside thinking: the API accepts
+          // `temperature` at 1 alone once thinking is on, and answers "`temperature` may only be
+          // set to 1 when thinking is enabled" to anything else. A caller asking for both wants
+          // the reasoning, and the temperature it names is the repeatability it would have got
+          // from the default sampling anyway. The newer model families removed the parameter
+          // outright, which is the other reason it is sent only on request.
+          ...(req.temperature === undefined || thinking !== undefined
+            ? {}
+            : { temperature: req.temperature }),
+          max_tokens: maxTokens,
+          ...(thinking === undefined ? {} : { thinking }),
+          ...(cachedInstructions === undefined ? {} : { system: cachedInstructions }),
+          ...(viaPrompt
+            ? {}
+            : {
+                output_config: {
+                  format: { type: 'json_schema', schema: closeObjectSchemas(req.schema) },
+                },
+              }),
+          messages: rest,
+        }),
+        ...(req.signal === undefined ? {} : { signal: req.signal }),
+      });
+      if (!throttled(response.status) || attempts >= MAX_ATTEMPTS || abortRequested(req.signal)) {
+        break;
+      }
+      const retryAfter = Number(response.headers.get('retry-after'));
+      const waitMs =
+        Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : attempts * 2000;
+      await response.text().catch(() => undefined);
+      await backoff(Math.min(waitMs, MAX_BACKOFF_MS), req.signal);
+      if (abortRequested(req.signal)) {
+        break;
+      }
+    }
+
+    req.signal?.throwIfAborted();
+
+    if (!response.ok) {
+      throw new AnthropicRequestError(response.status, await response.text());
+    }
+
+    const body = (await response.json()) as {
+      content?: { type: string; text?: string }[];
+      usage?: unknown;
+    } | null;
+    // A successful HTTP response is billed even if its text forces a constrained retry.
+    const call: ApiCall = {
+      occurredAt: new Date(started),
+      model: req.model,
+      surface,
+      ...readUsage(body?.usage),
+      durationMs: Math.max(0, now() - started),
+      attempts,
+    };
+    options.recordApiCall?.(call);
+    reconciled = true;
+    // What it cost replaces what was held for it. A response whose usage would not parse settles
+    // as unknown, which keeps the maximum: a charge nobody can size is not a charge of nothing.
+    hold?.settle(
+      call.usageError === undefined ? estimateApiCost(call) : undefined,
+      new Date(now()),
+    );
+    // A thinking answer leads with its reasoning blocks and puts the JSON in a text block after
+    // them, so the answer is the first text block rather than the first block. The find already
+    // walked past everything else; naming thinking here is what says the walk is deliberate.
+    const textBlock = body?.content?.find((block) => block.type === 'text');
+    if (textBlock?.text === undefined) {
+      throw new AnthropicResponseError(
+        body?.content?.some((block) => block.type === 'thinking') === true
+          ? 'carried reasoning and no answer, which is a budget that filled max_tokens'
+          : 'missing text content',
+      );
+    }
+    return parseJsonPayload(textBlock.text);
+  } finally {
+    if (!reconciled) {
+      hold?.release(new Date(now()));
+    }
+  }
 }
 
 /**
@@ -443,6 +368,8 @@ export type AnthropicProviderOptions = {
   readonly promptCache?: boolean;
   readonly thinkingBudgetTokens?: number;
   readonly recordApiCall?: (call: ApiCall) => void;
+  /** The day's spending backstop. Absent leaves this provider's calls unbounded. */
+  readonly spending?: SpendingGuard;
   readonly breakerFailureThreshold?: number;
   readonly breakerCooldownMs?: number;
   /** The breaker's clock, passed in like every other clock rather than read from the module. */
@@ -475,6 +402,7 @@ export class AnthropicProvider implements GenerationBackend {
         ? {}
         : { thinkingBudgetTokens: options.thinkingBudgetTokens }),
       ...(options.recordApiCall === undefined ? {} : { recordApiCall: options.recordApiCall }),
+      ...(options.spending === undefined ? {} : { spending: options.spending }),
       ...(options.now === undefined ? {} : { now: options.now }),
     };
     this.#model = options.model;

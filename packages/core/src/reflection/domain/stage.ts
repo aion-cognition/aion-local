@@ -60,7 +60,53 @@ export type StageOutcome = {
    * nothing and stays owed.
    */
   readonly settledOnUpstream?: StageSettlement;
+  /**
+   * The refusal the generation backend gave this pass, where it gave one.
+   *
+   * The orchestrator attaches it from the refusal itself rather than waiting for the stage to
+   * report it, so the distinction survives whatever the stage's own error handling makes of the
+   * throw. Every shipped stage turns a throw into a failed outcome, which is the right answer
+   * for a call that failed and the wrong one for a call that was never made.
+   */
+  readonly unavailable?: StageUnavailability;
 };
+
+/**
+ * Why a pass never reached the model: generation had nowhere to run, rather than running and
+ * failing. A missing key is one reason and the daily spending ceiling is the other.
+ *
+ * It is a typed field rather than prose because one decision reads it: whether the queue row is
+ * charged an attempt. A substrate in this state would answer every attempt the same way, and the
+ * rows it exhausted are exactly the ones a later key or a new day was supposed to revive.
+ */
+export type StageUnavailability = {
+  /** The call class the refusal named. */
+  readonly surface: string;
+  readonly reason: string;
+};
+
+/**
+ * The refusal a run should be put back for, or nothing where the run owes an ordinary retry.
+ *
+ * One ordinary failure anywhere in the run makes the whole run chargeable again. That failure is
+ * something a retry can answer, and a run holding both kinds has work waiting on the retry either
+ * way; only a run whose every failure was a refusal has nothing to charge for.
+ */
+export function runGenerationUnavailability(
+  stages: readonly StageRecord[],
+): StageUnavailability | undefined {
+  const refused = stages.find((stage) => stage.unavailable !== undefined)?.unavailable;
+  if (refused === undefined) {
+    return undefined;
+  }
+  const failedOtherwise = stages.some(
+    (stage) => stage.status === 'failed' && stage.unavailable === undefined,
+  );
+  if (failedOtherwise) {
+    return undefined;
+  }
+  return refused;
+}
 
 /**
  * Why a stage that published nothing is nevertheless finished with this source.

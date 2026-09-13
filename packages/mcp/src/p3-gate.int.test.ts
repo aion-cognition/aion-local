@@ -133,14 +133,12 @@ function intakeDeps(deps: {
     driver: harness.driver,
     db,
     sessions,
-    provider: deps.provider,
     ...(deps.onJobEnqueued === undefined ? {} : { onJobEnqueued: deps.onJobEnqueued }),
     logger,
     entropyThreshold: config.redaction.entropyThreshold,
     lanes: new LaneAssigner(config.lanes),
     workerMaxAttempts: config.operational.workerMaxAttempts,
     publications: directIntakePublisher(harness.driver, db),
-    acceptHookCapture: true,
   };
 }
 

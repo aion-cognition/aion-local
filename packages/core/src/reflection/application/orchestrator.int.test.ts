@@ -22,6 +22,7 @@ import {
   type Neo4jHarness,
 } from '../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger } from '../../infrastructure/logging/logger.js';
+import { OllamaProvider } from '../../infrastructure/providers/ollama-provider.js';
 import { testGenerationProvider } from '../../infrastructure/providers/test-support/generation-provider.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
@@ -30,7 +31,10 @@ import { SessionManager } from '../../session/session-manager.js';
 import type { ReflectionStage, StageContext, StageOutcome } from '../domain/stage.js';
 import { stageLedgerKey } from '../domain/stage.js';
 import { PIPELINE_VERSION } from '../domain/version.js';
-import { directIntakePublisher } from '../test-support/direct-intake.fixture.js';
+import {
+  directIntakePublisher,
+  drainAcceptedVectors,
+} from '../test-support/direct-intake.fixture.js';
 import { RecordingPublisher } from '../test-support/recording-publisher.fixture.js';
 
 const SESSION_IDENTITY = 'mcp-transport-session-orchestrator';
@@ -175,16 +179,11 @@ beforeAll(async () => {
       memberId: backbone.member.id,
       workspaceId: backbone.workspace.id,
     }),
-    provider: testGenerationProvider({
-      baseUrl: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
-      embedModel: DEFAULTS.models.embed,
-    }),
     logger: openLogger({ filePath: join(dataDir, 'aion.jsonl'), level: 'fatal' }),
     entropyThreshold: DEFAULTS.redaction.entropyThreshold,
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
     publications: directIntakePublisher(harness.driver, db),
-    acceptHookCapture: true,
   };
 
   const stored = await handleReflection(intake, PAYLOAD, { identity: SESSION_IDENTITY });
@@ -359,11 +358,20 @@ describe('reflection orchestrator against a live graph', () => {
     );
   }, 300_000);
 
-  it('stores a sub-floor subagent-stop capture with its embedding and asks no model to read it', async () => {
+  it('stores a sub-floor subagent-stop capture, embeds it, and asks no model to read it', async () => {
     const stored = await handleReflection(intake, PROGRESS_PAYLOAD, {
       identity: `${SESSION_IDENTITY}-progress`,
     });
     const { episode_id: progressEpisodeId } = stored;
+    // Intake queues the embedding rather than performing it, so this runs the row the worker
+    // would run: a capture too small to extract from is still worth finding.
+    await drainAcceptedVectors(
+      harness.driver,
+      new OllamaProvider({
+        baseUrl: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
+        embedModel: DEFAULTS.models.embed,
+      }),
+    );
 
     const episode = await loadEpisodeContext(harness.driver, progressEpisodeId);
     expect(episode?.originChannel).toBe('hook');

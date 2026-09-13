@@ -15,6 +15,9 @@ const catalog = () => introspectionOperations(DEFAULTS);
  * docstring and the code cannot drift apart quietly.
  */
 const UNMEASURED_OPERATIONS = [
+  // No snapshot counts outstanding batch work, and what the runs are worth is the cost per
+  // answer applied rather than a queue depth this operation could lower by giving up.
+  'batch_settlement',
   'claim_consolidation',
   'claim_dedup',
   'community_refresh',

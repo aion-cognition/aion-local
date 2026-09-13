@@ -5,9 +5,10 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { ReflectionNotStoredError } from './errors.js';
+import { VECTOR_JOB_TYPE } from './intake-queue.js';
 import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
 import { LaneAssigner } from './lanes.js';
-import { attachContentVectors, findPendingVectorNodes } from './vectors.js';
+import { attachSourceVectors, findPendingVectorNodes } from './vectors.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
 import { bootstrapBackbone } from '../../infrastructure/graph/backbone.js';
 import { runGraphMigrations } from '../../infrastructure/graph/migrations.js';
@@ -36,29 +37,22 @@ import { SessionManager } from '../../session/session-manager.js';
 import { directIntakePublisher } from '../test-support/direct-intake.fixture.js';
 
 /**
- * The episode commits before anything embeds, so a reflection pushed through a total
- * inference outage is still stored and queued, with its vectors arriving later. The outage
- * here is real: an Ollama pointed at the discard port, not a stubbed rejection, because the
- * guarantee is about what the write path does when the network call actually fails.
+ * Intake returns on durable publication and embeds nothing. The vector work is a queue row like
+ * every other piece of background work, so an embedding service that is slow, wedged or down
+ * costs the caller nothing: the episode is stored, the row is claimable, and recall serves the
+ * episode through its lexical and recency paths until the row runs.
+ *
+ * Intake holds no embedder at all, which is the structural half. The behavioral half is here:
+ * a returned call leaves every node of the acceptance bare, with a claimable row naming it.
  */
 const EMBED_DIMENSION = DEFAULTS.models.embedDimension;
-const DEAD_OLLAMA_URL = 'http://127.0.0.1:9';
 const DEAD_BOLT_URI = 'bolt://127.0.0.1:1';
+const OLLAMA_URL = process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434';
 
-const VECTORED_IDENTITY = 'vectors-live-session';
-const PENDING_IDENTITY = 'vectors-pending-session';
+const STORED_IDENTITY = 'vectors-stored-session';
 const REFUSED_IDENTITY = 'vectors-refused-session';
 
-const LIVE_PAYLOAD = {
-  turns: [
-    { role: 'user', text: 'the ingestion service keeps timing out on the vendor webhook' },
-    { role: 'assistant', text: 'the vendor caps concurrent deliveries at four' },
-  ],
-  observations: ['the timeout is the vendor cap, not our handler'],
-  summary: 'ingestion webhook timeouts traced to a vendor concurrency cap',
-};
-
-const OUTAGE_PAYLOAD = {
+const PAYLOAD = {
   turns: [
     { role: 'user', text: 'why did we key the physician sync on id_slug' },
     { role: 'assistant', text: 'because the external ids churn between vendor exports' },
@@ -72,11 +66,10 @@ let deadGraph: Driver;
 let db: SqliteHandle;
 let dataDir: string;
 let enqueuedJobIds: string[];
-let live: ReflectionIntakeDeps;
-let deadOllama: ReflectionIntakeDeps;
+let intake: ReflectionIntakeDeps;
 let deadNeo4j: ReflectionIntakeDeps;
-let vectoredEpisodeId: string;
-let pendingEpisodeId: string;
+let embedder: OllamaProvider;
+let storedEpisodeId: string;
 
 async function jobsForSession(sessionId: string): Promise<ReflectionJob[]> {
   const episodeIds = new Set(await episodeIdsInSession(harness.driver, sessionId));
@@ -100,9 +93,12 @@ beforeAll(async () => {
   const backboneIds = { memberId: backbone.member.id, workspaceId: backbone.workspace.id };
 
   enqueuedJobIds = [];
+  embedder = new OllamaProvider({ baseUrl: OLLAMA_URL, embedModel: DEFAULTS.models.embed });
 
-  const shared = {
+  intake = {
+    driver: harness.driver,
     db,
+    sessions: new SessionManager(harness.driver, backboneIds),
     onJobEnqueued: (jobId: string) => {
       enqueuedJobIds.push(jobId);
     },
@@ -111,22 +107,6 @@ beforeAll(async () => {
     lanes: new LaneAssigner(DEFAULTS.lanes),
     workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
     publications: directIntakePublisher(harness.driver, db),
-    acceptHookCapture: true,
-  };
-
-  live = {
-    ...shared,
-    driver: harness.driver,
-    sessions: new SessionManager(harness.driver, backboneIds),
-    provider: new OllamaProvider({
-      baseUrl: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
-      embedModel: DEFAULTS.models.embed,
-    }),
-  };
-
-  deadOllama = {
-    ...live,
-    provider: new OllamaProvider({ baseUrl: DEAD_OLLAMA_URL, embedModel: DEFAULTS.models.embed }),
   };
 
   deadGraph = neo4j.driver(DEAD_BOLT_URI, neo4j.auth.basic('neo4j', harness.password), {
@@ -135,16 +115,13 @@ beforeAll(async () => {
     maxTransactionRetryTime: 3000,
   });
   deadNeo4j = {
-    ...deadOllama,
+    ...intake,
     driver: deadGraph,
     sessions: new SessionManager(deadGraph, backboneIds),
   };
 
-  vectoredEpisodeId = (await handleReflection(live, LIVE_PAYLOAD, { identity: VECTORED_IDENTITY }))
+  storedEpisodeId = (await handleReflection(intake, PAYLOAD, { identity: STORED_IDENTITY }))
     .episode_id;
-  pendingEpisodeId = (
-    await handleReflection(deadOllama, OUTAGE_PAYLOAD, { identity: PENDING_IDENTITY })
-  ).episode_id;
 }, 300_000);
 
 afterAll(async () => {
@@ -154,92 +131,95 @@ afterAll(async () => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
-describe('reflection intake through a total Ollama outage', () => {
-  it('answers the caller normally rather than refusing', () => {
-    expect(pendingEpisodeId).toEqual(expect.any(String));
-    expect(pendingEpisodeId).not.toBe(vectoredEpisodeId);
+describe('what intake does about vectors', () => {
+  it('returns with every node of the acceptance still bare', async () => {
+    const result = await handleReflection(
+      intake,
+      { ...PAYLOAD, observations: ['a second experience in the same session'] },
+      { identity: STORED_IDENTITY },
+    );
+
+    // Read the instant the call resolves: an intake that embedded would have written these.
+    const turns = await turnsOfEpisode(harness.driver, result.episode_id);
+    expect(await contentVectorOf(result.episode_id)).toBeUndefined();
+    expect(turns.every((turn) => turn.content_vec === undefined)).toBe(true);
   });
 
   it('stores the episode, its turns, and the whole backbone', async () => {
-    const props = await nodeProperties(harness.driver, pendingEpisodeId);
+    const props = await nodeProperties(harness.driver, storedEpisodeId);
 
-    expect(props.summary).toBe(OUTAGE_PAYLOAD.summary);
+    expect(props.summary).toBe(PAYLOAD.summary);
     expect(props.extraction_method).toBe('reflection_intake');
     expect(props.valid_from).toBeInstanceOf(Date);
     expect(props.tx_from).toBeInstanceOf(Date);
 
-    expect(await countNodesInSession(harness.driver, 'Turn', PENDING_IDENTITY)).toBe(2);
-    expect(await countChainedTurns(harness.driver, pendingEpisodeId)).toBe(1);
-    expect(await edgeTargetId(harness.driver, 'PARTICIPATES_IN', pendingEpisodeId)).toBe(
-      PENDING_IDENTITY,
+    expect(await countChainedTurns(harness.driver, storedEpisodeId)).toBe(1);
+    expect(await edgeTargetId(harness.driver, 'PARTICIPATES_IN', storedEpisodeId)).toBe(
+      STORED_IDENTITY,
     );
     expect(
-      await countEdges(harness.driver, 'PARTICIPATES_IN', pendingEpisodeId, PENDING_IDENTITY),
+      await countEdges(harness.driver, 'PARTICIPATES_IN', storedEpisodeId, STORED_IDENTITY),
     ).toBe(1);
   });
 
-  it('queues the integrate job and wakes the worker for it', async () => {
-    const jobs = await jobsForSession(PENDING_IDENTITY);
+  it('queues the vector job beside the integrate job, in the same lane', async () => {
+    const jobs = (await jobsForSession(STORED_IDENTITY)).filter(
+      (job) => (job.payload as { episode_id: string }).episode_id === storedEpisodeId,
+    );
+    const byType = new Map(jobs.map((job) => [job.jobType, job]));
 
-    expect(jobs).toHaveLength(1);
-    expect(jobs[0]?.jobType).toBe(INTEGRATE_JOB_TYPE);
-    expect(jobs[0]?.payload).toEqual({ episode_id: pendingEpisodeId });
-    expect(enqueuedJobIds).toContain(jobs[0]?.id);
+    expect([...byType.keys()].sort()).toEqual(
+      [INTEGRATE_JOB_TYPE, VECTOR_JOB_TYPE, 'source_index'].sort(),
+    );
+    expect(byType.get(VECTOR_JOB_TYPE)?.lane).toBe('interactive');
+    expect(byType.get(VECTOR_JOB_TYPE)?.payload).toEqual({ episode_id: storedEpisodeId });
+    expect(byType.get(VECTOR_JOB_TYPE)?.episodeId).toBe(storedEpisodeId);
   });
 
-  it('leaves the episode and every turn without a content vector', async () => {
-    const turns = await turnsOfEpisode(harness.driver, pendingEpisodeId);
+  it('leaves the episode and every turn without a content vector until that row runs', async () => {
+    const turns = await turnsOfEpisode(harness.driver, storedEpisodeId);
 
-    expect(await contentVectorOf(pendingEpisodeId)).toBeUndefined();
+    expect(await contentVectorOf(storedEpisodeId)).toBeUndefined();
     expect(turns).toHaveLength(2);
     expect(turns.every((turn) => turn.content_vec === undefined)).toBe(true);
   });
 });
 
-describe('backfilling the pending vectors once Ollama is back', () => {
-  it('finds exactly the nodes the outage left pending', async () => {
-    const pending = await findPendingVectorNodes(harness.driver, 50);
-    const turns = await turnsOfEpisode(harness.driver, pendingEpisodeId);
+describe('the queued vector work', () => {
+  it('vectors exactly the source it names, and nothing else pending', async () => {
+    const others = (await findPendingVectorNodes(harness.driver, 50))
+      .map((node) => node.id)
+      .filter((id) => id !== storedEpisodeId);
+    const turns = await turnsOfEpisode(harness.driver, storedEpisodeId);
+    const mine = new Set([storedEpisodeId, ...turns.map((turn) => turn.id as string)]);
 
-    expect(pending.map((node) => node.id).sort()).toEqual(
-      [pendingEpisodeId, ...turns.map((turn) => turn.id as string)].sort(),
+    const attached = await attachSourceVectors(
+      { driver: harness.driver, provider: embedder, logger: { warn: () => undefined } },
+      storedEpisodeId,
     );
-    expect(pending.every((node) => node.text.length > 0)).toBe(true);
-  });
 
-  it('attaches a vector of the configured dimension to every one of them', async () => {
-    const pending = await findPendingVectorNodes(harness.driver, 50);
-
-    const attached = await attachContentVectors(harness.driver, live.provider, pending);
-
-    expect(attached.sort()).toEqual(pending.map((node) => node.id).sort());
-    for (const node of pending) {
-      const vector = await contentVectorOf(node.id);
+    expect(attached).toBe(mine.size);
+    for (const id of mine) {
+      const vector = await contentVectorOf(id);
       expect(vector).toHaveLength(EMBED_DIMENSION);
       expect(vector?.every((value) => Number.isFinite(value))).toBe(true);
     }
-    expect(await findPendingVectorNodes(harness.driver, 50)).toEqual([]);
-  });
+    // Another source's pending nodes are somebody else's row and are still pending.
+    const stillPending = (await findPendingVectorNodes(harness.driver, 50)).map((node) => node.id);
+    expect(stillPending.sort()).toEqual(others.filter((id) => !mine.has(id)).sort());
+  }, 120_000);
 
-  it('is idempotent: a second pass writes the same vectors and finds nothing left', async () => {
-    const before = await contentVectorOf(pendingEpisodeId);
+  it('is idempotent: a second run finds nothing left to do for that source', async () => {
+    const before = await contentVectorOf(storedEpisodeId);
 
-    const again = await attachContentVectors(harness.driver, live.provider, [
-      {
-        id: pendingEpisodeId,
-        text: (await nodeProperties(harness.driver, pendingEpisodeId)).text as string,
-      },
-    ]);
+    const again = await attachSourceVectors(
+      { driver: harness.driver, provider: embedder, logger: { warn: () => undefined } },
+      storedEpisodeId,
+    );
 
-    expect(again).toEqual([pendingEpisodeId]);
-    expect(await contentVectorOf(pendingEpisodeId)).toEqual(before);
-    expect(await findPendingVectorNodes(harness.driver, 50)).toEqual([]);
-  });
-
-  it('never touches a node that already had its vector', async () => {
-    expect(await contentVectorOf(vectoredEpisodeId)).toHaveLength(EMBED_DIMENSION);
-    expect(await attachContentVectors(harness.driver, live.provider, [])).toEqual([]);
-  });
+    expect(again).toBe(0);
+    expect(await contentVectorOf(storedEpisodeId)).toEqual(before);
+  }, 120_000);
 });
 
 /**
@@ -250,7 +230,7 @@ describe('backfilling the pending vectors once Ollama is back', () => {
 describe('reflection intake against an unreachable graph', () => {
   it('refuses with the named error and writes nothing', async () => {
     const wakeupsBeforeRefusal = enqueuedJobIds.length;
-    const failure = await handleReflection(deadNeo4j, OUTAGE_PAYLOAD, {
+    const failure = await handleReflection(deadNeo4j, PAYLOAD, {
       identity: REFUSED_IDENTITY,
     }).then(
       () => undefined,

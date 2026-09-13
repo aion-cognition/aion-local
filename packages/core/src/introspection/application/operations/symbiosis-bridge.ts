@@ -323,7 +323,7 @@ async function runSymbiosisBridge(ctx: OperationContext): Promise<OperationOutco
   }
 
   const answer = await proposeBridge(ctx.provider, context, {
-    model: ctx.config.models.reflect,
+    model: ctx.config.anthropic.model,
     timeoutMs: ctx.config.reflection.stageTimeoutMs,
     signal: ctx.signal,
   });

@@ -247,7 +247,7 @@ async function attemptPublication(
   const report = await publishChunkNarrative(narrativeDeps(ctx, deps), chunkId, {
     now: ctx.now,
     policy: policyOf(scales),
-    model: ctx.config.models.reflect,
+    model: ctx.config.anthropic.model,
     timeoutMs: ctx.config.reflection.stageTimeoutMs,
     signal: ctx.signal,
   });
