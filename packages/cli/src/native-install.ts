@@ -78,11 +78,12 @@ export function prepareNativeProfile(write: Writer, repoDir: string): Config {
 }
 
 /**
- * A server this run just started is booting a JVM and loading a 67 MB plugin, which is the same
- * first-boot wait the docker profile allows for. One that is already up answers the single
- * `health()` probe above in well under a second and never reaches this.
+ * A server this run just started is booting a JVM and loading a 67 MB plugin. A live run needed
+ * most of five further minutes past the old 180s ceiling to finish that boot, which is what
+ * widened this rather than a guess at a safer number. One that is already up answers the single
+ * `health()` probe above in well under a second and never reaches this wait at all.
  */
-const FRESH_BOLT_TIMEOUT_MS = 180_000;
+const FRESH_BOLT_TIMEOUT_MS = 600_000;
 
 /** Bad credentials and no server at all arrive as the same shape, and want opposite answers. */
 function looksLikeAuthFailure(error: string | undefined): boolean {
@@ -138,7 +139,7 @@ export async function provisionNativeGraph(
     return undefined;
   }
   if (looksLikeAuthFailure(probe.error)) {
-    throw passwordRefusal(uri, await resolveNeo4jLayout(actions, env));
+    throw passwordRefusal(uri, await resolveNeo4jLayout(actions, env), actions, env);
   }
 
   const layout = await ensureNeo4jInstalled(actions, env, write);
@@ -157,7 +158,7 @@ export async function provisionNativeGraph(
       ? `  ${layout.confFile} already carries every setting`
       : `  ${layout.confFile}: set ${changed.join(', ')}`,
   );
-  await setInitialPassword(layout, password, actions);
+  await setInitialPassword(layout, password, actions, env);
   await startNeo4j(layout, actions, write);
 
   write(`  waiting for bolt (first start loads the plugin)`);
@@ -166,11 +167,12 @@ export async function provisionNativeGraph(
   } catch (err) {
     const failure = err instanceof Error ? err.message : String(err);
     if (looksLikeAuthFailure(failure)) {
-      throw passwordRefusal(uri, layout);
+      throw passwordRefusal(uri, layout, actions, env);
     }
     throw new NativeSetupError(`neo4j did not answer on ${uri}: ${failure}`, [
       `tail -n 40 ${join(layout.home, 'logs', 'neo4j.log')}`,
       `${layout.serverBin ?? 'neo4j'} console   # run it in the foreground to see why`,
+      'aion init --install native   # safe to re-run once bolt answers; a slow first boot is still starting, not broken',
     ]);
   }
   await readPairing(uri, password, write);

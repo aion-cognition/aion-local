@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 import { gdsJarName, gdsJarUrl, gdsReleaseFor } from './gds-releases.js';
 import { NativeSetupError, type HostActions } from './host-actions.js';
@@ -263,20 +263,120 @@ export const NEO4J_SETTINGS: readonly (readonly [string, string])[] = [
 ];
 
 /**
+ * Brew's neo4j formula depends on this JDK. The service plist sets JAVA_HOME to it before
+ * starting the server; a plain neo4j-admin invocation from this CLI gets only what the caller's
+ * own shell exported, which on a fresh install is nothing.
+ */
+const BREW_JDK_FORMULA = 'openjdk@21';
+
+async function resolveBrewJavaHome(actions: HostActions): Promise<string | undefined> {
+  const prefix = await brewPrefixFor(actions, BREW_JDK_FORMULA);
+  if (prefix === undefined) {
+    return undefined;
+  }
+  const home = join(prefix, 'libexec', 'openjdk.jdk', 'Contents', 'Home');
+  return existsSync(home) ? home : undefined;
+}
+
+/**
+ * The environment a neo4j-admin call runs with. A brew-managed layout with no JAVA_HOME already
+ * set needs brew's own JDK, because brew never puts it on PATH the way it does for the service
+ * plist; anywhere else the caller's environment passes through untouched, since a tarball or
+ * package install is expected to carry its own Java.
+ *
+ * Unresolvable is a named failure here rather than an environment neo4j-admin would then fail on
+ * anyway with the same "Unable to locate a Java Runtime" this exists to avoid.
+ */
+export async function resolveAdminEnv(
+  layout: Neo4jLayout,
+  env: NodeJS.ProcessEnv,
+  actions: HostActions,
+): Promise<NodeJS.ProcessEnv> {
+  if (!layout.brewManaged || (env.JAVA_HOME ?? '').trim() !== '') {
+    return env;
+  }
+  const javaHome = await resolveBrewJavaHome(actions);
+  if (javaHome === undefined) {
+    throw new NativeSetupError(
+      `neo4j-admin needs a JDK and brew's ${BREW_JDK_FORMULA} did not resolve. Install it, then run init again:`,
+      [`brew install ${BREW_JDK_FORMULA}`, 'aion init --install native'],
+    );
+  }
+  return { ...env, JAVA_HOME: javaHome };
+}
+
+/**
+ * The `server.directories.data` neo4j.conf carries, or the distribution's default. Brew points
+ * this at a prefix entirely outside `home`, so it is read rather than assumed.
+ */
+function neo4jDataDir(layout: Neo4jLayout): string {
+  const text = existsSync(layout.confFile) ? readFileSync(layout.confFile, 'utf8') : '';
+  const line = text.split('\n').find((l) => l.trimStart().startsWith('server.directories.data='));
+  const configured = line?.slice(line.indexOf('=') + 1).trim() ?? '';
+  if (configured === '') {
+    return join(layout.home, 'data');
+  }
+  return isAbsolute(configured) ? configured : join(layout.home, configured);
+}
+
+/**
+ * Whether this server has ever completed a real first boot. Neo4j creates its system database,
+ * where user credentials actually live once the server has run, only then; `neo4j-admin dbms
+ * set-initial-password` writes its own seed file regardless of that, so the seed file's presence
+ * answers nothing about whether a boot ever happened. A virgin store has not had one yet: a
+ * failed password set here is the last chance before the coming boot fills the account in with
+ * defaults, not a refusal Bolt will go on to judge.
+ */
+export function isVirginNeo4jStore(layout: Neo4jLayout): boolean {
+  return !existsSync(join(neo4jDataDir(layout), 'databases', 'system'));
+}
+
+/**
  * Sets the password the substrate will use, which only works before the database is initialized.
- * On an already-initialized server it is a no-op and the answer comes from Bolt instead: an
- * install whose password does not match is a named failure with both ways out of it.
+ * On an already-initialized server a refusal here is a no-op and the answer comes from Bolt
+ * instead. On a virgin store it is not: nothing has picked a password yet, and starting the
+ * server anyway would boot it straight onto defaults, which is what the caller stops here to
+ * avoid — including when there is no admin tool at all to try it with.
  */
 export async function setInitialPassword(
   layout: Neo4jLayout,
   password: string,
   actions: HostActions,
-): Promise<boolean> {
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
   if (layout.adminBin === undefined) {
-    return false;
+    if (!isVirginNeo4jStore(layout)) {
+      return;
+    }
+    throw new NativeSetupError(
+      `no neo4j-admin under ${layout.home}, and a virgin store cannot get its initial password ` +
+        `without one; the coming boot would start it on defaults instead. Get the admin tool, ` +
+        `then run init again:`,
+      ['brew install neo4j', 'or point NEO4J_HOME at a distribution that ships bin/neo4j-admin'],
+    );
   }
-  const result = await actions.run(layout.adminBin, ['dbms', 'set-initial-password', password]);
-  return result.ok;
+  const runEnv = await resolveAdminEnv(layout, env, actions);
+  const result = await actions.run(
+    layout.adminBin,
+    ['dbms', 'set-initial-password', password],
+    runEnv,
+  );
+  if (result.ok || !isVirginNeo4jStore(layout)) {
+    return;
+  }
+  // Brew never puts its JDK on PATH, so the command an operator runs by hand needs the same
+  // JAVA_HOME prefix the call above just ran with, or it fails on the same missing Java.
+  const javaHome =
+    layout.brewManaged && (env.JAVA_HOME ?? '').trim() === '' ? runEnv.JAVA_HOME : undefined;
+  const prefix = javaHome === undefined ? '' : `JAVA_HOME=${javaHome} `;
+  throw new NativeSetupError(
+    `neo4j-admin could not set the initial password on a store that has never booted, and the ` +
+      `coming boot would start it on defaults instead: ${result.stderr.trim()}`,
+    [
+      `${prefix}${layout.adminBin} dbms set-initial-password "<password>"`,
+      'aion init --install native',
+    ],
+  );
 }
 
 export async function startNeo4j(
@@ -308,15 +408,34 @@ export async function startNeo4j(
   }
 }
 
-/** The password refusal, in one place, because it is the one failure with two different fixes. */
-export function passwordRefusal(uri: string, layout: Neo4jLayout | undefined): NativeSetupError {
+/**
+ * Neo4j's own recovery procedure for a password that is genuinely lost. Linked rather than run:
+ * it changes another server's auth store, not something this build installs, and the operator is
+ * the one who has to decide whether losing the password justifies that change.
+ */
+const PASSWORD_RECOVERY_DOC =
+  'https://neo4j.com/docs/operations-manual/current/authentication-authorization/password-and-user-recovery/';
+
+/**
+ * The password refusal, in one place, because it is the one failure with two different fixes.
+ * `dbms set-initial-password` is not one of them: it only takes effect before a store's first
+ * boot, and a server already refusing this password over Bolt has had one.
+ */
+export function passwordRefusal(
+  uri: string,
+  layout: Neo4jLayout | undefined,
+  _actions: HostActions,
+  _env: NodeJS.ProcessEnv,
+): NativeSetupError {
   const admin = layout?.adminBin ?? '$NEO4J_HOME/bin/neo4j-admin';
   return new NativeSetupError(
-    `the Neo4j at ${uri} refused the password in .env. It is a server that was initialized with another one, so either tell the substrate the real password or set the server's:`,
+    `the Neo4j at ${uri} refused the password in .env. It is a server that was initialized with ` +
+      `another one, and ${admin} dbms set-initial-password will not change it now: that only ` +
+      `works before a store's first boot, which this server has already had. Either tell the ` +
+      `substrate the real password or recover the lost one on the server itself:`,
     [
       'put the existing password in AION_NEO4J_PASSWORD in .env, or',
-      'brew services stop neo4j   # or stop it however it runs',
-      `${admin} dbms set-initial-password "$(grep AION_NEO4J_PASSWORD .env | cut -d= -f2)"`,
+      `follow Neo4j's own account-recovery procedure: ${PASSWORD_RECOVERY_DOC}`,
       'then run init again',
     ],
   );

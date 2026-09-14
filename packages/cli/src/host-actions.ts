@@ -22,7 +22,13 @@ export type HostResult = {
   readonly stderr: string;
 };
 
-export type HostRun = (program: string, args: readonly string[]) => Promise<HostResult>;
+/** `env` replaces the child's environment when given, so a caller that needs one variable added
+ *  passes its own environment spread with the override rather than a bare `{ VAR: value }`. */
+export type HostRun = (
+  program: string,
+  args: readonly string[],
+  env?: NodeJS.ProcessEnv,
+) => Promise<HostResult>;
 
 /** Downloads to `target` and answers the digest of what arrived. The caller decides on it. */
 export type HostFetch = (url: string, target: string) => Promise<{ sha256: string; bytes: number }>;
@@ -50,10 +56,15 @@ export class NativeSetupError extends CliUsageError {
   }
 }
 
-export async function hostRun(program: string, args: readonly string[]): Promise<HostResult> {
+export async function hostRun(
+  program: string,
+  args: readonly string[],
+  env?: NodeJS.ProcessEnv,
+): Promise<HostResult> {
   try {
     const { stdout, stderr } = await execFileAsync(program, [...args], {
       maxBuffer: 8 * 1024 * 1024,
+      ...(env === undefined ? {} : { env }),
     });
     return { ok: true, stdout, stderr };
   } catch (err) {

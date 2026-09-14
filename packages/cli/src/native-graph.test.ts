@@ -9,9 +9,11 @@ import {
   applyNeo4jSettings,
   ensureGdsPlugin,
   ensureNeo4jInstalled,
+  isVirginNeo4jStore,
   NEO4J_SETTINGS,
   passwordRefusal,
   readInstalledServerVersion,
+  resolveAdminEnv,
   resolveNeo4jLayout,
   setInitialPassword,
   startNeo4j,
@@ -27,19 +29,24 @@ import {
 type Scripted = {
   actions: HostActions;
   readonly calls: string[];
+  /** The environment each `run` call landed with, in the same order as `calls`. */
+  readonly envs: (NodeJS.ProcessEnv | undefined)[];
   /** What a fetch writes, so a case can make the digest match or not. */
   body: Buffer;
 };
 
 function scripted(answers: Record<string, HostResult | undefined>, body = 'jar'): Scripted {
   const calls: string[] = [];
+  const envs: (NodeJS.ProcessEnv | undefined)[] = [];
   const state: Scripted = {
     calls,
+    envs,
     body: Buffer.from(body),
     actions: {
-      run: (program, args) => {
+      run: (program, args, env) => {
         const command = [program, ...args].join(' ');
         calls.push(command);
+        envs.push(env);
         return Promise.resolve(
           answers[command] ?? answers[program] ?? { ok: false, stdout: '', stderr: 'not scripted' },
         );
@@ -73,6 +80,15 @@ function distribution(home: string): string {
   writeFileSync(join(home, 'bin', 'neo4j'), '');
   writeFileSync(join(home, 'bin', 'neo4j-admin'), '');
   return home;
+}
+
+/**
+ * What a server that has completed its first real boot leaves on disk: a system database, which
+ * is what `neo4j-admin dbms set-initial-password` never writes on its own. Marks the default data
+ * directory (`<home>/data`), which is what every test layout here resolves to.
+ */
+function initialized(home: string): void {
+  mkdirSync(join(home, 'data', 'databases', 'system'), { recursive: true });
 }
 
 function layoutFor(home: string, over: Partial<Neo4jLayout> = {}): Neo4jLayout {
@@ -325,23 +341,152 @@ describe('starting it, and the password', () => {
     );
   });
 
-  it('sets the initial password through the admin tool, and answers whether it took', async () => {
+  it('sets the initial password through the admin tool on a virgin store', async () => {
     const home = distribution(join(dir, 'neo4j'));
     const admin = join(home, 'bin', 'neo4j-admin');
     const state = scripted({ [`${admin} dbms set-initial-password secret`]: ok('') });
 
-    expect(await setInitialPassword(layoutFor(home), 'secret', state.actions)).toBe(true);
+    await expect(
+      setInitialPassword(layoutFor(home), 'secret', state.actions, {}),
+    ).resolves.toBeUndefined();
     expect(state.calls).toEqual([`${admin} dbms set-initial-password secret`]);
-    // An already-initialized server refuses it, and that is not a failure of the install: Bolt is
-    // what judges the password, and its refusal is the one that names both ways out.
-    expect(await setInitialPassword(layoutFor(home), 'other', state.actions)).toBe(false);
   });
 
-  it('offers both ways out of a password the server does not accept', () => {
+  it('treats a refusal on an already-initialized store as the benign no-op it is', async () => {
+    // An already-initialized server refuses the admin tool, and that is not a failure of the
+    // install: Bolt is what judges the password from here, and its own refusal names both ways
+    // out. The disk, not the refusal's text, is what says this store is not virgin.
     const home = distribution(join(dir, 'neo4j'));
-    const refusal = passwordRefusal('bolt://127.0.0.1:7687', layoutFor(home));
+    initialized(home);
+    const state = scripted({});
+
+    await expect(
+      setInitialPassword(layoutFor(home), 'other', state.actions, {}),
+    ).resolves.toBeUndefined();
+  });
+
+  it('stops before startNeo4j when the admin tool fails on a virgin store', async () => {
+    // Nothing has picked a password yet: letting the coming boot happen anyway is exactly the
+    // defect this guards, so the caller never gets a `false` back to decide whether to notice.
+    const home = distribution(join(dir, 'neo4j'));
+    const admin = join(home, 'bin', 'neo4j-admin');
+    const state = scripted({
+      [`${admin} dbms set-initial-password secret`]: {
+        ok: false,
+        stdout: '',
+        stderr: 'Unable to locate a Java Runtime',
+      },
+    });
+
+    const failure = setInitialPassword(layoutFor(home), 'secret', state.actions, {});
+
+    await expect(failure).rejects.toThrow(NativeSetupError);
+    await expect(failure).rejects.toThrow('never booted');
+    await expect(failure).rejects.toThrow('Unable to locate a Java Runtime');
+  });
+
+  it("resolves brew's JDK for a brew-managed admin call with no JAVA_HOME set", async () => {
+    const home = distribution(join(dir, 'neo4j'));
+    const admin = join(home, 'bin', 'neo4j-admin');
+    const javaHome = join(dir, 'opt', 'openjdk@21', 'libexec', 'openjdk.jdk', 'Contents', 'Home');
+    mkdirSync(javaHome, { recursive: true });
+    const state = scripted({
+      'brew --prefix openjdk@21': ok(`${join(dir, 'opt', 'openjdk@21')}\n`),
+      [`${admin} dbms set-initial-password secret`]: ok(''),
+    });
+
+    await setInitialPassword(layoutFor(home, { brewManaged: true }), 'secret', state.actions, {});
+
+    const adminCall = state.calls.indexOf(`${admin} dbms set-initial-password secret`);
+    expect(state.envs[adminCall]?.JAVA_HOME).toBe(javaHome);
+  });
+
+  it("leaves a caller-supplied JAVA_HOME alone rather than resolving brew's own", async () => {
+    const home = distribution(join(dir, 'neo4j'));
+    const admin = join(home, 'bin', 'neo4j-admin');
+    const state = scripted({ [`${admin} dbms set-initial-password secret`]: ok('') });
+
+    await setInitialPassword(layoutFor(home, { brewManaged: true }), 'secret', state.actions, {
+      JAVA_HOME: '/already/set',
+    });
+
+    expect(state.calls).toEqual([`${admin} dbms set-initial-password secret`]);
+    expect(state.envs[0]?.JAVA_HOME).toBe('/already/set');
+  });
+
+  it('names the brew install line when no JDK can be resolved, rather than a silent false', async () => {
+    const home = distribution(join(dir, 'neo4j'));
+    const state = scripted({ 'brew --prefix openjdk@21': { ok: false, stdout: '', stderr: '' } });
+
+    const failure = resolveAdminEnv(layoutFor(home, { brewManaged: true }), {}, state.actions);
+
+    await expect(failure).rejects.toThrow(NativeSetupError);
+    await expect(failure).rejects.toThrow('brew install openjdk@21');
+    // Never attempted: an unresolvable JDK is named before neo4j-admin runs, not after it fails.
+    expect(state.calls).toEqual(['brew --prefix openjdk@21']);
+  });
+
+  it('answers virgin for a store with no system database yet', () => {
+    const home = distribution(join(dir, 'neo4j'));
+
+    expect(isVirginNeo4jStore(layoutFor(home))).toBe(true);
+
+    initialized(home);
+    expect(isVirginNeo4jStore(layoutFor(home))).toBe(false);
+  });
+
+  it("offers the known password and Neo4j's own recovery link, not a seed reset", () => {
+    const home = distribution(join(dir, 'neo4j'));
+    const state = scripted({});
+
+    const refusal = passwordRefusal('bolt://127.0.0.1:7687', layoutFor(home), state.actions, {});
 
     expect(refusal.commands.join('\n')).toContain('AION_NEO4J_PASSWORD');
-    expect(refusal.commands.join('\n')).toContain('set-initial-password');
+    expect(refusal.commands.join('\n')).not.toContain('set-initial-password');
+    expect(refusal.commands.join('\n')).toContain(
+      'https://neo4j.com/docs/operations-manual/current/authentication-authorization/password-and-user-recovery/',
+    );
+  });
+
+  it('prefixes the virgin-store admin remedy with JAVA_HOME on a brew install that needs one', async () => {
+    const home = distribution(join(dir, 'neo4j'));
+    const admin = join(home, 'bin', 'neo4j-admin');
+    const javaHome = join(dir, 'opt', 'openjdk@21', 'libexec', 'openjdk.jdk', 'Contents', 'Home');
+    mkdirSync(javaHome, { recursive: true });
+    const state = scripted({
+      'brew --prefix openjdk@21': ok(`${join(dir, 'opt', 'openjdk@21')}\n`),
+      [`${admin} dbms set-initial-password secret`]: {
+        ok: false,
+        stdout: '',
+        stderr: 'Unable to locate a Java Runtime',
+      },
+    });
+
+    const failure = setInitialPassword(
+      layoutFor(home, { brewManaged: true }),
+      'secret',
+      state.actions,
+      {},
+    );
+
+    await expect(failure).rejects.toThrow(
+      `JAVA_HOME=${javaHome} ${admin} dbms set-initial-password`,
+    );
+  });
+
+  it('names how to get neo4j-admin when a virgin store has none, before starting anything', async () => {
+    const home = distribution(join(dir, 'neo4j'));
+    const state = scripted({});
+
+    const failure = setInitialPassword(
+      layoutFor(home, { adminBin: undefined }),
+      'secret',
+      state.actions,
+      {},
+    );
+
+    await expect(failure).rejects.toThrow(NativeSetupError);
+    await expect(failure).rejects.toThrow('brew install neo4j');
+    expect(state.calls).toEqual([]);
   });
 });
