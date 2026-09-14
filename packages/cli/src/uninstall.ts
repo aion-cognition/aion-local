@@ -3,6 +3,8 @@ import { homedir } from 'node:os';
 
 import { parseArgs, type ArgSpec } from './args.js';
 import { composeRunner } from './compose.js';
+import { claudeSettingsPath } from './hook/settings-file.js';
+import { DEFAULT_HOOKS_FLAGS, uninstallHooks, type HooksCommandOptions } from './hooks-cmd.js';
 import { HOST_ACTIONS, type HostActions } from './host-actions.js';
 import { readInstallManifest, type InstallManifest } from './install-manifest.js';
 import { launchAgentPath, MCP_LAUNCH_LABEL } from './launchd.js';
@@ -76,6 +78,24 @@ export function stripOwnedSettings(
   return lines.length - kept.length;
 }
 
+/**
+ * `uninstallHooks` also knows codex, the manual-merge path, and its own repo verification; none
+ * of that applies here, because init only ever writes the claude harness. This is the narrower
+ * shape it needs to do exactly that removal, reusing the same read, backup, and strip it always
+ * has.
+ */
+function claudeHooksOptions(settingsPath: string, now: Date): HooksCommandOptions {
+  return {
+    flags: DEFAULT_HOOKS_FLAGS,
+    settingsPath,
+    codexHooksPath: '',
+    codexConfigPath: '',
+    repo: { path: '', verified: false },
+    now,
+    env: {},
+  };
+}
+
 async function unloadLaunchdJob(
   plistPath: string,
   actions: HostActions,
@@ -107,6 +127,7 @@ export async function executeUninstall(
   actions: HostActions,
   compose: (args: readonly string[]) => Promise<string>,
   write: Writer,
+  now: Date = new Date(),
 ): Promise<UninstallExecution> {
   const removed: string[] = [];
   const failed: string[] = [];
@@ -119,6 +140,10 @@ export async function executeUninstall(
       } else if (item.what === 'neo4j.conf settings') {
         const cut = stripOwnedSettings(item.target, manifest?.neo4jSettings ?? []);
         write(`  cut ${String(cut)} lines from ${item.target}`);
+      } else if (item.what === 'claude hooks') {
+        // Explicit, so a settings file never falls through to the recursive rmSync below: that
+        // would delete the file outright instead of stripping the entries this install owns.
+        uninstallHooks(claudeHooksOptions(item.target, now), write);
       } else {
         rmSync(item.target, { recursive: true, force: true });
       }
@@ -177,6 +202,7 @@ export function runUninstall(
         launchAgentPath: launchAgentPath(homedir()),
         platform: process.platform,
         models,
+        settingsPath: claudeSettingsPath(homedir()),
       });
       write(`data root ${dataDir}`);
       write(

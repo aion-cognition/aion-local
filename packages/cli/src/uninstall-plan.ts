@@ -1,6 +1,8 @@
 import type { Config } from '@aion/core';
 import { existsSync, readFileSync } from 'node:fs';
 
+import { readSettings } from './hook/settings-file.js';
+import { describeAionHooks } from './hook/settings.js';
 import type { InstallManifest } from './install-manifest.js';
 import { storeDropCommands, type InstallProfile } from './install-profile.js';
 
@@ -39,6 +41,8 @@ export type UninstallPlanInput = {
   readonly platform: string;
   /** The model tags this install pulled, which is what the Ollama line may offer to remove. */
   readonly models: readonly string[];
+  /** Where init wrote the Claude Code hooks. Route-agnostic: both profiles install them. */
+  readonly settingsPath: string;
   /** Injected so the plan is decidable in a test against scratch paths. */
   readonly exists?: (path: string) => boolean;
   readonly readFile?: (path: string) => string;
@@ -111,6 +115,50 @@ function gdsItem(
 }
 
 /**
+ * How many aion entries the settings file carries right now, or undefined when it could not be
+ * read. Unreadable is not the same as empty: the item still belongs in the plan so the executor
+ * hits the same read and reports the failure, rather than the plan silently dropping a file that
+ * may still carry every registration init wrote.
+ */
+function aionHookCount(settingsPath: string): number | undefined {
+  try {
+    return describeAionHooks(readSettings(settingsPath)).length;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Both profiles install the Claude Code hooks, so this does not branch on `profile` the way the
+ * items above do. It reuses `describeAionHooks` rather than a count of its own, so the plan and
+ * the removal in `executeUninstall` agree on what counts as ours.
+ */
+function claudeHooksItem(
+  input: UninstallPlanInput,
+  exists: (path: string) => boolean,
+): UninstallItem[] {
+  const { settingsPath } = input;
+  if (!exists(settingsPath)) {
+    return [];
+  }
+  const count = aionHookCount(settingsPath);
+  if (count === 0) {
+    return [];
+  }
+  return [
+    {
+      what: 'claude hooks',
+      target: settingsPath,
+      action: 'remove',
+      why:
+        count === undefined
+          ? `${settingsPath} could not be read to confirm; removal will report if it fails`
+          : `${String(count)} aion hook registrations this install added, still firing on a dead substrate once the rest is gone`,
+    },
+  ];
+}
+
+/**
  * The plan. Order is the order things are removed in: the service first, because a running server
  * holding the database open is what makes the rest fail halfway.
  */
@@ -147,6 +195,9 @@ export function planUninstall(input: UninstallPlanInput): readonly UninstallItem
       commands: storeDropCommands('docker', input.dataDir),
     });
   }
+
+  // Before the data root: a dead substrate should never be the thing that answers a hook fire.
+  items.push(...claudeHooksItem(input, exists));
 
   if (exists(input.dataDir)) {
     items.push({
