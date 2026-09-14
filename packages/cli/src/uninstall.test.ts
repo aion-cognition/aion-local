@@ -9,7 +9,12 @@ import { installHooks, type HooksCommandOptions } from './hooks-cmd.js';
 import type { HostActions, HostResult } from './host-actions.js';
 import { INSTALL_MANIFEST_VERSION, type InstallManifest } from './install-manifest.js';
 import { NEO4J_SETTINGS } from './native-graph.js';
-import { installedModelTags, planUninstall, sharedToolCommands } from './uninstall-plan.js';
+import {
+  installedModelTags,
+  planUninstall,
+  sharedToolCommands,
+  type UninstallItem,
+} from './uninstall-plan.js';
 import { executeUninstall, stripOwnedSettings, writePlan } from './uninstall.js';
 
 /**
@@ -34,6 +39,12 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+/**
+ * `result` answers every host command except `launchctl print`, which always reports no job: a
+ * real successful print names a loaded job, so a caller wanting to model one still loaded after a
+ * bootout has to say so rather than getting it from an `ok: true` this helper defaults to for
+ * everything else.
+ */
 function scripted(result: HostResult = { ok: true, stdout: '', stderr: '' }): {
   actions: HostActions;
   calls: string[];
@@ -44,6 +55,13 @@ function scripted(result: HostResult = { ok: true, stdout: '', stderr: '' }): {
     actions: {
       run: (program, args) => {
         calls.push([program, ...args].join(' '));
+        if (program === 'launchctl' && args[0] === 'print') {
+          return Promise.resolve({
+            ok: false,
+            stdout: '',
+            stderr: 'Could not find service "com.aion.mcp"',
+          });
+        }
         return Promise.resolve(result);
       },
       fetch: () => Promise.reject(new Error('no fetch in this path')),
@@ -257,7 +275,10 @@ describe('executing it', () => {
       () => undefined,
     );
 
-    expect(host.calls[0]?.startsWith('launchctl bootout gui/')).toBe(true);
+    // The job's own pid is read before the bootout, because a successful bootout takes the
+    // job's name with it and there would be nothing left to account for afterwards.
+    expect(host.calls[0]?.startsWith('launchctl print gui/')).toBe(true);
+    expect(host.calls[1]?.startsWith('launchctl bootout gui/')).toBe(true);
     expect(existsSync(plist)).toBe(false);
     expect(existsSync(dataDir)).toBe(false);
     expect(execution.failed).toEqual([]);
@@ -292,6 +313,193 @@ describe('executing it', () => {
     expect(existsSync(plist)).toBe(false);
     expect(existsSync(dataDir)).toBe(false);
     expect(execution.failed).toEqual([]);
+  });
+
+  /**
+   * The live failure: a `bootout` that reported failure was read as "the job was not loaded", the
+   * plist was deleted on that reading, and the process it had started kept the port and the store
+   * open for three hours. Every exit status below is one the old code took as absent.
+   */
+  describe('proving the owned service stopped', () => {
+    const OWNED = '/usr/local/bin/node /repo/packages/mcp/dist/main.js';
+
+    function machineActions(machine: {
+      readonly loaded?: boolean;
+      readonly jobPid?: number;
+      readonly bootout?: HostResult;
+      readonly listeners?: readonly number[];
+      readonly processes?: Readonly<Record<number, string>>;
+    }): { actions: HostActions; calls: string[] } {
+      const calls: string[] = [];
+      const processes = machine.processes ?? {};
+      // A successful bootout takes the job's name with it: once one has gone through, launchd
+      // stops naming the pid this machine was otherwise built to report.
+      let bootedOut = false;
+      return {
+        calls,
+        actions: {
+          run: (program, args) => {
+            calls.push([program, ...args].join(' '));
+            if (program === 'launchctl' && args[0] === 'print') {
+              if (machine.loaded === false || bootedOut) {
+                return Promise.resolve({ ok: false, stdout: '', stderr: 'Could not find service' });
+              }
+              const pid = machine.jobPid;
+              return Promise.resolve({
+                ok: true,
+                stdout: pid === undefined ? '\tstate = running\n' : `\tpid = ${String(pid)}\n`,
+                stderr: '',
+              });
+            }
+            if (program === 'launchctl' && args[0] === 'bootout') {
+              const result = machine.bootout ?? { ok: true, stdout: '', stderr: '' };
+              bootedOut = bootedOut || result.ok;
+              return Promise.resolve(result);
+            }
+            if (program === 'lsof') {
+              return Promise.resolve({
+                ok: true,
+                stdout: (machine.listeners ?? []).map(String).join('\n'),
+                stderr: '',
+              });
+            }
+            if (program === 'ps') {
+              const pid = Number.parseInt(args[1] ?? '', 10);
+              return Promise.resolve({ ok: true, stdout: processes[pid] ?? '', stderr: '' });
+            }
+            return Promise.resolve({ ok: true, stdout: '', stderr: '' });
+          },
+          fetch: () => Promise.reject(new Error('no fetch in this path')),
+        },
+      };
+    }
+
+    /** A machine mid-uninstall: a data root with a store in it and a job file beside it. */
+    function installed(): { dataDir: string; plist: string; items: readonly UninstallItem[] } {
+      const dataDir = join(dir, '.aion');
+      mkdirSync(dataDir, { recursive: true });
+      writeFileSync(join(dataDir, 'aion.sqlite'), 'substrate');
+      const plist = join(dir, 'com.aion.mcp.plist');
+      writeFileSync(plist, '<plist/>');
+      return {
+        dataDir,
+        plist,
+        items: planUninstall({
+          profile: 'native',
+          dataDir,
+          manifest: manifest(),
+          launchAgentPath: plist,
+          platform: 'darwin',
+          models: MODELS,
+          settingsPath,
+        }),
+      };
+    }
+
+    it('keeps the job file and the store when the job’s process is still running', async () => {
+      const { dataDir, plist, items } = installed();
+      const host = machineActions({
+        jobPid: 6316,
+        bootout: { ok: false, stdout: '', stderr: 'Boot-out failed: 5: Input/output error' },
+        processes: { 6316: OWNED },
+      });
+      const said: string[] = [];
+
+      const execution = await executeUninstall(
+        items,
+        manifest(),
+        host.actions,
+        () => Promise.resolve(''),
+        (line) => said.push(line),
+        undefined,
+        8765,
+      );
+
+      expect(existsSync(plist)).toBe(true);
+      expect(existsSync(dataDir)).toBe(true);
+      expect(execution.removed).toEqual([]);
+      expect(execution.failed.join('\n')).toContain('still running as pid 6316');
+      expect(execution.failed.join('\n')).toContain('refused while pid 6316 still holds it');
+      expect(said.join('\n')).not.toContain('unloaded');
+    });
+
+    /**
+     * The exact shape of the incident: launchd has forgotten the job, so its pid is gone, and the
+     * only remaining handle on the process is the port it is still serving.
+     */
+    it('finds the owned process through the port when launchd no longer names the job', async () => {
+      const { dataDir, plist, items } = installed();
+      const script = join(dir, 'repo', 'packages', 'mcp', 'dist', 'main.js');
+      const host = machineActions({
+        loaded: false,
+        bootout: { ok: false, stdout: '', stderr: 'Boot-out failed: 3: No such process' },
+        listeners: [6316],
+        processes: { 6316: `/usr/local/bin/node ${script}` },
+      });
+
+      const execution = await executeUninstall(
+        items,
+        manifest(),
+        host.actions,
+        () => Promise.resolve(''),
+        () => undefined,
+        undefined,
+        8765,
+      );
+
+      expect(existsSync(plist)).toBe(true);
+      expect(existsSync(dataDir)).toBe(true);
+      expect(execution.failed.join('\n')).toContain('6316');
+    });
+
+    it('names an unrelated port owner, leaves it alone, and carries on', async () => {
+      const { dataDir, plist, items } = installed();
+      const host = machineActions({
+        loaded: false,
+        bootout: { ok: false, stdout: '', stderr: 'Boot-out failed: 3: No such process' },
+        listeners: [4242],
+        processes: { 4242: '/opt/homebrew/bin/some-other-server --port 8765' },
+      });
+      const said: string[] = [];
+
+      const execution = await executeUninstall(
+        items,
+        manifest(),
+        host.actions,
+        () => Promise.resolve(''),
+        (line) => said.push(line),
+        undefined,
+        8765,
+      );
+
+      expect(said.join('\n')).toContain('held by pid 4242');
+      expect(said.join('\n')).toContain('left alone');
+      // Identification only: nothing here stops, signals or boots out another process.
+      expect(host.calls.join('\n')).not.toMatch(/\b(kill|pkill|killall|kickstart)\b/);
+      expect(existsSync(plist)).toBe(false);
+      expect(existsSync(dataDir)).toBe(false);
+      expect(execution.failed).toEqual([]);
+    });
+
+    it('removes the job and the store once the process it started is gone', async () => {
+      const { dataDir, plist, items } = installed();
+      const host = machineActions({ jobPid: 6316, listeners: [], processes: {} });
+
+      const execution = await executeUninstall(
+        items,
+        manifest(),
+        host.actions,
+        () => Promise.resolve(''),
+        () => undefined,
+        undefined,
+        8765,
+      );
+
+      expect(existsSync(plist)).toBe(false);
+      expect(existsSync(dataDir)).toBe(false);
+      expect(execution.failed).toEqual([]);
+      expect(execution.removed).toHaveLength(2);
+    });
   });
 
   it('takes the volumes down through compose on the docker profile', async () => {

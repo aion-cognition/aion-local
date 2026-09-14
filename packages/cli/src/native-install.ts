@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { waitForMcpHealth } from './compose.js';
+import { readMcpHealth, waitForMcpHealth } from './compose.js';
 import { buildDoctorChecks, runChecks, summarize } from './doctor.js';
 import { HOST_ACTIONS, NativeSetupError, type HostActions } from './host-actions.js';
 import { INSTALL_MANIFEST_VERSION, writeInstallManifest } from './install-manifest.js';
@@ -40,6 +40,15 @@ import {
 } from './native-graph.js';
 import type { Writer } from './output.js';
 import { envFilePath, envTemplatePath } from './paths.js';
+import {
+  isRealBuildSha,
+  launchdDomain,
+  readPortOwnership,
+  UNSTAMPED_BUILD,
+  verifyServiceBinding,
+  type IntendedService,
+  type ServiceBinding,
+} from './service-binding.js';
 
 /**
  * The three steps the native profile does differently, and nothing else. Everything between them
@@ -200,15 +209,18 @@ export function serviceEnvironment(
 
 /**
  * Writes the launchd job, loads it, and waits for the server to answer — the same three steps
- * compose does for `aion-mcp` on the other profile, in the units a host process takes them.
+ * compose does for `aion-mcp` on the other profile.
  *
- * A job whose file has not changed and whose server is already answering is left alone: that is
- * the idempotent path, and bouncing a running service to arrive where it already is would make a
- * re-run of init more disruptive than doing nothing. Anything else is `bootout` then `bootstrap`,
- * because launchd reads the plist at load and a rewritten file reaches a loaded job no other way.
+ * A service is left alone only when it is provably the intended one: the listener is our job's
+ * process, running our build, holding the store at the configured path. Matching plist text and a
+ * 200 on the port establish none of that — a process whose store file was deleted underneath it
+ * keeps the handle, the port, and the answer. Ownership is read first on every branch, since a
+ * refusal arriving after the plist is rewritten refuses nothing; an owned service failing any of
+ * the three is `bootout` then `bootstrap`, and a listener that is not the job's is reported, never
+ * stopped.
  *
- * A build is a prerequisite rather than something to attempt here. The server runs from
- * `packages/mcp/dist` on this profile, where the docker profile had the image build behind it.
+ * A build is a prerequisite rather than something to attempt here: this profile runs from
+ * `packages/mcp/dist`, where the docker profile had an image build behind it.
  */
 export type NativeServiceSeams = {
   readonly actions?: HostActions;
@@ -216,7 +228,89 @@ export type NativeServiceSeams = {
   readonly home?: string;
   /** The readiness wait, so a test can answer for a server it did not start. */
   readonly waitFor?: typeof waitForMcpHealth;
+  /** The probe body, so a test can say what answered rather than only that something did. */
+  readonly readHealth?: typeof readMcpHealth;
 };
+
+/** What the job this run would write says the service should be running. */
+function intendedBuildSha(environment: readonly (readonly [string, string])[]): string {
+  const stamped = environment.find(([key]) => key === 'AION_BUILD_SHA');
+  if (stamped === undefined) {
+    return UNSTAMPED_BUILD;
+  }
+  return stamped[1];
+}
+
+/** Where an operator looks when the service on the port is not the one this install owns. */
+function bindingCommands(config: Config, logDir: string): readonly string[] {
+  return [
+    `lsof -nP -iTCP:${String(config.operational.mcpPort)} -sTCP:LISTEN`,
+    `launchctl print ${launchdDomain()}/${MCP_LAUNCH_LABEL} | head -n 20`,
+    `tail -n 40 ${logDir}/aion-mcp.launchd.err.log`,
+  ];
+}
+
+/**
+ * The refusal for a listener this install may not claim, wherever the check ran. `unverified` gets
+ * the build steps: the process is the job's, and what is missing is a committed, stamped build to
+ * match it against, which no restart would produce.
+ */
+function bindingRefusal(
+  binding: Exclude<ServiceBinding, { kind: 'bound' }>,
+  config: Config,
+  logDir: string,
+): NativeSetupError {
+  const port = config.operational.mcpPort;
+  if (binding.kind === 'unowned') {
+    return new NativeSetupError(
+      `port ${String(port)} is answering and the process serving it is not ${MCP_LAUNCH_LABEL}: ${binding.reason}.`,
+      bindingCommands(config, logDir),
+    );
+  }
+  if (binding.kind === 'unverified') {
+    return new NativeSetupError(
+      `port ${String(port)} is answering and this install cannot say what it is running: ${binding.reason}.`,
+      ['npm run build', 'aion init --install native', ...bindingCommands(config, logDir)],
+    );
+  }
+  return new NativeSetupError(
+    `aion-mcp answered on port ${String(port)} and is not serving ${config.sqlite.path}: ${binding.reason}.`,
+    bindingCommands(config, logDir),
+  );
+}
+
+/**
+ * Whether this run may write the job file and load it, read before anything on the host changes. A
+ * listener that is not the job's process is left exactly as it is: rewriting the plist and issuing
+ * bootout/bootstrap in front of a refusal is a mutation this install had no standing to make. An
+ * owned listener answering with silence is no licence either: a restart cannot supply a build
+ * identity this install never carried, so that refusal has to land here too, not after the bootout.
+ */
+async function refuseUnownedPort(
+  config: Config,
+  logDir: string,
+  actions: HostActions,
+  intended: IntendedService,
+): Promise<void> {
+  const port = config.operational.mcpPort;
+  const ownership = await readPortOwnership(actions, port);
+  if (ownership.kind === 'foreign') {
+    throw new NativeSetupError(
+      `port ${String(port)} is already held and the process holding it is not ${MCP_LAUNCH_LABEL}: ${ownership.reason}.`,
+      bindingCommands(config, logDir),
+    );
+  }
+  if (ownership.kind === 'unknown') {
+    throw new NativeSetupError(
+      `port ${String(port)} could not be read, and this install will not write a job over a port it cannot see: ${ownership.reason}.`,
+      bindingCommands(config, logDir),
+    );
+  }
+  if (ownership.kind === 'ours' && !isRealBuildSha(intended.buildSha)) {
+    const reason = `this install carries no build identity, and the silent service on port ${String(port)} cannot be matched against one`;
+    throw bindingRefusal({ kind: 'unverified', reason }, config, logDir);
+  }
+}
 
 export async function prepareNativeService(
   config: Config,
@@ -227,6 +321,7 @@ export async function prepareNativeService(
   const actions = seams.actions ?? HOST_ACTIONS;
   const home = seams.home ?? homedir();
   const readiness = seams.waitFor ?? waitForMcpHealth;
+  const readHealth = seams.readHealth ?? readMcpHealth;
   const script = mcpScriptPath(repoDir);
   if (!existsSync(script)) {
     throw new NativeSetupError(
@@ -248,16 +343,46 @@ export async function prepareNativeService(
 
   const plistPath = launchAgentPath(home);
   mkdirSync(dirname(plistPath), { recursive: true });
+  const environment = serviceEnvironment(envFilePath(repoDir), process.env);
   const plist = renderLaunchdPlist({
     nodePath: process.execPath,
     repoDir,
-    environment: serviceEnvironment(envFilePath(repoDir), process.env),
+    environment,
     standardErrorPath: `${logDir}/aion-mcp.launchd.err.log`,
   });
+  const intended: IntendedService = {
+    port,
+    buildSha: intendedBuildSha(environment),
+    storePath: config.sqlite.path,
+  };
+
+  // The plist text decides whether a bound service is left alone, never whether the port is
+  // looked at: a rewrite and bootout land on a machine this run has not earned the right to change.
   const unchanged = existsSync(plistPath) && readFileSync(plistPath, 'utf8') === plist;
-  if (unchanged && (await mcpAnswers(readiness, port))) {
-    write(`aion-mcp already running under ${MCP_LAUNCH_LABEL}`);
-    return;
+  const serving = await readHealth(port);
+  if (serving === undefined) {
+    // Silence is not absence: a process can hold the port and never answer /health at all.
+    await refuseUnownedPort(config, logDir, actions, intended);
+  } else {
+    const binding = await verifyServiceBinding(serving, intended, actions);
+    if (binding.kind === 'unowned' || binding.kind === 'unverified') {
+      // Somebody else's process, or our own running something unnameable. Reported, never
+      // booted, signalled or replaced.
+      throw bindingRefusal(binding, config, logDir);
+    }
+    if (binding.kind === 'bound' && unchanged) {
+      // Idempotent: the job's own process, on this build, holding the configured store.
+      write(
+        `aion-mcp already running under ${MCP_LAUNCH_LABEL} (pid ${String(binding.pid)}, ` +
+          `build ${binding.buildSha}, store ${binding.storeId})`,
+      );
+      return;
+    }
+    write(
+      `replacing the service under ${MCP_LAUNCH_LABEL}: ${
+        binding.kind === 'bound' ? 'the job file changed' : binding.reason
+      }`,
+    );
   }
   writeFileSync(plistPath, plist);
   write(`launchd job ${plistPath}`);
@@ -272,23 +397,27 @@ export async function prepareNativeService(
       [
         `tail -n 40 ${logDir}/aion-mcp.launchd.err.log`,
         `tail -n 40 ${config.logging.filePath}`,
-        `launchctl print gui/${String(process.getuid?.() ?? 0)}/${MCP_LAUNCH_LABEL} | head -n 20`,
+        `launchctl print ${launchdDomain()}/${MCP_LAUNCH_LABEL} | head -n 20`,
       ],
     );
   }
-  write('  aion-mcp healthy');
-}
 
-/** Whether the server is already answering, which is what makes a re-run a no-op. */
-async function mcpAnswers(readiness: typeof waitForMcpHealth, port: number): Promise<boolean> {
-  try {
-    // A short probe: this only asks whether the job is already serving, and the full wait is for
-    // the load that follows.
-    await readiness(port, { timeoutMs: 1_500, pollIntervalMs: 500 });
-    return true;
-  } catch {
-    return false;
+  // Readiness says something answered; the same three facts decide it's this install's service.
+  const answered = await readHealth(port);
+  if (answered === undefined) {
+    throw new NativeSetupError(
+      `the launchd job is loaded and the probe on port ${String(port)} stopped answering.`,
+      bindingCommands(config, logDir),
+    );
   }
+  const binding = await verifyServiceBinding(answered, intended, actions);
+  if (binding.kind !== 'bound') {
+    throw bindingRefusal(binding, config, logDir);
+  }
+  write(
+    `  aion-mcp healthy (pid ${String(binding.pid)}, build ${binding.buildSha}, ` +
+      `store ${binding.storeId})`,
+  );
 }
 
 /**
@@ -300,7 +429,7 @@ async function loadLaunchdJob(
   actions: HostActions,
   write: Writer,
 ): Promise<void> {
-  const domain = `gui/${String(process.getuid?.() ?? 0)}`;
+  const domain = launchdDomain();
   await actions.run('launchctl', ['bootout', domain, plistPath]);
   const loaded = await actions.run('launchctl', ['bootstrap', domain, plistPath]);
   if (!loaded.ok) {

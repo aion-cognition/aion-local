@@ -119,3 +119,42 @@ export async function waitForMcpHealth(
 
   throw new McpServiceNotReadyError(port, timeoutMs, { cause: lastError });
 }
+
+/**
+ * One deadline for the whole health read, headers and body together.
+ *
+ * The endpoint is loopback and assembles its payload in process, so a second is already generous
+ * and ten is the allowance for a machine under load. The readiness wait above is what absorbs a
+ * cold start; this one is asked only about a server that is meant to be up, and a read that
+ * outlives the deadline is a hung socket rather than a slow one.
+ */
+const HEALTH_READ_TIMEOUT_MS = 10_000;
+
+/**
+ * The probe body rather than the verdict. `waitForMcpHealth` answers whether anything is serving
+ * the port, which is the question readiness asks; whether what is serving it is the intended
+ * service is decided from what it said, and that needs the payload.
+ *
+ * Undefined is "nothing answered", a state the caller acts on rather than a failure to report. A
+ * read that never finishes is folded into it by an aborting deadline rather than left pending: a
+ * peer that accepts the connection and then sends nothing, or sends headers and then stops
+ * mid-body, hangs both awaits forever otherwise, and the readiness loop outside cannot bound a
+ * call it is not making. One signal covers both, because aborting the request aborts the body
+ * stream it produced.
+ */
+export async function readMcpHealth(
+  port: number,
+  options: { readonly fetchImpl?: typeof fetch; readonly timeoutMs?: number } = {},
+): Promise<Record<string, unknown> | undefined> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const signal = AbortSignal.timeout(options.timeoutMs ?? HEALTH_READ_TIMEOUT_MS);
+  try {
+    const response = await fetchImpl(`${mcpBaseUrl(port)}${HEALTH_PATH}`, { signal });
+    if (!response.ok) {
+      return undefined;
+    }
+    return (await response.json()) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}

@@ -17,6 +17,11 @@ export type HealthSources = {
   readonly queueLag: (() => QueueLagSnapshot) | undefined;
   readonly plasticity: (() => PlasticityCounters) | undefined;
   readonly coverage: (() => CoverageStateReport) | undefined;
+  /**
+   * Which store this process actually has open, read through the live handle. Undefined for a
+   * service constructed without it, on the same terms as the three above.
+   */
+  readonly storeIdentity: (() => string | undefined) | undefined;
 };
 
 /**
@@ -90,6 +95,24 @@ function coverageFields(
   };
 }
 
+/**
+ * The identity of the store this process has open, taken from the substrate's own pairing row
+ * through the handle it is serving from. The configured path cannot answer this: a process
+ * holding a deleted or replaced file answers on the same port, under the same job, with the same
+ * path in its config, and only the store's own id tells that apart from the file now at the path.
+ *
+ * Null is a substrate that has not been paired yet, which is a different reading from a service
+ * too old to report one at all; that one omits the key.
+ */
+function storeFields(
+  storeIdentity: (() => string | undefined) | undefined,
+): Record<string, unknown> {
+  if (storeIdentity === undefined) {
+    return {};
+  }
+  return { store_id: storeIdentity() ?? null };
+}
+
 export function healthPayload(sources: HealthSources): Record<string, unknown> {
   return {
     status: 'ok',
@@ -99,5 +122,6 @@ export function healthPayload(sources: HealthSources): Record<string, unknown> {
     ...queueLagFields(sources.queueLag),
     ...plasticityFields(sources.plasticity),
     ...coverageFields(sources.coverage),
+    ...storeFields(sources.storeIdentity),
   };
 }

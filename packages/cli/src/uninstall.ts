@@ -7,9 +7,17 @@ import { claudeSettingsPath } from './hook/settings-file.js';
 import { DEFAULT_HOOKS_FLAGS, uninstallHooks, type HooksCommandOptions } from './hooks-cmd.js';
 import { HOST_ACTIONS, type HostActions } from './host-actions.js';
 import { readInstallManifest, type InstallManifest } from './install-manifest.js';
-import { launchAgentPath, MCP_LAUNCH_LABEL } from './launchd.js';
+import { launchAgentPath, mcpScriptPath, MCP_LAUNCH_LABEL } from './launchd.js';
 import { askLine, confirmOrExit, stderrWriter, stdoutWriter, type Writer } from './output.js';
 import { resolveRepoDir } from './paths.js';
+import {
+  launchdDomain,
+  readLaunchdJob,
+  readListenerPids,
+  readProcessCommand,
+  type LaunchdJobState,
+  type Observed,
+} from './service-binding.js';
 import { withSubstrate } from './substrate.js';
 import {
   installedModelTags,
@@ -21,14 +29,12 @@ import {
 /**
  * `aion uninstall`: the mirror of init, and the only command that removes the memory store.
  *
- * It asks twice. The first question is the ordinary destructive confirm and `--yes` skips it. The
- * second asks for the data root to be typed back, and nothing skips it: `--yes` exists so a script
- * can re-run an install, and the step that deletes everything the substrate ever remembered is not
- * a step a script should be able to take by passing a flag it was passing anyway.
+ * It asks twice: the ordinary destructive confirm, which `--yes` skips, and a second asking for
+ * the data root to be typed back, which nothing skips — the step that deletes everything the
+ * substrate ever remembered is not one a flag should answer for.
  *
- * It removes what this install put there and says what it left. A Neo4j somebody else runs, a
- * plugin jar they placed, Ollama and its models: those are printed with their commands and not
- * touched. `uninstall-plan.ts` carries the rule and decides all of it before anything is removed.
+ * It removes what this install put there and prints the rest with its commands, untouched:
+ * `uninstall-plan.ts` carries the rule and decides all of it beforehand.
  */
 
 const SPEC: ArgSpec = {
@@ -61,9 +67,8 @@ export function writePlan(items: readonly UninstallItem[], write: Writer): void 
 }
 
 /**
- * Cuts the lines this install wrote and leaves every other line alone, including one carrying a
- * key we own with a value somebody changed: an edited setting is a decision, and taking it out
- * because the key matches would undo it silently.
+ * Cuts the lines this install wrote, leaving every other line alone — including one carrying a
+ * key we own with a changed value: an edited setting is a decision, not something to undo.
  */
 export function stripOwnedSettings(
   confFile: string,
@@ -79,10 +84,8 @@ export function stripOwnedSettings(
 }
 
 /**
- * `uninstallHooks` also knows codex, the manual-merge path, and its own repo verification; none
- * of that applies here, because init only ever writes the claude harness. This is the narrower
- * shape it needs to do exactly that removal, reusing the same read, backup, and strip it always
- * has.
+ * `uninstallHooks` also knows codex and its own repo verification; none of that applies here,
+ * since init only ever writes the claude harness. This reuses its read, backup and strip.
  */
 function claudeHooksOptions(settingsPath: string, now: Date): HooksCommandOptions {
   return {
@@ -96,19 +99,217 @@ function claudeHooksOptions(settingsPath: string, now: Date): HooksCommandOption
   };
 }
 
+/**
+ * What became of the owned service when uninstall tried to stop it.
+ *
+ * `absent`/`stopped` mean nothing of ours is running — the only readings that let the data root
+ * go. `alive` is the state a failed `bootout` used to be read as `absent`: the process still
+ * holds the port and the store open. `unknown` had no name at all — a denied `launchctl print`, a
+ * job launchd still holds, an observation that threw — and none of those say stopped either.
+ */
+type ServiceShutdown =
+  | { readonly outcome: 'stopped' | 'absent' }
+  | { readonly outcome: 'alive'; readonly pid: number; readonly command: string }
+  | { readonly outcome: 'unknown'; readonly reason: string };
+
+/** The search for a process the job started, where a reading that could not be taken is neither. */
+type OwnedProcessSearch =
+  | { readonly found: 'running'; readonly pid: number; readonly command: string }
+  | { readonly found: 'none' }
+  | { readonly found: 'unknown'; readonly reason: string };
+
+/** What the owned process would be running, when the manifest recorded where it was built. */
+function ownedScriptPath(manifest: InstallManifest | undefined): string | undefined {
+  if (manifest?.repoDir === undefined) {
+    return undefined;
+  }
+  return mcpScriptPath(manifest.repoDir);
+}
+
+/**
+ * The owned process, if one is still up: launchd's pid while it knows the job, or else the port,
+ * where a holder is ours only when it runs our recorded server. A holder that is not ours is
+ * named and left alone; nothing here signals, boots out or kills anything.
+ */
+async function survivingOwnedProcess(
+  actions: HostActions,
+  candidates: readonly (number | undefined)[],
+  port: number | undefined,
+  scriptPath: string | undefined,
+  write: Writer,
+): Promise<OwnedProcessSearch> {
+  for (const pid of [...new Set(candidates)]) {
+    if (pid === undefined) {
+      continue;
+    }
+    const seen = await readProcessCommand(actions, pid);
+    if (!seen.known) {
+      return { found: 'unknown', reason: `pid ${String(pid)} could not be read: ${seen.reason}` };
+    }
+    if (seen.value !== undefined) {
+      return { found: 'running', pid, command: seen.value };
+    }
+  }
+  if (port === undefined) {
+    return { found: 'none' };
+  }
+  const listeners = await readListenerPids(actions, port);
+  if (!listeners.known) {
+    return {
+      found: 'unknown',
+      reason: `what is listening on port ${String(port)} could not be read: ${listeners.reason}`,
+    };
+  }
+  for (const pid of listeners.value) {
+    const seen = await readProcessCommand(actions, pid);
+    if (!seen.known) {
+      return { found: 'unknown', reason: `pid ${String(pid)} could not be read: ${seen.reason}` };
+    }
+    if (seen.value === undefined) {
+      continue;
+    }
+    if (scriptPath !== undefined && seen.value.includes(scriptPath)) {
+      return { found: 'running', pid, command: seen.value };
+    }
+    write(
+      `  port ${String(port)} is held by pid ${String(pid)}, which is not this install's server; left alone`,
+    );
+  }
+  return { found: 'none' };
+}
+
+/** What a pid launchd named, when it named one and the read succeeded. */
+function namedPid(job: Observed<LaunchdJobState>): number | undefined {
+  return job.known ? job.value.pid : undefined;
+}
+
+/**
+ * The one reading a `stopped`/`absent` verdict may rest on: launchd's own account, read after
+ * whatever this run did, saying it no longer holds the job. A registered job with no current pid
+ * does not satisfy this — KeepAlive is exactly that shape between respawns — and neither does an
+ * unreadable one.
+ */
+function accountsForShutdown(job: Observed<LaunchdJobState>): boolean {
+  return job.known && !job.value.loaded;
+}
+
+/**
+ * Boots the job out and then establishes what happened, rather than reading the bootout's own exit
+ * status as the answer. A failed bootout and a job that was never there are the same exit code.
+ *
+ * A bootout reporting success answers only one of three things that have to hold: no process of
+ * ours survives, the pre-bootout read succeeded, and launchd's after-read says the job is gone. It
+ * never substitutes for the other two, exactly as a reported failure never substitutes for the job
+ * actually being loaded.
+ */
 async function unloadLaunchdJob(
   plistPath: string,
   actions: HostActions,
   write: Writer,
-): Promise<void> {
-  const domain = `gui/${String(process.getuid?.() ?? 0)}`;
+  port: number | undefined,
+  scriptPath: string | undefined,
+): Promise<ServiceShutdown> {
+  const domain = launchdDomain();
+  // Read before the bootout: the pid launchd names now is the process we have to account for
+  // afterwards, and a successful bootout takes the job's name with it.
+  const before = await readLaunchdJob(actions);
   const unloaded = await actions.run('launchctl', ['bootout', domain, plistPath]);
-  write(
-    unloaded.ok
-      ? `  unloaded ${MCP_LAUNCH_LABEL}`
-      : `  ${MCP_LAUNCH_LABEL} was not loaded (${unloaded.stderr.trim() || 'no job'})`,
+  const after = await readLaunchdJob(actions);
+  const detail = unloaded.stderr.trim() || 'no detail';
+  const survivor = await survivingOwnedProcess(
+    actions,
+    [namedPid(before), namedPid(after)],
+    port,
+    scriptPath,
+    write,
   );
+  if (survivor.found === 'running') {
+    write(
+      `  ${MCP_LAUNCH_LABEL} is still running as pid ${String(survivor.pid)} after bootout ` +
+        `(${unloaded.ok ? 'bootout reported success' : detail})`,
+    );
+    return { outcome: 'alive', pid: survivor.pid, command: survivor.command };
+  }
+  if (survivor.found === 'unknown') {
+    write(`  could not establish whether ${MCP_LAUNCH_LABEL} stopped: ${survivor.reason}`);
+    return { outcome: 'unknown', reason: survivor.reason };
+  }
+  if (!before.known) {
+    // Without the pre-bootout pid, an old owned process could be running under one neither the
+    // after-read nor the port would surface; a clean-looking after-state does not account for it.
+    const reason = `launchd could not be read for ${MCP_LAUNCH_LABEL} before bootout: ${before.reason}`;
+    write(`  ${reason}`);
+    return { outcome: 'unknown', reason };
+  }
+  const attempt = unloaded.ok ? 'bootout reported success but' : `did not boot out (${detail}) and`;
+  if (!accountsForShutdown(after)) {
+    const reason = after.known
+      ? `${MCP_LAUNCH_LABEL} ${attempt} launchd still holds the job`
+      : `${MCP_LAUNCH_LABEL} ${attempt} launchd could not be read afterwards: ${after.reason}`;
+    write(`  ${reason}`);
+    return { outcome: 'unknown', reason };
+  }
+  if (unloaded.ok) {
+    write(`  unloaded ${MCP_LAUNCH_LABEL}`);
+    rmSync(plistPath, { force: true });
+    return { outcome: 'stopped' };
+  }
+  write(`  ${MCP_LAUNCH_LABEL} was not loaded (${unloaded.stderr.trim() || 'no job'})`);
   rmSync(plistPath, { force: true });
+  return { outcome: 'absent' };
+}
+
+/**
+ * The same question when the plan named no launchd step: an absent plist is not an absent
+ * service, since the process it started can still hold the store open.
+ */
+async function observeOwnedService(
+  actions: HostActions,
+  manifest: InstallManifest | undefined,
+  port: number | undefined,
+  write: Writer,
+): Promise<ServiceShutdown> {
+  const job = await readLaunchdJob(actions);
+  if (!job.known) {
+    return {
+      outcome: 'unknown',
+      reason: `launchd could not be read for ${MCP_LAUNCH_LABEL}: ${job.reason}`,
+    };
+  }
+  const survivor = await survivingOwnedProcess(
+    actions,
+    [job.value.pid],
+    port,
+    ownedScriptPath(manifest),
+    write,
+  );
+  if (survivor.found === 'running') {
+    write(
+      `  ${MCP_LAUNCH_LABEL} is still running as pid ${String(survivor.pid)} with no job file to unload`,
+    );
+    return { outcome: 'alive', pid: survivor.pid, command: survivor.command };
+  }
+  if (survivor.found === 'unknown') {
+    return { outcome: 'unknown', reason: survivor.reason };
+  }
+  if (!accountsForShutdown(job)) {
+    // No plist to unload is not nothing registered: a KeepAlive job has no pid to have been found.
+    const reason = `no job file to unload, and launchd still holds ${MCP_LAUNCH_LABEL}`;
+    write(`  ${reason}`);
+    return { outcome: 'unknown', reason };
+  }
+  return { outcome: 'absent' };
+}
+
+/** Why the data root stays, or undefined when the service is accounted for and it may go. */
+function deletionRefusal(shutdown: ServiceShutdown, target: string): string | undefined {
+  if (shutdown.outcome === 'alive') {
+    return `data root (${target}): refused while pid ${String(shutdown.pid)} still holds it`;
+  }
+  if (shutdown.outcome === 'unknown') {
+    return `data root (${target}): refused because the owned service was not shown to be stopped: ${shutdown.reason}`;
+  }
+  return undefined;
 }
 
 export type UninstallExecution = {
@@ -117,9 +318,13 @@ export type UninstallExecution = {
 };
 
 /**
- * Removes what the plan marked `remove`, in the plan's order. Every step is guarded on its own:
- * a machine part-way through an install is the usual caller, and one thing that is not there must
- * not stop the next thing that is.
+ * Removes what the plan marked `remove`, in the plan's order. Every step is guarded on its own: a
+ * machine part-way through an install is the usual caller, and one thing missing must not stop
+ * the next thing that is there.
+ *
+ * The service step is the one exception: a server still running writes the store the data-root
+ * step would delete, so that step waits on a shutdown or a demonstrated absence, even with no
+ * launchd step because the plist was already gone. `mcpPort` finds a process launchd forgot.
  */
 export async function executeUninstall(
   items: readonly UninstallItem[],
@@ -128,30 +333,69 @@ export async function executeUninstall(
   compose: (args: readonly string[]) => Promise<string>,
   write: Writer,
   now: Date = new Date(),
+  mcpPort?: number,
 ): Promise<UninstallExecution> {
   const removed: string[] = [];
   const failed: string[] = [];
+  // The docker profile's server is a container compose takes down; no launchd job to account for.
+  const hostServed =
+    manifest?.profile !== 'docker' &&
+    !items.some((entry) => entry.what === 'compose services and volumes');
+  let shutdown: ServiceShutdown | undefined;
   for (const item of items.filter((entry) => entry.action === 'remove')) {
     try {
       if (item.what === 'launchd job') {
-        await unloadLaunchdJob(item.target, actions, write);
+        shutdown = await unloadLaunchdJob(
+          item.target,
+          actions,
+          write,
+          mcpPort,
+          ownedScriptPath(manifest),
+        );
+        if (shutdown.outcome === 'alive') {
+          failed.push(
+            `${item.what} (${item.target}): ${MCP_LAUNCH_LABEL} is still running as pid ` +
+              `${String(shutdown.pid)}; the job file is left in place`,
+          );
+          continue;
+        }
+        if (shutdown.outcome === 'unknown') {
+          failed.push(
+            `${item.what} (${item.target}): ${shutdown.reason}; the job file is left in place`,
+          );
+          continue;
+        }
+      } else if (item.what === 'data root') {
+        // The store this would delete is the one a surviving server has open; deleting it would
+        // leave that server serving a nameless file, so an unproved shutdown refuses it too.
+        shutdown ??= hostServed
+          ? await observeOwnedService(actions, manifest, mcpPort, write)
+          : { outcome: 'absent' };
+        const refusal = deletionRefusal(shutdown, item.target);
+        if (refusal !== undefined) {
+          failed.push(refusal);
+          continue;
+        }
+        rmSync(item.target, { recursive: true, force: true });
       } else if (item.what === 'compose services and volumes') {
         await compose(['--profile', 'mcp', 'down', '--volumes']);
       } else if (item.what === 'neo4j.conf settings') {
         const cut = stripOwnedSettings(item.target, manifest?.neo4jSettings ?? []);
         write(`  cut ${String(cut)} lines from ${item.target}`);
       } else if (item.what === 'claude hooks') {
-        // Explicit, so a settings file never falls through to the recursive rmSync below: that
-        // would delete the file outright instead of stripping the entries this install owns.
+        // Explicit, so a settings file never falls to the rmSync below and gets deleted outright.
         uninstallHooks(claudeHooksOptions(item.target, now), write);
       } else {
         rmSync(item.target, { recursive: true, force: true });
       }
       removed.push(`${item.what} (${item.target})`);
     } catch (err) {
-      failed.push(
-        `${item.what} (${item.target}): ${err instanceof Error ? err.message : 'failed'}`,
-      );
+      const detail = err instanceof Error ? err.message : 'failed';
+      if (item.what === 'launchd job') {
+        // The step that would answer whether the service stopped is the step that threw.
+        shutdown = { outcome: 'unknown', reason: `the service step failed: ${detail}` };
+      }
+      failed.push(`${item.what} (${item.target}): ${detail}`);
     }
   }
   return { removed, failed };
@@ -223,8 +467,7 @@ export function runUninstall(
         write('cancelled');
         return 1;
       }
-      // The second question, and `--yes` does not answer it. The data root is the memory: every
-      // episode, every claim, every narrative the substrate ever wrote.
+      // The second question, unanswered by `--yes`: the data root is every episode the substrate ever wrote.
       if (existsSync(dataDir)) {
         if (!process.stdin.isTTY) {
           stderrWriter(`refusing to delete ${dataDir} with no terminal to confirm it on.`);
@@ -247,6 +490,8 @@ export function runUninstall(
         actions,
         composeRunner(resolveRepoDir()),
         write,
+        new Date(),
+        config.operational.mcpPort,
       );
       writeSummary(execution, items, models, write);
       return execution.failed.length === 0 ? 0 : 1;

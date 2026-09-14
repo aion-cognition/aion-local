@@ -15,7 +15,13 @@ export { describeError } from './errors.js';
 
 export { halfWindowIntervalMs, MIN_SWEEP_INTERVAL_MS, SweepTimer } from './sweep-timer.js';
 
-export { DEFAULT_SQLITE_PATH, SqliteStore, openSqliteHandle } from './sqlite/database.js';
+export {
+  DEFAULT_SQLITE_PATH,
+  SqliteStore,
+  openExistingSqliteHandle,
+  openSqliteHandle,
+  sqliteTableExists,
+} from './sqlite/database.js';
 export type { SqliteHandle } from './sqlite/database.js';
 
 export { PublicationCoordinator } from './publication/coordinator.js';

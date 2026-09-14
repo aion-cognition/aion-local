@@ -422,6 +422,24 @@ export function openReadOnlySqliteHandle(target: SqliteTarget): SqliteHandle {
   return db;
 }
 
+/**
+ * A connection to a substrate that already exists, carrying whatever schema it already has.
+ *
+ * Between the two above: the bootstrap open would install the application schema into a file that
+ * asked only to be identified, and the read-only open cannot attach to a live WAL substrate whose
+ * shared-memory file is missing, which is the state a running service leaves behind. Write
+ * capability is here for that recovery and for nothing else; no statement this connection's
+ * callers run creates, migrates or repairs anything.
+ *
+ * `journal_mode` is left alone as well. Setting it is a write, and a caller identifying a file has
+ * no business converting it.
+ */
+export function openExistingSqliteHandle(target: SqliteTarget): SqliteHandle {
+  const db = new Database(target.filePath, { fileMustExist: true });
+  db.pragma(`busy_timeout = ${String(target.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS)}`);
+  return db;
+}
+
 /** Whether a table this substrate is being read for is actually present. */
 export function sqliteTableExists(db: SqliteHandle, table: string): boolean {
   const row = db

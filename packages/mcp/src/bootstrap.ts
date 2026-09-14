@@ -35,6 +35,7 @@ import {
   recallResultFor,
   readCoverageState,
   readMemberName,
+  readSubstratePairing,
   RecallSideEffects,
   recordGenerationOutcome,
   ReflectionOrchestrator,
@@ -441,6 +442,9 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       queueLag: () => queueLagSnapshot(store.db, config.operational.workerMaxAttempts),
       plasticity: () => plasticityCounters(store.db),
       coverage: () => readCoverageState(store.db),
+      // Through the handle the process is serving from, so the answer describes the file this
+      // process actually holds rather than the file now sitting at the configured path.
+      storeIdentity: () => readSubstratePairing(store.db)?.substrateId,
     });
 
     // The primary trigger, not the fallback: a client's close() tears down its own

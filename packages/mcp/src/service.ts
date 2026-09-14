@@ -81,6 +81,13 @@ export type AionMcpServiceOptions = {
    * claim, and whether anything may be removed from the substrate.
    */
   readonly coverage?: () => CoverageStateReport;
+  /**
+   * The store this process has open, by the substrate's own pairing id, read through the same
+   * handle every tool call uses. A probe comparing it against the store at the configured path is
+   * how an installation tells its own service from one still holding a file that has been
+   * replaced underneath it.
+   */
+  readonly storeIdentity?: () => string | undefined;
 };
 
 export class AionMcpService {
@@ -93,6 +100,7 @@ export class AionMcpService {
   readonly #queueLag: (() => QueueLagSnapshot) | undefined;
   readonly #plasticity: (() => PlasticityCounters) | undefined;
   readonly #coverage: (() => CoverageStateReport) | undefined;
+  readonly #storeIdentity: (() => string | undefined) | undefined;
   readonly #inFlight: InFlightCalls;
   #stopping = false;
 
@@ -106,6 +114,7 @@ export class AionMcpService {
     this.#queueLag = options.queueLag;
     this.#plasticity = options.plasticity;
     this.#coverage = options.coverage;
+    this.#storeIdentity = options.storeIdentity;
     this.#http = createServer((req, res) => {
       void this.#route(req, res);
     });
@@ -204,6 +213,7 @@ export class AionMcpService {
             queueLag: this.#queueLag,
             plasticity: this.#plasticity,
             coverage: this.#coverage,
+            storeIdentity: this.#storeIdentity,
           }),
         );
         return;
