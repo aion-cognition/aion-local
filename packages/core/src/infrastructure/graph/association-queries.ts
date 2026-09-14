@@ -44,6 +44,17 @@ export type LinkCoOccurrenceInput = {
   readonly now: Date;
 };
 
+export type LinkCoOccurrenceResult = {
+  /**
+   * True when this call's `MERGE` created the edge: `edges.ts` sums `count` on every write, so a
+   * fresh edge reads back at exactly the `count: 1` this call contributed and a pair the graph
+   * already held reads back higher. Read off the merge's own return rather than a second query,
+   * since current edge strength already carries whatever reinforcement or decay touched it since
+   * birth and cannot retroactively answer whether this call was the birth.
+   */
+  readonly birth: boolean;
+};
+
 /**
  * One pair, already ledger-gated by the caller. `count: 1` is the one observation this call
  * stands for, and the strength moves one bounded step rather than pinning at 1.
@@ -59,8 +70,8 @@ export type LinkCoOccurrenceInput = {
 export async function linkCoOccurrence(
   driver: Driver,
   input: LinkCoOccurrenceInput,
-): Promise<void> {
-  await upsertEdge(driver, {
+): Promise<LinkCoOccurrenceResult> {
+  const edge = await upsertEdge(driver, {
     type: CO_OCCURS_TYPE,
     sourceId: input.sourceId,
     targetId: input.targetId,
@@ -74,6 +85,7 @@ export async function linkCoOccurrence(
     count: 1,
     now: input.now,
   });
+  return { birth: edge.count === 1 };
 }
 
 export type LinkSimilarityInput = {

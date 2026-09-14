@@ -39,10 +39,12 @@ import {
  * transaction. Nothing here rebuilds a prompt or a predicate, so the number belongs to the
  * pipeline rather than to a pipeline a test wired.
  *
- * The rule was written before the numbers. Precision at or above 0.95 on mechanical keyed closes
- * ships `AION_KEYED_CLOSE_MODE=close`; anything less ships `judge`, where the key stays a
- * candidate generator and the two-pass unanimous judge decides the pair as it always has. Neither
- * outcome parks anything in front of a person: a missed bar costs model calls, not autonomy.
+ * The bar was written before the numbers: precision at or above 0.95 on mechanical keyed
+ * closes. What changed in F is what the measurement is allowed to decide: it is reported
+ * against that bar as an observation for the ruling packet, and the shipped default is pinned
+ * to its own literal value rather than derived from this run. Under the shipped `judge` the key
+ * stays a candidate generator and the two-pass unanimous judge decides the pair as it always
+ * has; neither reading parks anything in front of a person.
  *
  * The bar is higher than the 0.9 the two judge batteries carry because this path has no second
  * opinion in it. A wrong keyed close is made and committed in one transaction with nothing
@@ -240,7 +242,9 @@ beforeAll(async () => {
   // Both halves of one case in order, then the next case. The prior claim has to be on the graph
   // and current before the new one is written, since the close runs in that write's transaction.
   for (const entry of KEYED_BATTERY) {
+    substrate.beginCase(`${entry.key}/prior`);
     await enrich(priorEpisodeId(entry), entry.prior, PRIOR_AT);
+    substrate.beginCase(`${entry.key}/new`);
     await enrich(newEpisodeId(entry), entry.next, NEW_AT);
   }
 
@@ -369,23 +373,24 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('the 24-case keyed close battery', () => {
   });
 
   /**
-   * The pre-registered rule, asserted rather than described. It fails in both directions: a
-   * mechanism that drops under the bar while the shipped default still closes fails here, and so
-   * does one that clears it while the default stays `judge`.
+   * The observation the ruling packet reads, no longer an authority gate. This battery used to
+   * derive the shipped mode from its own run and assert the two agreed; the F review ruled that
+   * out. The measurement and the sample size are printed against the bar, and the shipped
+   * default is pinned to its own literal value so a change to it argues its own case here.
    */
-  it('ships the default the measurement calls for', () => {
+  it('reports the measurement against the bar and pins the shipped default', () => {
     const measured = precision();
     const enough = closes.length >= KEYED_CLOSE_SAMPLE_FLOOR;
-    const expected = measured >= PRECISION_BAR && enough ? 'close' : 'judge';
+    const meets = measured >= PRECISION_BAR && enough;
 
     console.log(
-      `pre-registered rule: keyed-close precision ${measured.toFixed(3)} against ` +
+      `observation: keyed-close precision ${measured.toFixed(3)} against ` +
         `${String(PRECISION_BAR)}, over ${String(closes.length)} mechanical close(s) against a ` +
         `floor of ${String(KEYED_CLOSE_SAMPLE_FLOOR)}; recall ${recall().toFixed(3)} gates ` +
-        `nothing; the measurement calls for '${expected}' and the shipped default is ` +
-        `'${DEFAULT_KEYED_CLOSE_MODE}'`,
+        `nothing; the bar is ${meets ? 'met' : 'not met'} on this run, and the shipped default ` +
+        `stays '${DEFAULT_KEYED_CLOSE_MODE}' either way`,
     );
 
-    expect(DEFAULT_KEYED_CLOSE_MODE).toBe(expected);
+    expect(DEFAULT_KEYED_CLOSE_MODE).toBe('judge');
   });
 });

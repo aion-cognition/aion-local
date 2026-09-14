@@ -86,6 +86,9 @@ function locate(
 
 beforeAll(async () => {
   await substrate.open();
+  // Named before the first call: the ten-episode enrichment is this file's setup group, and a
+  // row it buys has to say so rather than landing under `unnamed-case`.
+  substrate.beginCase('setup/battery-substrate');
 
   for (const [index, episode] of BATTERY_SUBSTRATE.entries()) {
     const stored = await substrate.store(
@@ -148,6 +151,7 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('an unrelated query returns a thin or empty
   it.each(OFF_TOPIC_BATTERY)(
     'comes back thin or empty for: %s',
     async (query) => {
+      substrate.beginCase(`off-topic/${query}`);
       const result = await substrate.recall(query, { identity: READ_SESSION, now: RECALLED_AT });
       const unmeasured = result.items.filter((item) => item.confidence === 0).length;
       offTopicRows.push({ query, items: result.items.length, unmeasured });
@@ -197,6 +201,7 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('an unrelated query returns a thin or empty
   // names the mechanism rather than the symptom: an off-topic pack fills when one candidate
   // anchors it and every node the spread reached then rides in with nothing measured about it.
   it('admits nothing into an off-topic pack on another item\u2019s anchor', () => {
+    substrate.beginCase('off-topic/tally');
     console.log(
       `off-topic tally: ${offTopicRows
         .map((row) => `${String(row.items)}/${String(row.unmeasured)} unmeasured`)
@@ -208,6 +213,7 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('an unrelated query returns a thin or empty
   });
 
   it('says so in the text an agent reads, not only in the structured buckets', async () => {
+    substrate.beginCase('off-topic-rendered-text');
     const result = await substrate.recall(
       'monsoon rainfall variability across Tamil Nadu districts',
       {
@@ -227,6 +233,7 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)(
     it.each(ON_TOPIC_BATTERY)(
       'still answers: $query',
       async (probe) => {
+        substrate.beginCase(`on-topic/${probe.expects}`);
         const result = await substrate.recall(probe.query, {
           identity: READ_SESSION,
           now: RECALLED_AT,
@@ -261,6 +268,7 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)(
 
     // Last, so every probe above has already pushed its row.
     it('keeps the answer at the head of its bucket more often than not', () => {
+      substrate.beginCase('on-topic/rank-rate');
       const first = onTopicRows.filter((row) => row.bucketRank === 0).length;
       console.log(
         `on-topic bucket-rank-1 rate: ${String(first)}/${String(onTopicRows.length)}, ` +

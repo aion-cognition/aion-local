@@ -77,6 +77,50 @@ const COUNT_BRIDGES_BETWEEN = [
   'RETURN count(b) AS count',
 ].join('\n');
 
+export type PublishedBridge = {
+  readonly id: string;
+  readonly author: BridgeAuthor;
+  /** Absent on a deterministic bridge, since only a model gives one. */
+  readonly compatibility?: number;
+  /** When the bridge was recorded, for the compatibility-calibration sense's age reading. */
+  readonly createdAt: Date;
+};
+
+const LIST_PUBLISHED_BRIDGES = [
+  'MATCH (b:Bridge)',
+  `WHERE ${currentOnly('b')}`,
+  `RETURN b.id AS id, coalesce(b.${BRIDGE_AUTHOR_PROPERTY}, 'deterministic') AS author,`,
+  `       b.${BRIDGE_COMPATIBILITY_PROPERTY} AS compatibility,`,
+  `       b.tx_from AS created_at`,
+  'ORDER BY created_at DESC',
+  'LIMIT $limit',
+].join('\n');
+
+/**
+ * Every published bridge that carries a recorded stamp, most recent first, for the
+ * compatibility-calibration sense. `author` distinguishes the model's own proposals from the
+ * deterministic floor, which is what the sense reports separately rather than as one pooled
+ * population. A row with no readable `tx_from` is dropped rather than guessed at: every writer
+ * stamps it, so its absence means a shape this reader has never seen, not a young bridge.
+ */
+export async function listPublishedBridges(
+  driver: Driver,
+  limit: number,
+): Promise<readonly PublishedBridge[]> {
+  const rows = await runRead(
+    driver,
+    LIST_PUBLISHED_BRIDGES,
+    { limit: toGraphInteger(limit) },
+    (row) => ({
+      id: row.id as string,
+      author: row.author as BridgeAuthor,
+      ...(typeof row.compatibility === 'number' ? { compatibility: row.compatibility } : {}),
+      createdAt: row.created_at instanceof Date ? row.created_at : undefined,
+    }),
+  );
+  return rows.filter((row): row is PublishedBridge => row.createdAt instanceof Date);
+}
+
 /** The cheap early exit: a pair already joined needs no second bridge. */
 export async function countBridgesBetween(
   driver: Driver,

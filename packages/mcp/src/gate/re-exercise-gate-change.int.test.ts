@@ -114,6 +114,9 @@ function bestRank(
 
 beforeAll(async () => {
   await substrate.open();
+  // The two enrichment groups this file's measured cases rest on, named before their calls so
+  // every row the shipped pipeline buys here says which group bought it.
+  substrate.beginCase('setup/baselines');
 
   const baselineIds: string[] = [];
   for (const entry of CHANGE_BATTERY) {
@@ -134,6 +137,7 @@ beforeAll(async () => {
 
   // The corrections land only once the baselines are enriched, which is what gives the
   // supersession stage current claims to judge against. Measured in this order too.
+  substrate.beginCase('setup/corrections');
   for (const held of cases) {
     const stored = await substrate.store(
       { observations: [held.entry.next], summary: `${held.entry.subject}, revised` },
@@ -166,6 +170,7 @@ afterAll(async () => {
  */
 describe.skipIf(REMOTE_JUDGE_ABSENT)('the six-case supersession set under the shipped mode', () => {
   it('closes nothing on one judgment alone', async () => {
+    substrate.beginCase('supersession/no-single-judgment-close');
     // The legacy `auto` provenance, which no shipped mode writes: a close stamped this way is
     // a confidence gate that came back.
     const written = await relationshipsByProvenance(substrate.driver, SUPERSESSION_METHOD);
@@ -192,6 +197,7 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('the six-case supersession set under the sh
   }, 180_000);
 
   it('records the judgments it did make as reviewable proposals', () => {
+    substrate.beginCase('supersession/proposal-rows');
     const corrections = CHANGE_BATTERY.filter((entry) => entry.kind === 'correction');
     const baits = CHANGE_BATTERY.filter((entry) => entry.kind === 'bait');
     const owned = (entry: ChangeCase): ReadonlySet<string> => {
@@ -236,6 +242,9 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('the four corrections, read back', () => {
 
   async function ask(entry: ChangeCase, phase: string): Promise<Ranks> {
     const row = held(entry);
+    // The readback is a measured case of its own: it runs the whole read path, cue model
+    // included, so the row it buys belongs to this correction and this phase.
+    substrate.beginCase(`correction/${entry.key}/${phase.trim()}`);
     const result = await substrate.recall(entry.query, {
       identity: READ_SESSION,
       now: RECALLED_AT,
@@ -326,6 +335,7 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('narrative grounding on the fabrication fix
   };
 
   async function narrate(fixture: NarrativeFixture): Promise<Narration> {
+    substrate.beginCase(`narrative/${fixture.identity}/enrich`);
     const stored = await substrate.store(fixture.payload, { identity: fixture.identity });
     await enrichAll([stored.episode_id], `${fixture.identity} to enrich`);
 
@@ -336,6 +346,7 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('narrative grounding on the fabrication fix
       logger: substrate.logger,
       publications: substrate.publications,
     };
+    substrate.beginCase(`narrative/${fixture.identity}/close`);
     const result = await closeSessionNarrative(
       deps,
       fixture.identity,

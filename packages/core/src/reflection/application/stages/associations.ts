@@ -12,6 +12,7 @@ import {
 import { withCurrency } from '../../../infrastructure/graph/read-modes.js';
 import { contentVectors } from '../../../infrastructure/graph/seed-queries.js';
 import { isLedgerApplied, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
+import { appendCoOccursObservedEvent } from '../../../infrastructure/sqlite/sense-usage-events.js';
 import {
   coOccurrenceBirthStrength,
   coOccurringPairs,
@@ -138,9 +139,11 @@ export class AssociationInferenceStage implements ReflectionStage {
     const pairs = coOccurringPairs(entityIds);
     const observationStrength = coOccurrenceBirthStrength(pairs.length, this.#options.weightFloor);
     let written = 0;
+    let births = 0;
+    let recurrences = 0;
     try {
       for (const pair of pairs) {
-        await linkCoOccurrence(ctx.driver, {
+        const result = await linkCoOccurrence(ctx.driver, {
           sourceId: pair.sourceId,
           targetId: pair.targetId,
           observationStrength,
@@ -148,8 +151,29 @@ export class AssociationInferenceStage implements ReflectionStage {
           now: ctx.now,
         });
         written += 1;
+        if (result.birth) {
+          births += 1;
+        } else {
+          recurrences += 1;
+        }
       }
       markLedgerApplied(ctx.db, key, { pairs: written });
+      // The density sense's observation, at the operation that actually knows both the proposed
+      // pair count and what each pair wrote: a failure here costs this episode's density
+      // observation and nothing the graph write already committed.
+      try {
+        appendCoOccursObservedEvent(ctx.db, {
+          episodeId: ctx.episodeId,
+          pairsProposed: pairs.length,
+          pairsWritten: written,
+          births,
+          recurrences,
+          birthStrength: observationStrength,
+          occurredAt: ctx.now,
+        });
+      } catch (err) {
+        ctx.logger.warn({ err, episodeId: ctx.episodeId }, 'co-occurs density observation failed');
+      }
       return { status: 'ok', written };
     } catch (err) {
       return {

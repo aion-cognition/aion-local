@@ -68,17 +68,59 @@ function adviceSchema(names: readonly string[]): JsonSchema {
       operation: { type: 'string', enum: [...names, TIER3_NO_OPERATION] },
       confidence: { type: 'number' },
       rationale: { type: 'string' },
+      lesson: { type: 'string' },
     },
     required: ['operation', 'rationale'],
   };
 }
 
-/** Looser than the JSON schema on purpose: an answer missing its confidence is still usable. */
+/**
+ * Looser than the JSON schema on purpose: an answer missing its confidence is still usable.
+ *
+ * The optional lesson is deliberately absent from this object. It used to sit here, and a
+ * `lesson` of the wrong type then failed the whole parse: valid operation, confidence and
+ * rationale became `unusable`, while the identical advice with no lesson at all was accepted.
+ * That is an optional interpretation vetoing a usable decision before the acceptance rules ever
+ * saw it. The decision is parsed here; the lesson is read separately below and may be discarded
+ * on its own.
+ */
 const AdviceSchema = z.object({
   operation: z.string(),
   confidence: z.number().optional(),
   rationale: z.string().optional(),
 });
+
+const LessonSchema = z.object({ lesson: z.string() });
+
+type OptionalLesson = { readonly lesson?: string; readonly lessonRejected?: string };
+
+/**
+ * The optional lesson, read apart from the decision.
+ *
+ * Three outcomes, and only one of them is a defect: no lesson offered, a usable one, and one the
+ * model sent in a shape this field does not take. The third is discarded and reported, never
+ * repaired and never allowed to suppress the answer it rode in on.
+ */
+function readOptionalLesson(raw: unknown): OptionalLesson {
+  if (typeof raw !== 'object' || raw === null || !('lesson' in raw)) {
+    return {};
+  }
+  const offered = (raw as { lesson?: unknown }).lesson;
+  if (offered === undefined) {
+    return {};
+  }
+  const parsed = LessonSchema.safeParse(raw);
+  if (!parsed.success) {
+    return {
+      lessonRejected:
+        `the advisor's optional lesson was ${offered === null ? 'null' : typeof offered}` +
+        ', which this field does not take; the lesson was discarded and the advice kept',
+    };
+  }
+  // Whitespace alone is a lesson declined, not a lesson recorded as the empty string.
+  const stated = parsed.data.lesson.trim();
+  return stated.length === 0 ? {} : { lesson: stated };
+}
 
 function clampConfidence(value: number | undefined): number {
   const raw = value ?? UNSTATED_CONFIDENCE;
@@ -162,6 +204,33 @@ function describeInsights(insights: readonly string[] | undefined): readonly str
   return [`What recent runs taught the loop, oldest first:\n${insights.join('\n')}`];
 }
 
+/**
+ * The sense-evidence block, or nothing when no sense has anything to report yet. Labeled
+ * separately from `insights` above: those are the deterministic operation ledger's own numbers,
+ * and this is what the outcome senses observed about the faculties themselves.
+ */
+function describeSenseEvidence(evidence: readonly string[] | undefined): readonly string[] {
+  if (evidence === undefined || evidence.length === 0) {
+    return [];
+  }
+  return [`What the substrate has observed about its own faculties:\n${evidence.join('\n')}`];
+}
+
+/**
+ * The model's own past readings of that evidence, or nothing on a cycle with none recorded yet.
+ * Presented as history rather than as further evidence: a lesson is what a previous cycle's
+ * model concluded, not a second measurement, and the two blocks are labeled to keep that clear.
+ */
+function describeLessons(lessons: readonly string[] | undefined): readonly string[] {
+  if (lessons === undefined || lessons.length === 0) {
+    return [];
+  }
+  return [
+    `What you or an earlier cycle concluded from that evidence before, oldest first (your own ` +
+      `past interpretation, not an additional measurement):\n${lessons.join('\n')}`,
+  ];
+}
+
 function buildAdviceMessages(request: Tier3Request): ChatMessage[] {
   const candidates = request.candidates
     .map((candidate) => describeCandidate(candidate, request.health))
@@ -174,6 +243,8 @@ function buildAdviceMessages(request: Tier3Request): ChatMessage[] {
         `Health reading:\n${describeSnapshot(request.health)}`,
         `Operations that could run this cycle:\n${candidates}`,
         ...describeInsights(request.insights),
+        ...describeSenseEvidence(request.senseEvidence),
+        ...describeLessons(request.lessons),
         `Why the deterministic tiers selected nothing: ${request.reason}`,
       ].join('\n\n'),
     },
@@ -231,8 +302,9 @@ export async function adviseTier3(
   const operation = parsed.data.operation.trim().toLowerCase();
   const stated = parsed.data.rationale?.trim();
   const rationale = stated === undefined || stated.length === 0 ? NO_RATIONALE_GIVEN : stated;
+  const lesson = readOptionalLesson(raw);
   if (operation === TIER3_NO_OPERATION || operation.length === 0) {
-    return { status: 'declined', rationale };
+    return { status: 'declined', rationale, ...lesson };
   }
   if (!names.includes(operation)) {
     return {
@@ -243,6 +315,7 @@ export async function adviseTier3(
   return {
     status: 'advised',
     proposal: { operation, confidence: clampConfidence(parsed.data.confidence), rationale },
+    ...lesson,
   };
 }
 
@@ -275,6 +348,12 @@ export function modelAdvisor(deps: ModelAdvisorDeps): Tier3Advisor {
         ...(outcome.status === 'declined' ? { rationale: outcome.rationale } : {}),
         ...(outcome.status === 'failed' || outcome.status === 'unusable'
           ? { detail: outcome.reason }
+          : {}),
+        // Reported rather than silently dropped: a lesson thrown away is a fact about the
+        // answer, and the answer itself was still served.
+        ...((outcome.status === 'advised' || outcome.status === 'declined') &&
+        outcome.lessonRejected !== undefined
+          ? { lessonRejected: outcome.lessonRejected }
           : {}),
       },
       'introspection tier 3 advisor answered',

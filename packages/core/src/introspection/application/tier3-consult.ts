@@ -4,6 +4,7 @@ import type { Config } from '../../infrastructure/config/schema.js';
 import { errorMessage } from '../../infrastructure/errors.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { appendModelLesson } from '../../infrastructure/sqlite/introspection-model-lessons.js';
 import { markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import type { Decision, OperationCandidate } from '../domain/decide.js';
 import type { HealthSnapshot } from '../domain/health.js';
@@ -55,6 +56,10 @@ export type Tier3ConsultInput = {
   readonly cycle: number;
   /** Lessons the recent runs left, handed to the advisor with the reading. */
   readonly insights: readonly string[];
+  /** The introspection senses' own evidence, handed to the advisor beside the reading. */
+  readonly senseEvidence: readonly string[];
+  /** The model's own past interpretations of that evidence, oldest first. */
+  readonly lessons: readonly string[];
 };
 
 type LedgerSummary = {
@@ -71,6 +76,8 @@ type LedgerSummary = {
   readonly detail?: string;
   readonly gate?: string;
   readonly ran?: string;
+  /** An optional lesson the answer carried in a shape the field refuses. The answer still ran. */
+  readonly lessonRejected?: string;
 };
 
 function record(deps: Tier3ConsultDeps, input: Tier3ConsultInput, summary: LedgerSummary): void {
@@ -95,10 +102,42 @@ async function ask(deps: Tier3ConsultDeps, input: Tier3ConsultInput): Promise<Ti
       candidates: input.candidates,
       reason: input.reason,
       insights: input.insights,
+      senseEvidence: input.senseEvidence,
+      lessons: input.lessons,
       signal: deps.signal,
     });
   } catch (error) {
     return { status: 'failed', reason: errorMessage(error) };
+  }
+}
+
+/**
+ * Persists a lesson the model volunteered, on either a decline or an accepted-or-not proposal.
+ * Never on `failed` or `unusable`, since `Tier3Outcome` carries no lesson field there: the call
+ * did not resolve into an answer to interpret. A write that fails here costs this cycle's lesson
+ * and nothing else; the consultation's own ledger row is unaffected.
+ */
+function persistLesson(
+  deps: Tier3ConsultDeps,
+  input: Tier3ConsultInput,
+  outcome: Tier3Outcome,
+): void {
+  if (outcome.status !== 'advised' && outcome.status !== 'declined') {
+    return;
+  }
+  if (outcome.lesson === undefined) {
+    return;
+  }
+  try {
+    appendModelLesson(deps.db, {
+      cycle: input.cycle,
+      operation: outcome.status === 'advised' ? outcome.proposal.operation : 'none',
+      lesson: outcome.lesson,
+      reason: input.reason,
+      senseEvidence: input.senseEvidence,
+    });
+  } catch (err) {
+    deps.logger.warn({ err, cycle: input.cycle }, 'introspection model-lesson append failed');
   }
 }
 
@@ -129,12 +168,21 @@ export async function consultTier3(
   }
 
   const outcome = await ask(deps, input);
+  persistLesson(deps, input, outcome);
+  // Carried onto every ledger row this consultation can still write, so a discarded lesson is
+  // visible to an operator without being able to change what the answer was.
+  const lessonRejected =
+    (outcome.status === 'advised' || outcome.status === 'declined') &&
+    outcome.lessonRejected !== undefined
+      ? { lessonRejected: outcome.lessonRejected }
+      : {};
   if (outcome.status !== 'advised') {
     const detail = describeOutcome(outcome);
     record(deps, input, {
       ...base,
       outcome: outcome.status,
       ...(detail === undefined ? {} : { detail }),
+      ...lessonRejected,
     });
     return undefined;
   }
@@ -156,6 +204,7 @@ export async function consultTier3(
     ...(blended === undefined ? {} : { blended }),
     ...(weight === undefined ? {} : { weight }),
     rationale: proposal.rationale,
+    ...lessonRejected,
   };
   const gate =
     acceptance.verdict === 'accepted' ? 'accepted' : `${acceptance.verdict}: ${acceptance.reason}`;

@@ -10,11 +10,13 @@ import {
   type ReviewVerdict,
   type VetoCheck,
 } from '@aion/core';
+import { openCampaignProducer } from '@aion/core/infrastructure/providers/test-support/campaign-guard.js';
+import type { CampaignProducerHandle } from '@aion/core/infrastructure/providers/test-support/campaign-guard.js';
 import {
   DEFAULT_SUPERSEDE_AUTO_CONFIDENCE,
   DEFAULT_SUPERSEDE_MODE,
 } from '@aion/core/reflection/application/stages/supersession.js';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { REMOTE_JUDGE_ABSENT } from './gate-substrate.fixture.js';
 import {
@@ -39,12 +41,12 @@ import {
  * judge sends each affirmative to a second call that argues the other side on the same
  * evidence, without seeing the first pass, and counts a closure only when both agree.
  *
- * The rule was written before the numbers: two-pass precision at or above 0.9 and recall at or
- * above 0.9 ships `AION_SUPERSEDE_MODE=unanimous`, anything less ships `propose`. The last test
- * asserts the shipped default still matches what this run measures, in both directions, so a
- * judge that degrades below the bar fails the gate instead of quietly staying armed. A model is
- * not deterministic, so a measurement that lands on the bar can flap; that is the cost of a
- * gate that measures rather than remembers.
+ * The bars were written before the numbers: two-pass precision at or above 0.9 and recall at or
+ * above 0.9. What changed in F is what the measurement is allowed to decide: it is reported
+ * against those bars as an observation for the ruling packet, and the shipped default is pinned
+ * to its own literal value rather than derived from this run. Measured agreement with a
+ * preferred answer does not grant inference authority; a default change has to argue its own
+ * case instead of riding on one battery run.
  *
  * The route is named in the output rather than assumed: with a key in the environment the
  * reflect role reaches the model the service runs on, and with none it reaches nothing.
@@ -220,14 +222,31 @@ function vetoesByCheck(): Record<VetoCheck, number> {
   return totals;
 }
 
+let producer: CampaignProducerHandle | undefined;
+
 beforeAll(async () => {
   config = batteryConfig();
-  router = new ProviderRouter({ config });
+  // See the advisor battery: one producer opening per file carries the shared ledger's guard,
+  // this process's condition, and the durable per-case usage record the matrix promises. The
+  // retro rows below run through the same opening and are labelled as their own cases, so the
+  // second-condition retro pass is legible as duplicate work rather than as named-case spend.
+  const opened = openCampaignProducer({
+    experiment: 'judge-comparison',
+    ceilingUsd: config.anthropic.dailyCeilingUsd,
+  });
+  producer = opened;
+  router = new ProviderRouter({
+    config,
+    spending: opened.guard,
+    recordApiCall: opened.recordApiCall,
+    ...(opened.frameOverride === undefined ? {} : { frameOverride: opened.frameOverride }),
+  });
   const provider = router.forRole('reflect');
   const { model } = router.routing.roles.reflect;
 
   const rows: Scored[] = [];
   for (const entry of PRECISION_BATTERY) {
+    opened.beginCase(entry.key);
     const pass = await judgeTwice(provider, model, entry);
     rows.push({
       entry,
@@ -240,6 +259,7 @@ beforeAll(async () => {
 
   const retroRows: typeof retro = [];
   for (const row of [...ruledRows(), ...unscoredRows()]) {
+    opened.beginCase(`retro:${row.key}`);
     const pass = await judgeTwice(provider, model, row);
     const closed = closes(pass);
     retroRows.push({
@@ -256,6 +276,10 @@ beforeAll(async () => {
   }
   retro = retroRows;
 }, BATTERY_DEADLINE_MS);
+
+afterAll(() => {
+  producer?.close();
+});
 
 describe.skipIf(REMOTE_JUDGE_ABSENT)('the 24-case supersession battery', () => {
   it('names the route it measured, so the number belongs to a model', () => {
@@ -395,22 +419,23 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('the 24-case supersession battery', () => {
   });
 
   /**
-   * The pre-registered rule, asserted rather than described. It fails in both directions: a
-   * judge that drops under either bar while the shipped default is still `unanimous` fails
-   * here, and so does a judge that clears both while the default stays `propose`.
+   * The observation the ruling packet reads, no longer an authority gate. This battery used to
+   * derive the shipped mode from its own run and assert the two agreed, which made measured
+   * agreement with a preferred answer into inference authority; the F review ruled that out.
+   * The measurement is printed with the bars beside it, and the shipped default is pinned to
+   * its own literal value so a change to it still has to say why here, on its own terms.
    */
-  it('ships the default the measurement calls for', () => {
+  it('reports the measurement against the bars and pins the shipped default', () => {
     const two = count(scored, closes);
     const meets = two.precision >= PRECISION_BAR && two.recall >= RECALL_BAR;
-    const expected = meets ? 'unanimous' : 'propose';
 
     console.log(
-      `pre-registered rule: two-pass precision ${two.precision.toFixed(3)} against ` +
+      `observation: two-pass precision ${two.precision.toFixed(3)} against ` +
         `${String(PRECISION_BAR)} and recall ${two.recall.toFixed(3)} against ` +
-        `${String(RECALL_BAR)}; the measurement calls for '${expected}' and the shipped ` +
-        `default is '${DEFAULT_SUPERSEDE_MODE}'`,
+        `${String(RECALL_BAR)}; the bars are ${meets ? 'met' : 'not met'} on this run, and the ` +
+        `shipped default stays '${DEFAULT_SUPERSEDE_MODE}' either way`,
     );
 
-    expect(DEFAULT_SUPERSEDE_MODE).toBe(expected);
+    expect(DEFAULT_SUPERSEDE_MODE).toBe('unanimous');
   });
 });

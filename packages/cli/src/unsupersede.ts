@@ -1,4 +1,5 @@
 import {
+  appendJudgmentTransitionEvent,
   previewSupersession,
   unsupersedeNode,
   type GraphConnection,
@@ -91,6 +92,23 @@ export function runUnsupersede(
       }
 
       const result = await unsupersedeNode(connection.driver, { id: flags.nodeId });
+      // The judgment-durability sense's observation: one row per lineage edge this reopen
+      // closed, carrying that edge's OWN provenance tag (whichever writer originally
+      // superseded this node) rather than the fact that a CLI command performed the reopen. A
+      // write failure here costs this reopen's observation coverage and nothing the command
+      // already did, so it is caught and never surfaces to the operator running the command.
+      for (const lineage of result.reopenedFrom) {
+        try {
+          appendJudgmentTransitionEvent(substrate.db(), {
+            nodeId: result.id,
+            transition: 'reopened',
+            producedBy: lineage.provenance,
+            occurredAt: result.reopenedAt,
+          });
+        } catch {
+          // Fail-open by design; see the comment above.
+        }
+      }
       logger.warn(
         {
           nodeId: result.id,

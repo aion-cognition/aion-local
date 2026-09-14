@@ -1,4 +1,9 @@
 import {
+  foldHubPenalties,
+  type BridgeLegContribution,
+  type HubPenaltyObserved,
+} from './activation-observations.js';
+import {
   ACTIVATION_WEIGHTS,
   CONFIDENCE_SCALED_TYPES,
   DEFAULT_ACTIVATION_WEIGHT,
@@ -120,6 +125,9 @@ export type ActivationRun = {
   readonly iterations: number;
   readonly nodesVisited: number;
   readonly termination: ActivationTermination;
+  /** Every bridge leg this walk's propagation crossed, in the order it was observed. */
+  readonly bridgeLegs: readonly BridgeLegContribution[];
+  readonly hubPenalty: HubPenaltyObserved;
 };
 
 /** One batched adjacency read. The caller binds the driver and the bitemporal read mode. */
@@ -188,6 +196,10 @@ type SpreadState = {
   readonly seeds: Set<string>;
   readonly visited: Set<string>;
   readonly frontier: Set<string>;
+  /** Every bridge leg a propagation crossed, in the order `propagate` observed it. */
+  readonly bridgeLegs: BridgeLegContribution[];
+  /** Every hop's hub-inhibition multiplier, pushed as it is seen and folded once at the end. */
+  readonly hubPenalties: number[];
 };
 
 function initialize(seeds: readonly ActivationSeed[]): SpreadState {
@@ -203,6 +215,8 @@ function initialize(seeds: readonly ActivationSeed[]): SpreadState {
     seeds: new Set(),
     visited: new Set(),
     frontier: new Set(),
+    bridgeLegs: [],
+    hubPenalties: [],
   };
 
   for (const seed of seeds) {
@@ -255,12 +269,17 @@ function propagate(
 
   const sourceScore = state.scores.get(neighbor.sourceId) ?? 0;
   const superseded = neighbor.currency.currency === 'superseded';
+  const penalty = hubInhibition(neighbor.degree, budget.hubThreshold);
   const propagated =
     sourceScore *
     edgeWeight(neighbor) *
     budget.decayFactor *
-    hubInhibition(neighbor.degree, budget.hubThreshold) *
+    penalty *
     (superseded ? SUPERSEDED_ACTIVATION_WEIGHT : 1);
+
+  // Every edge that cleared the strength floor is a hop hub inhibition weighed in on, whether or
+  // not the source's own score left anything for it to propagate.
+  state.hubPenalties.push(penalty);
 
   if (propagated <= 0) {
     return;
@@ -270,6 +289,15 @@ function propagate(
   state.currency.set(neighbor.nodeId, neighbor.currency);
   if (neighbor.isStructural) {
     state.structural.add(neighbor.nodeId);
+  }
+  // A contribution across one of a bridge's own recorded legs, never across some other edge that
+  // happens to touch the Bridge node. `adjacency.ts` establishes the leg from the relation and
+  // its stored signal, so nothing here re-derives it from the node's label.
+  if (neighbor.bridgeLeg !== undefined) {
+    state.bridgeLegs.push({
+      bridgeId: neighbor.bridgeLeg.bridgeId,
+      direction: neighbor.nodeId === neighbor.bridgeLeg.bridgeId ? 'into' : 'out',
+    });
   }
 
   // Every contribution carries its origin forward, above the seed and strongest-path returns
@@ -466,5 +494,7 @@ export async function spreadActivation(
     iterations,
     nodesVisited: state.visited.size,
     termination,
+    bridgeLegs: state.bridgeLegs,
+    hubPenalty: foldHubPenalties(state.hubPenalties),
   };
 }

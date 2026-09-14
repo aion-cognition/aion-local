@@ -1,6 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 
 import { BITEMPORAL_PROPERTIES } from './bitemporal.js';
+import { BRIDGE_SIGNAL } from './bridge-queries.js';
 import { runRead, type GraphStatement } from './connection.js';
 import { BASE_NODE_LABEL } from './labels.js';
 import {
@@ -41,6 +42,27 @@ export type AdjacencyNeighbor = {
   readonly currency: CurrencyAnnotation;
   /** The Member and the global Workspace. Traversed like any node, never packed or reinforced. */
   readonly isStructural: boolean;
+  /**
+   * Present only where this edge is itself one of a bridge's two recorded legs.
+   *
+   * A bridge is a Bridge node plus two RELATED_TO legs written together and tagged
+   * `symbiosis_bridge` (`bridge-queries.ts`'s `writeBridge`), never a direct edge between its two
+   * named endpoints. Checking only whether an endpoint carries the `:Bridge` label counted every
+   * other edge incident on that node too, so an unrelated CO_OCCURS association through it
+   * arrived tagged as a bridge contribution. The relation and its recorded signal are what
+   * establish the leg, and they travel here so a caller's claim rests on the same identity.
+   */
+  readonly bridgeLeg?: BridgeLegIdentity;
+};
+
+/** What made this edge one of `bridgeId`'s legs, carried rather than re-derived downstream. */
+export type BridgeLegIdentity = {
+  readonly bridgeId: string;
+  /** The leg's other end: the bridge endpoint this edge joins the Bridge node to. */
+  readonly endpointId: string;
+  readonly relationshipType: string;
+  /** The signal `writeBridge` stamps on both legs, and the one this edge was matched on. */
+  readonly signal: string;
 };
 
 export type AdjacencyRequest = {
@@ -87,6 +109,9 @@ const ACTIVE_DEGREE_EDGE = `${NEIGHBOUR_PREFIX}d`;
  * `BITEMPORAL_PROPERTIES`, because it is not one of the two intervals.
  */
 export const EDGE_RECORDED_AT = 'created_at';
+
+/** The relation `writeBridge` writes both of a bridge's legs as. Nothing else is a leg. */
+const BRIDGE_LEG_RELATIONSHIP = 'RELATED_TO';
 
 /**
  * Which relationships this read may traverse. A bitemporal close leaves the row stored, so the
@@ -183,11 +208,18 @@ export function buildAdjacencyStatement(request: AdjacencyRequest): GraphStateme
     'WHERE m.id <> frontierId AND NOT m.id IN $visited' +
       ` AND coalesce(r.strength, ${ABSENT_PROPORTION}) >= $minStrength AND ${fragment.where}` +
       ` AND ${traversable}`,
-    `WITH frontierId, r, m, coalesce(r.strength, ${ABSENT_PROPORTION}) AS strength`,
+    // `n`'s own labels are read here, while it is still in scope, rather than at the final
+    // RETURN: the three `WITH` clauses below reshape the row down to the ranked edge and carry
+    // `r`/`m` forward by name, so `n` itself does not survive them. The boolean travels through
+    // the same collect/sort/unwind pipeline everything else here does.
+    `WITH frontierId, r, m, 'Bridge' IN labels(n) AS sourceIsBridge,` +
+      ` coalesce(r.strength, ${ABSENT_PROPORTION}) AS strength`,
     'ORDER BY strength DESC',
-    'WITH frontierId, collect({ r: r, m: m, strength: strength })[0..$topK] AS ranked',
+    'WITH frontierId, collect({ r: r, m: m, sourceIsBridge: sourceIsBridge, strength: strength })' +
+      '[0..$topK] AS ranked',
     'UNWIND ranked AS edge',
-    'WITH frontierId, edge.r AS r, edge.m AS m, edge.strength AS strength',
+    'WITH frontierId, edge.r AS r, edge.m AS m, edge.sourceIsBridge AS sourceIsBridge,' +
+      ' edge.strength AS strength',
     'RETURN frontierId AS sourceId,',
     '       m.id AS nodeId,',
     '       type(r) AS relationshipType,',
@@ -196,6 +228,16 @@ export function buildAdjacencyStatement(request: AdjacencyRequest): GraphStateme
     '       COUNT { (m)--() } AS degree,',
     ...activeDegree,
     `       m.${STRUCTURAL_PROPERTY} AS is_structural,`,
+    // The Bridge node's id, and only off one of that bridge's own legs: the relation has to be
+    // the RELATED_TO `writeBridge` wrote and carry the signal it stamped on both legs. A bridge
+    // is never a direct edge between its two named endpoints, and it is never the other edges
+    // that happen to touch the Bridge node either, which is what the label test alone let
+    // through. Null on every edge that is not a leg.
+    `       CASE WHEN type(r) = '${BRIDGE_LEG_RELATIONSHIP}'` +
+      ` AND '${BRIDGE_SIGNAL}' IN coalesce(r.signals, [])` +
+      '            THEN CASE WHEN sourceIsBridge THEN frontierId' +
+      "                      WHEN 'Bridge' IN labels(m) THEN m.id ELSE null END" +
+      '            ELSE null END AS bridge_id,',
     `       ${fragment.projection}`,
   ].join('\n');
 
@@ -213,9 +255,21 @@ export function buildAdjacencyStatement(request: AdjacencyRequest): GraphStateme
 
 function mapNeighbor(row: Row): AdjacencyNeighbor {
   const active = row.active_degree;
+  const bridgeId = row.bridge_id;
+  const sourceId = row.sourceId as string;
+  const nodeId = row.nodeId as string;
+  const bridgeLeg: BridgeLegIdentity | undefined =
+    typeof bridgeId === 'string'
+      ? {
+          bridgeId,
+          endpointId: bridgeId === nodeId ? sourceId : nodeId,
+          relationshipType: row.relationshipType as string,
+          signal: BRIDGE_SIGNAL,
+        }
+      : undefined;
   return {
-    sourceId: row.sourceId as string,
-    nodeId: row.nodeId as string,
+    sourceId,
+    nodeId,
     relationshipType: row.relationshipType as string,
     strength: row.strength as number,
     confidence: row.confidence as number,
@@ -223,6 +277,7 @@ function mapNeighbor(row: Row): AdjacencyNeighbor {
     ...(typeof active === 'number' ? { activeDegree: active } : {}),
     currency: readCurrencyAnnotation(row),
     isStructural: row.is_structural === true,
+    ...(bridgeLeg === undefined ? {} : { bridgeLeg }),
   };
 }
 

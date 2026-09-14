@@ -1,8 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 
 import { MIN_CACHEABLE_PREFIX_CHARS } from './anthropic-cache.js';
 import { AnthropicProvider, DEFAULT_ANTHROPIC_MODEL } from './anthropic-provider.js';
+import {
+  openCampaignProducer,
+  type CampaignProducerHandle,
+} from './test-support/campaign-guard.js';
 import type { ApiCall } from './types.js';
+import { DEFAULTS } from '../config/defaults.js';
 
 /**
  * What the cache decision rests on, measured against the live API rather than inferred from the
@@ -46,13 +51,35 @@ const SCHEMA = {
   required: ['answer'],
 };
 
-async function callTwice(frame?: string): Promise<readonly ApiCall[]> {
+let campaignProducer: CampaignProducerHandle | undefined;
+
+afterAll(() => {
+  campaignProducer?.close();
+});
+
+/** Opened once and reused across both cases in this file, so both hold against one ceiling. */
+function producer(): CampaignProducerHandle {
+  campaignProducer ??= openCampaignProducer({
+    experiment: 'cache',
+    ceilingUsd: DEFAULTS.anthropic.dailyCeilingUsd,
+  });
+  return campaignProducer;
+}
+
+async function callTwice(caseKey: string, frame?: string): Promise<readonly ApiCall[]> {
   const calls: ApiCall[] = [];
+  const opened = producer();
+  opened.beginCase(caseKey);
   const provider = new AnthropicProvider({
     apiKey: API_KEY,
     model: MODEL,
     ...(frame === undefined ? {} : { frameOverride: { text: frame } }),
-    recordApiCall: (call) => calls.push(call),
+    // Both: the array this file's own assertions read, and the campaign ledger's durable row.
+    recordApiCall: (call) => {
+      calls.push(call);
+      opened.recordApiCall(call);
+    },
+    spending: opened.guard,
   });
   for (const question of ['Answer with the word one.', 'Answer with the word two.']) {
     await provider.generate({
@@ -72,7 +99,7 @@ async function callTwice(frame?: string): Promise<readonly ApiCall[]> {
 
 describe.skipIf(API_KEY === '')('prompt caching against the live API', () => {
   it('writes the cache on the first call and reads it on the second', async () => {
-    const calls = await callTwice(longPrefix());
+    const calls = await callTwice('long-prefix', longPrefix());
 
     console.log(
       `cache probe: creation ${String(calls[0]?.cacheCreationTokens ?? 0)}/` +
@@ -94,7 +121,7 @@ describe.skipIf(API_KEY === '')('prompt caching against the live API', () => {
   }, 120_000);
 
   it('caches nothing under the shipped frame, which does not reach the floor', async () => {
-    const calls = await callTwice();
+    const calls = await callTwice('shipped-frame');
 
     expect(calls).toHaveLength(2);
     expect(calls.map((call) => call.cacheCreationTokens)).toEqual([0, 0]);

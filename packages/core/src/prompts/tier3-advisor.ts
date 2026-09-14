@@ -19,6 +19,18 @@ const ADVICE = [
   'rest of the reading is still evidence.',
   'Answer with the operation name, a confidence between 0 and 1, and one sentence of rationale',
   'naming the number in the reading you chose it for.',
+  'You may also be given evidence the substrate observed about its own faculties: whether a',
+  'bridge was actually crossed after it was built, whether a resonant memory was used again,',
+  'how long judgments have stood before a reversal, and how CO_OCCURS density is forming.',
+  'These are observations with limits rather than scores. You may weigh them in choosing an',
+  'operation exactly as you weigh the rest of the reading; what none of them is is a threshold,',
+  'and nothing downstream turns one into a permission to act or a bar an answer has to clear.',
+  'Each states the window it was read over, and no record inside that window is not a record that',
+  'nothing ever happened. If one of them suggests a durable lesson about how the substrate is',
+  'behaving, state it in one sentence as `lesson`; otherwise omit `lesson` or leave it empty. A',
+  'lesson is your own interpretation, offered beside the operation choice, and you may decline to',
+  'draw one even when you name an operation or answer none. An unusable lesson is discarded on',
+  'its own and never costs you the recommendation it came with.',
 ].join(' ');
 
 export const ADVICE_PROMPT = ADVICE;

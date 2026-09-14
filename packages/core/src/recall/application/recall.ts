@@ -104,6 +104,8 @@ const NO_ACTIVATION: ActivationRun = {
   iterations: 0,
   nodesVisited: 0,
   termination: 'frontier_exhausted',
+  bridgeLegs: [],
+  hubPenalty: { hops: 0, inhibitedHops: 0, totalPenalty: 0, minPenalty: 1 },
 };
 
 type Timed<T> = { readonly value: T; readonly ms: number };
@@ -487,6 +489,8 @@ export async function handleRecall(
       pack: answer,
       now,
       mode,
+      bridgeLegs: activation.value.bridgeLegs,
+      hubPenalty: activation.value.hubPenalty,
     });
   }
 

@@ -13,7 +13,9 @@ import {
   type Tier3Proposal,
   type Tier3Request,
 } from '@aion/core';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { openCampaignProducer } from '@aion/core/infrastructure/providers/test-support/campaign-guard.js';
+import type { CampaignProducerHandle } from '@aion/core/infrastructure/providers/test-support/campaign-guard.js';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { REMOTE_JUDGE_ABSENT } from './gate-substrate.fixture.js';
 import {
@@ -136,18 +138,39 @@ function agreement(rows: readonly Scored[]): number {
   return rows.length === 0 ? 0 : agreed / rows.length;
 }
 
+let producer: CampaignProducerHandle | undefined;
+
 beforeAll(async () => {
   config = batteryConfig();
-  router = new ProviderRouter({ config });
+  // One producer opening for the whole file: the campaign ledger's guard (carrying whatever
+  // lifetime budget the coordinator wrote onto that file), the condition this process runs, and
+  // the durable per-case usage recorder. `recordApiCall` is what puts each billed response on
+  // the books under its own case; the reservation the guard takes is the bound, not the record.
+  const opened = openCampaignProducer({
+    experiment: 'advisor',
+    ceilingUsd: config.anthropic.dailyCeilingUsd,
+  });
+  producer = opened;
+  router = new ProviderRouter({
+    config,
+    spending: opened.guard,
+    recordApiCall: opened.recordApiCall,
+    ...(opened.frameOverride === undefined ? {} : { frameOverride: opened.frameOverride }),
+  });
   const provider = router.forRole('reflect');
   const { model } = router.routing.roles.reflect;
 
   const rows: Scored[] = [];
   for (const entry of TIER3_SELECTION_BATTERY) {
+    opened.beginCase(entry.key);
     rows.push(await consult(provider, model, entry, candidatesFor(entry.health, config)));
   }
   scored = rows;
 }, BATTERY_DEADLINE_MS);
+
+afterAll(() => {
+  producer?.close();
+});
 
 describe.skipIf(REMOTE_JUDGE_ABSENT)('the tier-3 advisor selection battery', () => {
   it('names the route it measured, so the number belongs to a model', () => {

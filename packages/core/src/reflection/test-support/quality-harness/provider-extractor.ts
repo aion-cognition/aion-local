@@ -3,10 +3,12 @@ import { z } from 'zod';
 import type {
   CognitiveExtractionResult,
   EntityExtractionResult,
+  ExtractionFailure,
   ExtractorOutcome,
 } from './types.js';
-import { describeError, formatZodError } from '../../../infrastructure/errors.js';
+import { describeError, formatZodError, isAbortError } from '../../../infrastructure/errors.js';
 import { COGNITIVE_NODE_LABELS } from '../../../infrastructure/graph/cognitive-queries.js';
+import { isGenerationUnavailable } from '../../../infrastructure/providers/errors.js';
 import type { ChatMessage, JsonSchema, Provider } from '../../../infrastructure/providers/types.js';
 import { EXTRACTION_PROMPT as COGNITIVE_PROMPT } from '../../../prompts/cognitive-extraction.js';
 import { EXTRACTION_PROMPT as ENTITY_PROMPT } from '../../../prompts/entity-extraction.js';
@@ -77,6 +79,25 @@ function cognitiveMessages(text: string): ChatMessage[] {
 }
 
 /**
+ * A thrown error's kind, read off the type. `GenerationUnavailableError` and its ceiling
+ * subclass mean the request that threw never left, which is a different fact about the run from
+ * a model that answered badly.
+ *
+ * That is a fact about the request, not necessarily about the whole structured call: a shape
+ * failure makes `deps.generate` retry once through a second, differently-encoded request, and a
+ * refusal can land on that second one after the first already dispatched and got billed. This
+ * function has no way to see that earlier request, so a caller stacking several of these into one
+ * logical case (`extraction-experiment.ts`) is where that distinction gets checked, against what
+ * was actually recorded rather than against this classification alone.
+ */
+function failureKindOf(error: unknown): ExtractionFailure {
+  if (isGenerationUnavailable(error)) {
+    return 'refused';
+  }
+  return isAbortError(error) ? 'timeout' : 'call_failed';
+}
+
+/**
  * One structured-output call, timed and guarded. Reasoning buys nothing for extraction and
  * costs the budget (mirrors `recall/application/cues.ts`'s cue-model call), so `think` stays
  * off for both routes; the Anthropic client ignores the field, since Haiku 4.5 has no
@@ -109,11 +130,19 @@ async function runStructuredExtraction<T>(
         ok: false,
         error: `invalid extraction output: ${formatZodError(parsed.error)}`,
         latencyMs,
+        failure: 'invalid_output',
       };
     }
     return { ok: true, value: parsed.data, latencyMs };
   } catch (error) {
-    return { ok: false, error: describeError(error), latencyMs: Date.now() - startedAt };
+    // Classified here, where the error object is still in hand. A caller downstream has only the
+    // sentence, and a budget refusal read out of a sentence is a guess.
+    return {
+      ok: false,
+      error: describeError(error),
+      latencyMs: Date.now() - startedAt,
+      failure: failureKindOf(error),
+    };
   } finally {
     clearTimeout(timer);
   }

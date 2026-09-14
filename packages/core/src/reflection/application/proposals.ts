@@ -14,6 +14,7 @@ import {
   type SubjectSibling,
 } from '../../infrastructure/graph/subject-family.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { appendJudgmentTransitionEvent } from '../../infrastructure/sqlite/sense-usage-events.js';
 import {
   getSupersessionProposal,
   resolveSupersessionProposal,
@@ -209,11 +210,12 @@ export async function applySupersessionProposal(
   const proposal = open(db, input.id);
   const now = input.now ?? new Date();
   const scope = input.scope ?? DEFAULT_APPLY_SCOPE;
+  const attribution = input.attribution ?? HUMAN_REVIEW;
 
   const applied = await applyScope(driver, proposal, scope, now, {
     relatednessFloor: input.relatednessFloor,
     validUntil: input.validUntil ?? now,
-    attribution: input.attribution ?? HUMAN_REVIEW,
+    attribution,
     ...(input.keyedCloseMode === undefined ? {} : { keyedCloseMode: input.keyedCloseMode }),
   });
   // The closed nodes' own semantic state moved, so evidence somebody is holding about that state
@@ -221,6 +223,21 @@ export async function applySupersessionProposal(
   // close invalidated would otherwise still verify as current against a claim that is shut.
   for (const nodeId of applied.closedIds) {
     advanceNodeState(db, nodeId, `supersession-apply:${proposal.id}`, now.toISOString());
+  }
+  // The judgment-durability sense's observation, one row per closed node: this covers the human
+  // review, unanimous auto-apply, and introspector-resolution attributions in the one path they
+  // all share. A write failure here costs this close's observation coverage and nothing else.
+  for (const nodeId of applied.closedIds) {
+    try {
+      appendJudgmentTransitionEvent(db, {
+        nodeId,
+        transition: 'superseded',
+        producedBy: attribution.provenance,
+        occurredAt: now,
+      });
+    } catch {
+      // Fail-open by design; see the comment above.
+    }
   }
   // After the close, not inside it: the marker is a repair instruction rather than part of the
   // correction, and a narrative left unmarked costs a stale sentence, not a wrong close.

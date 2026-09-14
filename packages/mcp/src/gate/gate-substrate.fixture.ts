@@ -32,6 +32,10 @@ import {
   stopNeo4jHarness,
   type Neo4jHarness,
 } from '@aion/core/infrastructure/graph/test-support/neo4j-harness.fixture.js';
+import {
+  openCampaignProducer,
+  type CampaignProducerHandle,
+} from '@aion/core/infrastructure/providers/test-support/campaign-guard.js';
 import { testGenerationProvider } from '@aion/core/infrastructure/providers/test-support/generation-provider.js';
 import {
   directCompletionPublisher,
@@ -110,6 +114,7 @@ export class GateSubstrate {
   #logger: Logger | undefined;
   #sessions: SessionManager | undefined;
   #provider: Provider | undefined;
+  #producer: CampaignProducerHandle | undefined;
   #dataDir = '';
 
   constructor(label: string, options: GateSubstrateOptions = {}) {
@@ -145,9 +150,20 @@ export class GateSubstrate {
       memberId: backbone.member.id,
       workspaceId: backbone.workspace.id,
     });
+    // The producer opening every battery on this substrate generates through: the campaign
+    // ledger's guard, carrying whatever lifetime budget the coordinator wrote onto that file,
+    // and the durable usage recorder that puts each billed response on the books under this
+    // substrate's label and the case in progress. `beginCase` names that case.
+    const producer = openCampaignProducer({
+      experiment: `gate-${this.label}`,
+      ceilingUsd: this.config.anthropic.dailyCeilingUsd,
+    });
+    this.#producer = producer;
     this.#provider = testGenerationProvider({
       baseUrl: this.config.ollama.url,
       embedModel: this.config.models.embed,
+      spending: producer.guard,
+      recordApiCall: producer.recordApiCall,
     });
     // The pipeline's narrative stage publishes, and without a coordinator it failed every run:
     // five attempts, then the job exhausted and sat in the queue while `whenIdle()` resolved
@@ -172,6 +188,8 @@ export class GateSubstrate {
     this.#harness = undefined;
     this.#db?.close();
     this.#db = undefined;
+    this.#producer?.close();
+    this.#producer = undefined;
     if (this.#dataDir !== '') {
       rmSync(this.#dataDir, { recursive: true, force: true });
       this.#dataDir = '';
@@ -211,6 +229,14 @@ export class GateSubstrate {
       throw new Error('gate substrate is not open');
     }
     return this.#provider;
+  }
+
+  /**
+   * Names the case every response recorded after it belongs to, on the campaign ledger. A battery
+   * that never calls it still records its usage, under `unnamed-case`.
+   */
+  beginCase(caseKey: string): void {
+    this.#producer?.beginCase(caseKey);
   }
 
   get sessions(): SessionManager {

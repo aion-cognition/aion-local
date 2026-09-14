@@ -32,6 +32,10 @@ import { openLogger, type Logger } from '../../infrastructure/logging/logger.js'
 import type { Provider, Vector } from '../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
+  appendBridgeTraversalEvent,
+  appendCoOccursObservedEvent,
+} from '../../infrastructure/sqlite/sense-usage-events.js';
+import {
   appendRecallAccessEvent,
   appendSelfReportEvent,
   listUsageEventsAfter,
@@ -274,10 +278,12 @@ describe('the usage stream replayed over a graph that kept its facts and lost it
       },
     );
 
-    // Every emitter wrote, in the order the substrate lived them. The emission row leads: it is
-    // written inline from the listener, ahead of the graph write the access row follows.
+    // Every emitter wrote, in the order the substrate lived them. The emission row leads, and the
+    // hub-inhibition observation follows it inline from the same listener: both run synchronously
+    // before the deferred access-tracking write that `whenIdle()` above waited out.
     expect(listUsageEventsAfter(db, undefined, 100).map((event) => event.kind)).toEqual([
       'pack_emitted',
+      'activation_hub_penalty_observed',
       'recall_access',
       'reinforcement_applied',
       'decay_sweep',
@@ -311,14 +317,15 @@ describe('the usage stream replayed over a graph that kept its facts and lost it
       { batchSize: 2 },
     );
 
-    // The emission row is stepped over rather than applied: it records what the pack served,
-    // which is a statement about a moment and not a change a rebuilt graph is missing.
+    // The emission row and the hub-inhibition observation are both stepped over rather than
+    // applied: they record what the pack served and what the walk measured, statements about a
+    // moment rather than a change a rebuilt graph is missing.
     expect(report).toMatchObject({
-      scanned: 4,
+      scanned: 5,
       accessApplied: 1,
       reinforcementApplied: 1,
       decayApplied: 1,
-      skipped: 1,
+      skipped: 2,
       failed: 0,
     });
     expect(await accessSnapshot()).toEqual(stamps);
@@ -351,7 +358,62 @@ describe('the usage stream replayed over a graph that kept its facts and lost it
     expect(await accessMetadata(harness.driver, backbone.member.id)).toMatchObject({
       accessCount: 1,
     });
-    expect(report.skipped).toBe(2);
+    // 2 from this test's own rows, plus the prior test's hub-inhibition observation: this call
+    // replays the whole stream from the start every time, the same as the assertion above it did
+    // before this file carried a sense that fires on every ordinary recall.
+    expect(report.skipped).toBe(3);
     expect(report.failed).toBe(0);
+  });
+
+  /**
+   * The introspection senses' observation kinds are new to `usage_events`, and this is the one
+   * place that would misread a new kind as a plasticity instruction if a central replay switch
+   * ever grew one: `SIGNAL_EVENT_KINDS` names them as signals, and this file's own default case
+   * steps over anything it does not recognize either way. Both paths land on the same outcome.
+   */
+  it('steps over the introspection senses like any other signal, touching neither graph nor edge weight', async () => {
+    // A full pass over whatever the earlier tests left in the stream, as a baseline: this file
+    // replays from the start every time rather than resuming a cursor, so the two new rows below
+    // must be measured as a delta against this same call repeated, not against an assumed zero.
+    const baseline = await replayUsageEvents(
+      { driver: harness.driver, db, logger },
+      { batchSize: 10 },
+    );
+
+    const older = new Date('2026-05-02T09:00:00.000Z');
+    appendBridgeTraversalEvent(db, {
+      sessionId: READ_SESSION,
+      bridgeId: 'usage-replay-int-bridge',
+      legs: ['into'],
+      crossed: false,
+      emitted: true,
+      occurredAt: older,
+    });
+    appendCoOccursObservedEvent(db, {
+      episodeId: 'usage-replay-int-episode',
+      pairsProposed: 1,
+      pairsWritten: 1,
+      births: 1,
+      recurrences: 0,
+      birthStrength: 1,
+      occurredAt: older,
+    });
+
+    const report = await replayUsageEvents(
+      { driver: harness.driver, db, logger },
+      { batchSize: 10 },
+    );
+
+    expect(report.failed).toBe(0);
+    expect(report.scanned).toBe(baseline.scanned + 2);
+    expect(report.skipped).toBe(baseline.skipped + 2);
+    // Neither new row moved anything a replay writes: the two rows changed nothing about how
+    // much access, reinforcement or decay this pass applied, which is what "stepped over like
+    // any other signal" means for a switch that never gained a case for either kind.
+    expect(report.accessApplied).toBe(baseline.accessApplied);
+    expect(report.reinforcementApplied).toBe(baseline.reinforcementApplied);
+    expect(report.decayApplied).toBe(baseline.decayApplied);
+    expect(report.edgesReinforced).toBe(baseline.edgesReinforced);
+    expect(report.edgesDecayed).toBe(baseline.edgesDecayed);
   });
 });

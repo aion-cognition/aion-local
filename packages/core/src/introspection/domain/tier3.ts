@@ -26,6 +26,22 @@ export type Tier3Request = {
    */
   readonly insights?: readonly string[];
   /**
+   * The introspection senses' own evidence, one line each: what the substrate observed about
+   * bridge traversal, resonance follow-through, judgment durability, compatibility calibration
+   * and CO_OCCURS density. Read by the model exactly like `insights`, as evidence with limits.
+   * Nothing in `acceptTier3Proposal` reads this field, and it is never a threshold on whether an
+   * operation runs; it exists only so the model's own interpretation of it can become a lesson.
+   */
+  readonly senseEvidence?: readonly string[];
+  /**
+   * The model's own past interpretations of that evidence, oldest first, read back from
+   * `introspection_model_lessons`. Kept apart from `insights`: those are the run ledger's own
+   * numbers, and these are what a previous cycle's model concluded from the senses. A lesson is
+   * shown as the model's prior reading, never blended into the sense evidence itself, so a wrong
+   * early guess cannot pose as a second measurement corroborating the first.
+   */
+  readonly lessons?: readonly string[];
+  /**
    * The loop's abort, carried on the request because the advisor is built once at wiring time
    * and the signal belongs to the engine. A consultation stops with the service rather than
    * holding shutdown for the rest of a model call.
@@ -44,10 +60,32 @@ export type Tier3Proposal = {
  * which is a first-class answer and not a failure; `failed` is a call that threw or timed out,
  * and `unusable` an answer the schema refuses. A caller that folded the three into one silence
  * could not tell a healthy substrate from a broken advisor.
+ *
+ * `lesson` rides on the two answers a live model actually produced (`advised` and `declined`),
+ * never on `failed` or `unusable`: those are the call not arriving in a shape anyone can read,
+ * and there is no interpretation to carry forward from an answer that never resolved. It is the
+ * model's own reading of the sense evidence, offered beside the operation choice rather than
+ * folded into it, and the model may leave it out of either answer.
+ *
+ * `lessonRejected` is the other half of that separation: a lesson the model sent in a shape the
+ * field does not take is discarded and named here, and the decision it arrived with is answered
+ * on its own terms. An optional interpretation never decides whether a usable recommendation is
+ * usable.
  */
 export type Tier3Outcome =
-  | { readonly status: 'advised'; readonly proposal: Tier3Proposal }
-  | { readonly status: 'declined'; readonly rationale: string }
+  | {
+      readonly status: 'advised';
+      readonly proposal: Tier3Proposal;
+      readonly lesson?: string;
+      /** Why an offered lesson was thrown away. The decision beside it stands regardless. */
+      readonly lessonRejected?: string;
+    }
+  | {
+      readonly status: 'declined';
+      readonly rationale: string;
+      readonly lesson?: string;
+      readonly lessonRejected?: string;
+    }
   | { readonly status: 'failed'; readonly reason: string }
   | { readonly status: 'unusable'; readonly reason: string };
 

@@ -83,6 +83,8 @@ function completion(overrides: Partial<RecallCompletion> = {}): RecallCompletion
     pack: EMPTY_PACK,
     now: NOW,
     mode: withCurrency(),
+    bridgeLegs: [],
+    hubPenalty: { hops: 0, inhibitedHops: 0, totalPenalty: 0, minPenalty: 1 },
     ...overrides,
   };
 }
@@ -370,6 +372,250 @@ describe('RecallSideEffects', () => {
     expect(loggedWarning('recall reinforcement enqueue failed')).toMatchObject({
       sessionId: 'session-1',
       activated: 2,
+    });
+  });
+
+  describe('bridge traversal', () => {
+    it('records a real leg contribution, distinct from a pair that merely co-packed', () => {
+      const sideEffects = new RecallSideEffects(fakeDriver([]), store.db, logger);
+
+      void sideEffects.onRecalled(
+        completion({
+          bridgeLegs: [{ bridgeId: 'bridge-1', direction: 'into' }],
+          activated: [activatedNode('bridge-1'), activatedNode('endpoint-a')],
+          ...served('bridge-1', 'endpoint-a'),
+        }),
+      );
+
+      const events = listUsageEventsAfter(store.db, undefined, 10).filter(
+        (row) => row.kind === 'bridge_traversal_observed',
+      );
+      expect(events).toMatchObject([
+        {
+          payload: {
+            sessionId: 'session-1',
+            bridgeId: 'bridge-1',
+            legs: ['into'],
+            crossed: false,
+            emitted: true,
+          },
+        },
+      ]);
+    });
+
+    it('never mistakes two co-packed nodes for a traversed bridge', () => {
+      const sideEffects = new RecallSideEffects(fakeDriver([]), store.db, logger);
+
+      // Two ordinary nodes served together, with no leg contribution reported by the walk at
+      // all: nothing here should read as bridge use, however the pair happened to co-occur.
+      void sideEffects.onRecalled(
+        completion({
+          bridgeLegs: [],
+          activated: [activatedNode('a'), activatedNode('b')],
+          ...served('a', 'b'),
+        }),
+      );
+
+      expect(
+        listUsageEventsAfter(store.db, undefined, 10).filter(
+          (row) => row.kind === 'bridge_traversal_observed',
+        ),
+      ).toEqual([]);
+    });
+
+    it('reports a crossing only once both legs fired in the same walk', () => {
+      const sideEffects = new RecallSideEffects(fakeDriver([]), store.db, logger);
+
+      void sideEffects.onRecalled(
+        completion({
+          bridgeLegs: [
+            { bridgeId: 'bridge-1', direction: 'into' },
+            { bridgeId: 'bridge-1', direction: 'out' },
+          ],
+        }),
+      );
+
+      const [event] = listUsageEventsAfter(store.db, undefined, 10).filter(
+        (row) => row.kind !== 'pack_emitted',
+      );
+      expect(event).toMatchObject({
+        kind: 'bridge_traversal_observed',
+        payload: { bridgeId: 'bridge-1', legs: ['into', 'out'], crossed: true },
+      });
+    });
+
+    it('folds several bridges touched in one walk into one row each', () => {
+      const sideEffects = new RecallSideEffects(fakeDriver([]), store.db, logger);
+
+      void sideEffects.onRecalled(
+        completion({
+          bridgeLegs: [
+            { bridgeId: 'bridge-1', direction: 'into' },
+            { bridgeId: 'bridge-2', direction: 'into' },
+          ],
+        }),
+      );
+
+      const events = listUsageEventsAfter(store.db, undefined, 10).filter(
+        (row) => row.kind === 'bridge_traversal_observed',
+      );
+      expect(events.map((row) => (row.payload as { bridgeId: string }).bridgeId).sort()).toEqual([
+        'bridge-1',
+        'bridge-2',
+      ]);
+    });
+
+    it('a bridge the walk reached but the pack never printed is recorded as unreached, not unused', () => {
+      const sideEffects = new RecallSideEffects(fakeDriver([]), store.db, logger);
+
+      void sideEffects.onRecalled(
+        completion({
+          bridgeLegs: [{ bridgeId: 'bridge-1', direction: 'into' }],
+          activated: [activatedNode('bridge-1')],
+          retrieved: ['bridge-1'],
+          emitted: new Set(),
+        }),
+      );
+
+      const [event] = listUsageEventsAfter(store.db, undefined, 10).filter(
+        (row) => row.kind !== 'pack_emitted',
+      );
+      expect(event).toMatchObject({ payload: { bridgeId: 'bridge-1', emitted: false } });
+    });
+  });
+
+  describe('resonance usefulness', () => {
+    it('captures method, context and contested standing at the moment of emission', () => {
+      const sideEffects = new RecallSideEffects(fakeDriver([]), store.db, logger);
+      const pack: MemoryPack = {
+        ...EMPTY_PACK,
+        resonant: [
+          {
+            id: 'pref-1',
+            content: 'does not require approval',
+            rank: 1,
+            confidence: 0.7,
+            rationale: { method: 'resonance', score: 0.7 },
+            context: 'for local throwaway test stores only',
+            currency: 'current',
+            standing: { kind: 'inferred_preference', attribution: 'reported', contested: true },
+          },
+        ],
+      };
+
+      void sideEffects.onRecalled(completion({ pack, emitted: new Set(['pref-1']) }));
+
+      const [event] = listUsageEventsAfter(store.db, undefined, 10).filter(
+        (row) => row.kind !== 'pack_emitted',
+      );
+      expect(event).toMatchObject({
+        kind: 'resonance_served',
+        payload: {
+          sessionId: 'session-1',
+          itemId: 'pref-1',
+          method: 'resonance',
+          context: 'for local throwaway test stores only',
+          contested: true,
+        },
+      });
+    });
+
+    it('reads contested off standing.contested, never off a lineage or correction marker', () => {
+      const sideEffects = new RecallSideEffects(fakeDriver([]), store.db, logger);
+      const pack: MemoryPack = {
+        ...EMPTY_PACK,
+        resonant: [
+          {
+            id: 'turn-1',
+            content: 'a raw turn with a current claim in its family',
+            rank: 1,
+            confidence: 0.6,
+            rationale: { method: 'resonance', score: 0.6 },
+            currency: 'current',
+            related_claim: { id: 'claim-1', text: 'the claim as it stands today' },
+          },
+        ],
+      };
+
+      void sideEffects.onRecalled(completion({ pack, emitted: new Set(['turn-1']) }));
+
+      const [event] = listUsageEventsAfter(store.db, undefined, 10).filter(
+        (row) => row.kind !== 'pack_emitted',
+      );
+      expect(event).toMatchObject({ payload: { contested: false } });
+    });
+
+    it('records one row per resonant item and none for the other buckets', () => {
+      const sideEffects = new RecallSideEffects(fakeDriver([]), store.db, logger);
+      const pack: MemoryPack = {
+        ...EMPTY_PACK,
+        facts: [
+          {
+            id: 'fact-1',
+            content: 'a plain fusion hit',
+            rank: 1,
+            confidence: 0.9,
+            rationale: { method: 'vector', score: 0.9 },
+            currency: 'current',
+          },
+        ],
+        resonant: [
+          {
+            id: 'res-1',
+            content: 'a resonance hit',
+            rank: 2,
+            confidence: 0.5,
+            rationale: { method: 'resonance', score: 0.5 },
+            currency: 'current',
+          },
+        ],
+      };
+
+      void sideEffects.onRecalled(completion({ pack, emitted: new Set(['fact-1', 'res-1']) }));
+
+      const events = listUsageEventsAfter(store.db, undefined, 10).filter(
+        (row) => row.kind === 'resonance_served',
+      );
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ payload: { itemId: 'res-1' } });
+    });
+  });
+
+  describe('the hub-inhibition observation', () => {
+    it('summarizes the walk the activation layer measured', () => {
+      const sideEffects = new RecallSideEffects(fakeDriver([]), store.db, logger);
+
+      void sideEffects.onRecalled(
+        completion({
+          hubPenalty: { hops: 4, inhibitedHops: 1, totalPenalty: 3.5, minPenalty: 0.5 },
+        }),
+      );
+
+      const [event] = listUsageEventsAfter(store.db, undefined, 10).filter(
+        (row) => row.kind !== 'pack_emitted',
+      );
+      expect(event).toMatchObject({
+        kind: 'activation_hub_penalty_observed',
+        payload: {
+          sessionId: 'session-1',
+          hops: 4,
+          inhibitedHops: 1,
+          totalPenalty: 3.5,
+          minPenalty: 0.5,
+        },
+      });
+    });
+
+    it('records nothing for a walk that propagated across no edge at all', () => {
+      const sideEffects = new RecallSideEffects(fakeDriver([]), store.db, logger);
+
+      void sideEffects.onRecalled(completion());
+
+      expect(
+        listUsageEventsAfter(store.db, undefined, 10).filter(
+          (row) => row.kind === 'activation_hub_penalty_observed',
+        ),
+      ).toEqual([]);
     });
   });
 });

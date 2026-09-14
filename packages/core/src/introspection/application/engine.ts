@@ -11,6 +11,7 @@ import type { ReferencePublisher } from './operations/confirmation-signal-comple
 import type { NarrativeMaintenanceDeps } from './operations/narrative-seal.js';
 import type { TopologyPublisher } from './operations/orphan-suppression.js';
 import { consultTier3 } from './tier3-consult.js';
+import { gatherTier3Evidence } from './tier3-evidence.js';
 import type { JudgmentEvidence } from '../../evidence/application/judgment.js';
 import type { MergePublisher } from '../../evidence/application/merge-recovery.js';
 import type { Config } from '../../infrastructure/config/schema.js';
@@ -24,7 +25,6 @@ import {
   recordOperationRun,
   recordOperationSelected,
 } from '../../infrastructure/sqlite/introspection-counters.js';
-import { listRecentInsights } from '../../infrastructure/sqlite/introspection-insights.js';
 import { markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import type { ReflectionIntakeDeps } from '../../reflection/application/intake.js';
 import { operationBucketKey } from '../domain/buckets.js';
@@ -362,6 +362,7 @@ export class Introspector {
     resolved: readonly ResolvedRun[],
   ): Promise<TickReport | undefined> {
     try {
+      const evidence = await gatherTier3Evidence(this.#deps, this.#now());
       return await consultTier3(
         {
           ...this.#deps,
@@ -369,26 +370,11 @@ export class Introspector {
           signal: this.#abort.signal,
           act: (operation, decision) => this.#act(operation, decision, health, cycle, resolved),
         },
-        { health, candidates, reason, cycle, insights: this.#insights() },
+        { health, candidates, reason, cycle, ...evidence },
       );
     } catch (err) {
       this.#deps.logger.warn({ err }, 'introspection tier 3 consultation failed');
       return undefined;
-    }
-  }
-
-  /**
-   * The lessons the advisor reads. A store that cannot answer costs the prompt its history and
-   * not the consultation: a cycle with no lessons is the same shape as the first cycle ever run.
-   */
-  #insights(): readonly string[] {
-    try {
-      return listRecentInsights(this.#deps.db, this.#deps.config.maintenance.tier3InsightCount).map(
-        (insight) => `${insight.recordedAt}: ${insight.operation} ${insight.lesson}`,
-      );
-    } catch (err) {
-      this.#deps.logger.warn({ err }, 'introspection insight read failed');
-      return [];
     }
   }
 

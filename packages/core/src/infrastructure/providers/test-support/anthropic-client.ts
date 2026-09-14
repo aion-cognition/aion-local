@@ -1,5 +1,7 @@
 import { requestAnthropicJson, type SchemaDelivery } from '../anthropic-provider.js';
-import type { StructuredRequest } from '../types.js';
+import type { FrameOverride } from '../request-blocks.js';
+import type { SpendingGuard } from '../spending.js';
+import type { ApiCall, StructuredRequest } from '../types.js';
 
 export { jsonSpans, parseJsonPayload } from '../anthropic-json.js';
 export type { SchemaDelivery } from '../anthropic-provider.js';
@@ -9,6 +11,20 @@ export type AnthropicClientOptions = {
   readonly fetchImpl?: typeof fetch;
   readonly maxTokens?: number;
   readonly schemaDelivery?: SchemaDelivery;
+  /**
+   * The day's spending backstop, consulted before the request is sent. Absent leaves this
+   * client's calls unbounded, which every production route already refuses to be; a battery
+   * that constructs this class directly has to pass one in the same way `AnthropicProvider` does.
+   */
+  readonly spending?: SpendingGuard;
+  /** The shared frame override, for a harness comparing conditions. See `AnthropicRequestOptions`. */
+  readonly frameOverride?: FrameOverride;
+  /**
+   * Where each billed response's own usage is written. A guard's reservation bounds what a
+   * dispatch may cost; this is what it did cost, with the tokens the response reported. A battery
+   * measuring per-case spend needs both, and only this one survives the process.
+   */
+  readonly recordApiCall?: (call: ApiCall) => void;
 };
 
 /**

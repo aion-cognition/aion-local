@@ -11,10 +11,16 @@ import {
   enqueueReinforcementSignal,
 } from '../../infrastructure/sqlite/reinforcement-queue.js';
 import {
+  appendActivationHubPenaltyEvent,
+  appendBridgeTraversalEvent,
+  appendResonanceServedEvent,
+} from '../../infrastructure/sqlite/sense-usage-events.js';
+import {
   appendPackEmittedEvent,
   appendRecallAccessEvent,
 } from '../../infrastructure/sqlite/usage-events.js';
 import { RECALL_PACK_EXPOSURE_TRIGGER } from '../../plasticity/domain/reinforcement.js';
+import type { BridgeLegContribution } from '../domain/activation-observations.js';
 import type { ActivatedNode } from '../domain/activation.js';
 
 /**
@@ -111,6 +117,9 @@ export class RecallSideEffects {
     this.#appendPackEmitted(completion);
     this.#enqueueReinforcement(completion);
     this.#scheduleAccessTracking(completion);
+    this.#appendBridgeTraversal(completion);
+    this.#appendResonanceServed(completion);
+    this.#appendHubPenalty(completion);
   };
 
   /**
@@ -176,6 +185,93 @@ export class RecallSideEffects {
           activated: completion.activated.length,
         },
         'recall reinforcement enqueue failed',
+      );
+    }
+  }
+
+  /**
+   * One row per bridge this walk's propagation touched, folded from every leg contribution to
+   * that bridge's own id. A collector failure here costs observation coverage for this bridge on
+   * this recall and nothing else: the pack was already assembled and persisted before this runs.
+   */
+  #appendBridgeTraversal(completion: RecallCompletion): void {
+    if (completion.bridgeLegs.length === 0) {
+      return;
+    }
+    try {
+      const byBridge = new Map<string, BridgeLegContribution['direction'][]>();
+      for (const leg of completion.bridgeLegs) {
+        const directions = byBridge.get(leg.bridgeId) ?? [];
+        directions.push(leg.direction);
+        byBridge.set(leg.bridgeId, directions);
+      }
+      for (const [bridgeId, directions] of byBridge) {
+        appendBridgeTraversalEvent(this.#db, {
+          sessionId: completion.sessionId,
+          bridgeId,
+          legs: directions,
+          crossed: directions.includes('into') && directions.includes('out'),
+          emitted: completion.emitted.has(bridgeId),
+          occurredAt: completion.now,
+        });
+      }
+    } catch (err) {
+      this.#logger.warn(
+        { err, sessionId: completion.sessionId, bridges: completion.bridgeLegs.length },
+        'recall bridge-traversal append failed',
+      );
+    }
+  }
+
+  /**
+   * One row per resonant-bucket item this pack printed, capturing what a later read of the graph
+   * cannot reconstruct: that this item was served by context resonance specifically, on this
+   * method and condition, contested or not per the wire item's own `standing.contested`.
+   * Resonance-only hits sit outside the first walk's activated set, so the reinforcement enqueue
+   * above never sees them.
+   */
+  #appendResonanceServed(completion: RecallCompletion): void {
+    const { resonant } = completion.pack;
+    if (resonant === undefined || resonant.length === 0) {
+      return;
+    }
+    try {
+      for (const item of resonant) {
+        appendResonanceServedEvent(this.#db, {
+          sessionId: completion.sessionId,
+          itemId: item.id,
+          method: item.rationale.method,
+          ...(item.context === undefined ? {} : { context: item.context }),
+          contested: item.standing?.contested === true,
+          occurredAt: completion.now,
+        });
+      }
+    } catch (err) {
+      this.#logger.warn(
+        { err, sessionId: completion.sessionId, resonant: resonant.length },
+        'recall resonance-served append failed',
+      );
+    }
+  }
+
+  /** One row per recall walk, summarizing the hub-inhibition exposure `activation.ts` measured. */
+  #appendHubPenalty(completion: RecallCompletion): void {
+    if (completion.hubPenalty.hops === 0) {
+      return;
+    }
+    try {
+      appendActivationHubPenaltyEvent(this.#db, {
+        sessionId: completion.sessionId,
+        hops: completion.hubPenalty.hops,
+        inhibitedHops: completion.hubPenalty.inhibitedHops,
+        totalPenalty: completion.hubPenalty.totalPenalty,
+        minPenalty: completion.hubPenalty.minPenalty,
+        occurredAt: completion.now,
+      });
+    } catch (err) {
+      this.#logger.warn(
+        { err, sessionId: completion.sessionId, hops: completion.hubPenalty.hops },
+        'recall hub-penalty append failed',
       );
     }
   }

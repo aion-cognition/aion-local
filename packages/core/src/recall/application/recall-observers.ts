@@ -7,6 +7,10 @@ import type { Config } from '../../infrastructure/config/schema.js';
 import type { ReadMode } from '../../infrastructure/graph/read-modes.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import { resolveProviderRouting } from '../../infrastructure/providers/routing.js';
+import type {
+  BridgeLegContribution,
+  HubPenaltyObserved,
+} from '../domain/activation-observations.js';
 import type { ActivatedNode, ActivationRun } from '../domain/activation.js';
 import type { AdmissionReport } from '../domain/admission.js';
 import type { FusedItem } from '../domain/fusion.js';
@@ -49,6 +53,10 @@ export type RecallCompletion = {
   readonly admission: AdmissionReport;
   readonly pack: MemoryPack;
   readonly now: Date;
+  /** Every bridge leg this walk's propagation crossed. Telemetry, read by the traversal sense only. */
+  readonly bridgeLegs: readonly BridgeLegContribution[];
+  /** This walk's hub-inhibition exposure, summarized. Telemetry, read by the density sense only. */
+  readonly hubPenalty: HubPenaltyObserved;
   /**
    * The bitemporal vantage point the whole run read from. A listener that writes consults it:
    * inspecting the past is a question, not a use, so it must not stamp `last_accessed` on

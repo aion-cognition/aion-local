@@ -7,6 +7,8 @@ import { AssociationInferenceStage } from './associations.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import type { Provider } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import type { CoOccursObservedPayload } from '../../../infrastructure/sqlite/sense-usage-events.js';
+import { listUsageEventsOfKind } from '../../../infrastructure/sqlite/usage-events.js';
 import type { StageContext } from '../../domain/stage.js';
 import { PIPELINE_VERSION } from '../../domain/version.js';
 import { FakeGraph } from '../../test-support/fake-graph.fixture.js';
@@ -222,5 +224,86 @@ describe('AssociationInferenceStage', () => {
 
     expect(outcome.status).toBe('failed');
     expect(outcome.summary).toContain('neo4j unreachable');
+  });
+
+  describe('the density sense observation', () => {
+    function coOccursObservations(): readonly CoOccursObservedPayload[] {
+      return listUsageEventsOfKind(db, 'co_occurs_observed', 10).map(
+        (row) => row.payload as CoOccursObservedPayload,
+      );
+    }
+
+    it('records every pair this pass proposed as a birth, at the pass-wide strength', async () => {
+      entity('e1', 'Alice');
+      entity('e2', 'Bob');
+      entity('e3', 'Carol');
+      mention('e1');
+      mention('e2');
+      mention('e3');
+
+      await new AssociationInferenceStage().run(buildContext());
+
+      const [observed] = coOccursObservations();
+      expect(observed).toEqual({
+        episodeId: EPISODE_ID,
+        pairsProposed: 3,
+        pairsWritten: 3,
+        births: 3,
+        recurrences: 0,
+        // coOccurrenceBirthStrength(3, DEFAULTS.hebbian.weightFloor): max(0.1, 1/3).
+        birthStrength: 1 / 3,
+      });
+    });
+
+    it('a pair a later episode repeats is a recurrence, not a second birth', async () => {
+      entity('e1', 'Alice');
+      entity('e2', 'Bob');
+      mention('e1', EPISODE_ID);
+      mention('e2', EPISODE_ID);
+      graph.seedNode('episode-2', ['Episode', 'Memory', 'AionNode']);
+      mention('e1', 'episode-2');
+      mention('e2', 'episode-2');
+      const stage = new AssociationInferenceStage();
+
+      await stage.run(buildContext(EPISODE_ID));
+      await stage.run(buildContext('episode-2'));
+
+      const observations = coOccursObservations();
+      expect(observations).toHaveLength(2);
+      expect(observations[0]).toMatchObject({
+        episodeId: EPISODE_ID,
+        pairsProposed: 1,
+        pairsWritten: 1,
+        births: 1,
+        recurrences: 0,
+      });
+      expect(observations[1]).toMatchObject({
+        episodeId: 'episode-2',
+        pairsProposed: 1,
+        pairsWritten: 1,
+        births: 0,
+        recurrences: 1,
+      });
+    });
+
+    it('records no observation for an episode with nothing to pair', async () => {
+      await new AssociationInferenceStage().run(buildContext());
+
+      expect(coOccursObservations()).toHaveLength(0);
+    });
+
+    it('a re-run gated by the ledger records no second observation', async () => {
+      entity('e1', 'Alice');
+      entity('e2', 'Bob');
+      mention('e1');
+      mention('e2');
+      const stage = new AssociationInferenceStage();
+      const ctx = buildContext();
+
+      await stage.run(ctx);
+      await stage.run(ctx);
+
+      expect(coOccursObservations()).toHaveLength(1);
+    });
   });
 });

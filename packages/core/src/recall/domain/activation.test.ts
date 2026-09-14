@@ -399,6 +399,124 @@ describe('spreadActivation', () => {
   });
 });
 
+describe('spreadActivation bridge-leg observation', () => {
+  it("records a leg contribution only where the edge is one of that bridge's own legs", async () => {
+    const fetch: AdjacencyFetch = (request) =>
+      request.frontier.includes('seed')
+        ? Promise.resolve([
+            neighbor({
+              sourceId: 'seed',
+              nodeId: 'bridge-1',
+              relationshipType: 'RELATED_TO',
+              bridgeLeg: {
+                bridgeId: 'bridge-1',
+                endpointId: 'seed',
+                relationshipType: 'RELATED_TO',
+                signal: 'symbiosis_bridge',
+              },
+            }),
+          ])
+        : Promise.resolve([]);
+
+    const run = await spreadActivation(fetch, {
+      seeds: [{ nodeId: 'seed' }],
+      budget: withBudget({ maxHops: 2 }),
+    });
+
+    expect(run.bridgeLegs).toEqual([{ bridgeId: 'bridge-1', direction: 'into' }]);
+  });
+
+  it('records no leg for a co-packed pair that never traversed a bridge edge at all', async () => {
+    const run = await spreadActivation(fetchOver({ edges: [] }), {
+      seeds: [{ nodeId: 'a' }, { nodeId: 'b' }],
+      budget: BASE_BUDGET,
+    });
+
+    expect(run.bridgeLegs).toEqual([]);
+  });
+
+  it('names an end-to-end crossing only once both legs fire in the same walk', async () => {
+    const fetch: AdjacencyFetch = (request) => {
+      if (request.frontier.includes('seed')) {
+        return Promise.resolve([
+          neighbor({
+            sourceId: 'seed',
+            nodeId: 'bridge-1',
+            relationshipType: 'RELATED_TO',
+            bridgeLeg: {
+              bridgeId: 'bridge-1',
+              endpointId: 'seed',
+              relationshipType: 'RELATED_TO',
+              signal: 'symbiosis_bridge',
+            },
+          }),
+        ]);
+      }
+      if (request.frontier.includes('bridge-1')) {
+        return Promise.resolve([
+          neighbor({
+            sourceId: 'bridge-1',
+            nodeId: 'other-side',
+            relationshipType: 'RELATED_TO',
+            bridgeLeg: {
+              bridgeId: 'bridge-1',
+              endpointId: 'other-side',
+              relationshipType: 'RELATED_TO',
+              signal: 'symbiosis_bridge',
+            },
+          }),
+        ]);
+      }
+      return Promise.resolve([]);
+    };
+
+    const run = await spreadActivation(fetch, {
+      seeds: [{ nodeId: 'seed' }],
+      budget: withBudget({ maxHops: 2 }),
+    });
+
+    expect(run.bridgeLegs).toEqual([
+      { bridgeId: 'bridge-1', direction: 'into' },
+      { bridgeId: 'bridge-1', direction: 'out' },
+    ]);
+  });
+});
+
+describe('spreadActivation hub-penalty observation', () => {
+  it('folds every evaluated hop even where the hub threshold never fires', async () => {
+    const run = await spreadActivation(
+      fetchOver({ edges: [{ from: 'seed', to: 'a', type: 'PARTICIPATES_IN' }] }),
+      { seeds: [{ nodeId: 'seed' }], budget: withBudget({ maxHops: 1, hubThreshold: 10 }) },
+    );
+
+    expect(run.hubPenalty.hops).toBe(1);
+    expect(run.hubPenalty.inhibitedHops).toBe(0);
+    expect(run.hubPenalty.minPenalty).toBe(1);
+  });
+
+  it('counts an inhibited hop on physical degree and folds a penalty under 1', async () => {
+    const fetch: AdjacencyFetch = () =>
+      Promise.resolve([
+        neighbor({
+          sourceId: 'seed',
+          nodeId: 'hub',
+          relationshipType: 'PARTICIPATES_IN',
+          degree: 1000,
+        }),
+      ]);
+
+    const run = await spreadActivation(fetch, {
+      seeds: [{ nodeId: 'seed' }],
+      budget: withBudget({ maxHops: 1, hubThreshold: 10 }),
+    });
+
+    expect(run.hubPenalty.hops).toBe(1);
+    expect(run.hubPenalty.inhibitedHops).toBe(1);
+    expect(run.hubPenalty.minPenalty).toBeLessThan(1);
+    expect(run.hubPenalty.totalPenalty).toBe(run.hubPenalty.minPenalty);
+  });
+});
+
 describe('spreadActivation superseded handling', () => {
   const fixture: Fixture = {
     edges: [

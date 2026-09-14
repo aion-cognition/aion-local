@@ -53,6 +53,7 @@ export type { ExperienceArchiveRow } from './sqlite/experience-archive.js';
 export { listReferenceBatches, readSourceRecord } from './sqlite/source-identity.js';
 
 export { countUsageEvents } from './sqlite/usage-events.js';
+export { appendJudgmentTransitionEvent } from './sqlite/sense-usage-events.js';
 
 export {
   getLedgerEntry,

@@ -1,5 +1,6 @@
 import type { SqliteHandle } from './database.js';
 import { isLedgerApplied, markLedgerApplied } from './ops-ledger.js';
+import type { SenseUsageEventPayload } from './sense-usage-events.js';
 
 /**
  * The usage stream: what recall, the flush and the decay sweep did to the graph, appended as
@@ -27,6 +28,11 @@ export const USAGE_EVENT_KINDS = [
   'delivery_acknowledged',
   'memory_used',
   'memory_confirmed',
+  'bridge_traversal_observed',
+  'resonance_served',
+  'judgment_transition_observed',
+  'co_occurs_observed',
+  'activation_hub_penalty_observed',
 ] as const;
 
 export type UsageEventKind = (typeof USAGE_EVENT_KINDS)[number];
@@ -34,12 +40,22 @@ export type UsageEventKind = (typeof USAGE_EVENT_KINDS)[number];
 /**
  * The kinds that state a signal instead of recording a write. A replay steps over them: there is
  * no graph change to put back, and nothing about them is reconstructible from a rebuilt graph.
+ *
+ * The five introspection-sense kinds belong here for the same reason the original four do: each
+ * is an outcome observation the tier-3 loop reads as evidence, never a plasticity instruction. A
+ * replay that steps over them loses observation coverage for that window and nothing else, since
+ * none of them is the record a graph write would need put back.
  */
 export const SIGNAL_EVENT_KINDS = [
   'pack_emitted',
   'delivery_acknowledged',
   'memory_used',
   'memory_confirmed',
+  'bridge_traversal_observed',
+  'resonance_served',
+  'judgment_transition_observed',
+  'co_occurs_observed',
+  'activation_hub_penalty_observed',
 ] as const;
 
 export type SignalEventKind = (typeof SIGNAL_EVENT_KINDS)[number];
@@ -146,7 +162,8 @@ export type UsageEventPayload =
   | DecaySweepPayload
   | PackEmittedPayload
   | SelfReportPayload
-  | MemoryConfirmedPayload;
+  | MemoryConfirmedPayload
+  | SenseUsageEventPayload;
 
 export type UsageEventRow = {
   /** The stream position. Never reused, so a cursor holding one can only move forward. */
@@ -173,7 +190,7 @@ type UsageEventRowData = {
 };
 
 /** Both clocks every appender takes. `recordedAt` defaults to the wall clock at write time. */
-type UsageEventStamps = {
+export type UsageEventStamps = {
   readonly occurredAt: Date;
   readonly recordedAt?: Date;
 };
@@ -188,7 +205,8 @@ function toUsageEventRow(row: UsageEventRowData): UsageEventRow {
   };
 }
 
-function append(
+/** The one insert every appender, in this file and in `sense-usage-events.ts`, funnels through. */
+export function appendUsageEventRow(
   db: SqliteHandle,
   kind: UsageEventKind,
   payload: UsageEventPayload,
@@ -209,7 +227,7 @@ export type RecallAccessEvent = RecallAccessPayload & UsageEventStamps;
 
 /** Called from recall's deferred access-tracking write, once the graph has taken the bump. */
 export function appendRecallAccessEvent(db: SqliteHandle, event: RecallAccessEvent): void {
-  append(db, 'recall_access', { ids: [...event.ids] }, event);
+  appendUsageEventRow(db, 'recall_access', { ids: [...event.ids] }, event);
 }
 
 export type ReinforcementAppliedEvent = ReinforcementAppliedPayload & UsageEventStamps;
@@ -218,7 +236,7 @@ export function appendReinforcementAppliedEvent(
   db: SqliteHandle,
   event: ReinforcementAppliedEvent,
 ): void {
-  append(
+  appendUsageEventRow(
     db,
     'reinforcement_applied',
     {
@@ -242,7 +260,7 @@ export type PackEmittedEvent = PackEmittedPayload & UsageEventStamps;
  * lands, and a run that lost the graph still served somebody a pack.
  */
 export function appendPackEmittedEvent(db: SqliteHandle, event: PackEmittedEvent): void {
-  append(
+  appendUsageEventRow(
     db,
     'pack_emitted',
     {
@@ -278,7 +296,7 @@ function appendOnce(
       if (isLedgerApplied(db, key)) {
         return false;
       }
-      append(db, kind, payload, stamps);
+      appendUsageEventRow(db, kind, payload, stamps);
       markLedgerApplied(db, key, { kind });
       return true;
     })
@@ -326,7 +344,7 @@ export function appendMemoryConfirmedEvent(db: SqliteHandle, event: MemoryConfir
 export type DecaySweepEvent = DecaySweepPayload & UsageEventStamps;
 
 export function appendDecaySweepEvent(db: SqliteHandle, event: DecaySweepEvent): void {
-  append(
+  appendUsageEventRow(
     db,
     'decay_sweep',
     {
@@ -370,5 +388,47 @@ export function listUsageEventsAfter(
 /** How many events the stream holds, for an operator asking whether there is anything to replay. */
 export function countUsageEvents(db: SqliteHandle): number {
   const row = db.prepare('SELECT count(*) AS n FROM usage_events').get() as { n: number };
+  return row.n;
+}
+
+/**
+ * The most recent `limit` rows of one kind, returned oldest first inside that window. For an
+ * introspection sense reading its own observation kind as evidence: a fresh scan each time,
+ * deliberately apart from the shared replay cursor above, since a sense forming a summary is not
+ * reconstructing graph state and holding no position between reads costs it nothing a replay
+ * would need to resume from.
+ *
+ * The window is current rather than the oldest page. Selecting the oldest `limit` rows froze
+ * every sense the moment the table passed its bound: two early leg-only records permanently hid
+ * a later crossing, while the evidence line called itself the most recent window. The inner
+ * select takes the newest rows on the `(occurred_at, id)` pair the table indexes, and the outer
+ * one puts them back in the order a fold reads them in.
+ *
+ * A record outside this window is not a record that does not exist. `countUsageEventsOfKind`
+ * gives the whole population, which is what lets a sense say how much of it this reading covers.
+ */
+export function listUsageEventsOfKind(
+  db: SqliteHandle,
+  kind: UsageEventKind,
+  limit: number,
+): readonly UsageEventRow[] {
+  const rows = db
+    .prepare(
+      `SELECT id, kind, payload_json, occurred_at, recorded_at FROM (
+         SELECT id, kind, payload_json, occurred_at, recorded_at FROM usage_events
+         WHERE kind = ?
+         ORDER BY occurred_at DESC, id DESC
+         LIMIT ?
+       ) ORDER BY occurred_at ASC, id ASC`,
+    )
+    .all(kind, limit) as UsageEventRowData[];
+  return rows.map(toUsageEventRow);
+}
+
+/** Rows of one kind the store holds, window or no window, so a sense can state its coverage. */
+export function countUsageEventsOfKind(db: SqliteHandle, kind: UsageEventKind): number {
+  const row = db.prepare('SELECT count(*) AS n FROM usage_events WHERE kind = ?').get(kind) as {
+    n: number;
+  };
   return row.n;
 }

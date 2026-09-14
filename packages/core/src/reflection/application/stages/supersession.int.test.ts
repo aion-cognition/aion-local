@@ -17,6 +17,10 @@ import {
   type Neo4jHarness,
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger } from '../../../infrastructure/logging/logger.js';
+import {
+  openCampaignProducer,
+  type CampaignProducerHandle,
+} from '../../../infrastructure/providers/test-support/campaign-guard.js';
 import { testGenerationProvider } from '../../../infrastructure/providers/test-support/generation-provider.js';
 import type { Provider, StructuredRequest } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
@@ -91,6 +95,7 @@ let harness: Neo4jHarness;
 let db: SqliteHandle;
 let dataDir: string;
 let live: Provider;
+let campaignProducer: CampaignProducerHandle | undefined;
 let distractorId: string;
 const pairs = new Map<string, SeededPair>();
 
@@ -100,10 +105,26 @@ const pairs = new Map<string, SeededPair>();
  * sets `AION_SUPERSEDE_MODE` is measured in `gate/supersession-precision.int.test.ts`.
  */
 function liveModelProvider(): Provider {
+  const producer = openCampaignProducer({
+    experiment: 'incident-supersession',
+    ceilingUsd: DEFAULTS.anthropic.dailyCeilingUsd,
+  });
+  campaignProducer = producer;
   return testGenerationProvider({
     baseUrl: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
     embedModel: DEFAULTS.models.embed,
+    spending: producer.guard,
+    recordApiCall: producer.recordApiCall,
   });
+}
+
+/**
+ * Names the campaign case every response bought after it belongs to. Called before each block's
+ * first call rather than left unset: a row recorded under `unnamed-case` says a campaign spent
+ * money and cannot say on which measured case.
+ */
+function beginCase(caseKey: string): void {
+  campaignProducer?.beginCase(caseKey);
 }
 
 /** Answers every judgment the same way, so the mode split is the only variable. */
@@ -153,6 +174,10 @@ beforeAll(async () => {
   db = openSqliteHandle({ filePath: join(dataDir, 'aion.sqlite') });
   await runGraphMigrations(harness.driver, db, { embedDimension: DEFAULTS.models.embedDimension });
   live = liveModelProvider();
+  // Named before the first call this file makes. Seeding dispatches no Anthropic request (its
+  // embeddings are local Ollama), and naming it is what says so on the ledger instead of leaving
+  // a silent group that a later reader has to assume was empty.
+  beginCase('setup/seed-pairs');
 
   const backbone = await bootstrapBackbone(harness.driver, { memberName: 'Test User' });
   const intake: ReflectionIntakeDeps = {
@@ -262,11 +287,13 @@ beforeAll(async () => {
 afterAll(async () => {
   await stopNeo4jHarness(harness);
   db.close();
+  campaignProducer?.close();
   rmSync(dataDir, { recursive: true, force: true });
 });
 
 describe('SupersessionStage against a live graph', () => {
   it('reaches the same-subject claim across labels, and proposes rather than closing it', async () => {
+    beginCase('same-subject-across-labels/queue');
     const pair = pairs.get('queue')!;
     const calls: StructuredRequest[] = [];
 
@@ -302,6 +329,7 @@ describe('SupersessionStage against a live graph', () => {
   }, 180_000);
 
   it('spends its judgment on the same subject, not on the closer different-subject claim', async () => {
+    beginCase('judgment-target/stripe');
     const pair = pairs.get('stripe')!;
     const calls: StructuredRequest[] = [];
 
@@ -325,6 +353,7 @@ describe('SupersessionStage against a live graph', () => {
    * positive costs a review row, and the node it names stays current and served.
    */
   it('contains a false positive as a proposal when the widener does reach one', async () => {
+    beginCase('widener-false-positive/stripe');
     const pair = pairs.get('stripe')!;
     const calls: StructuredRequest[] = [];
 
@@ -351,6 +380,7 @@ describe('SupersessionStage against a live graph', () => {
   }, 180_000);
 
   it('leaves the temporal bait alone after judging it', async () => {
+    beginCase('temporal-bait/bait-temporal');
     const pair = pairs.get('bait-temporal')!;
     const calls: StructuredRequest[] = [];
 
@@ -374,6 +404,8 @@ describe('SupersessionStage against a live graph', () => {
   }, 180_000);
 
   it('records a proposal and leaves the graph untouched whatever the confidence', async () => {
+    // Stubbed provider: this block buys nothing. Named so an unexpected row could not hide.
+    beginCase('stub-propose/auth');
     const pair = pairs.get('auth')!;
     const calls: StructuredRequest[] = [];
 
@@ -403,6 +435,7 @@ describe('SupersessionStage against a live graph', () => {
   }, 180_000);
 
   it('closes the old node with lineage in auto mode', async () => {
+    beginCase('stub-auto/deploy');
     const pair = pairs.get('deploy')!;
     const calls: StructuredRequest[] = [];
 

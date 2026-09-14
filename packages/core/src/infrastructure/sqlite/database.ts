@@ -77,6 +77,28 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     lesson TEXT NOT NULL,
     recorded_at TEXT NOT NULL
   )`,
+  // The model's own interpretations, kept in a table of their own rather than folded into
+  // introspection_insights above: that table's lesson is the run's own numbers restated, read by
+  // the advisor as a measurement it can check against the ledger, and a model-authored guess
+  // filed beside it would silently become corroboration for future prompts. This row is always
+  // linked to the cycle and the reason it was drawn from, and `operation` is 'none' on a lesson
+  // the model attached to a decline.
+  // `sense_evidence_json` is the bounded snapshot of the lines the model was actually shown,
+  // stored beside the digest rather than in place of it. The digest says two cycles read the
+  // same evidence; only the snapshot says what that evidence was. A row that kept the hash alone
+  // left the lesson unresolvable: nothing recovered the observation window it interpreted, and a
+  // later reader could not tell a lesson drawn from a full stream from one drawn from two rows.
+  // Kept distinct from `lesson`, which is the model's reading rather than what it read.
+  `CREATE TABLE IF NOT EXISTS introspection_model_lessons (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cycle INTEGER NOT NULL,
+    operation TEXT NOT NULL,
+    lesson TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    sense_evidence_digest TEXT,
+    sense_evidence_json TEXT,
+    recorded_at TEXT NOT NULL
+  )`,
   /**
    * `lane`, `session_id` and `lane_seq` are what claiming orders by: interactive before bulk,
    * and round-robin across sessions inside a lane. They are columns rather than payload fields
