@@ -7,7 +7,7 @@ import {
   deleteServedItems,
   GenerationSpendGuard,
   GraphConnection,
-  handleReflection,
+  handleReflectionResult,
   IdleNarrativeSweeper,
   Introspector,
   introspectionOperations,
@@ -422,7 +422,7 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       // what a successful read writes commits at the publication boundary this coordinator owns.
       recall: async (args, identity) =>
         recallResultFor(await runCheckedRecall(covered, args, { identity })),
-      reflection: (args, identity) => handleReflection(intake, args, { identity }),
+      reflection: (args, identity) => handleReflectionResult(intake, args, { identity }),
       ...archiveToolBackend({ driver, db: store.db, logger }),
     };
 

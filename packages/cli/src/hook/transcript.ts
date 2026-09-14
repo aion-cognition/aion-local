@@ -7,7 +7,11 @@ import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
  * than by asserting one schema.
  */
 
-/** How far back a read starts when there is no cursor to trust. A whole transcript can be megabytes. */
+/**
+ * How far back an untrusted cursor reads: a bounded tail, not the whole transcript, which can
+ * run to megabytes. This is client backfill, and it may pull in turns older than this
+ * substrate. The birth fence at intake is the guarantee that trims those out, not this bound.
+ */
 export const FALLBACK_TAIL_BYTES = 64 * 1024;
 
 export type TranscriptMessage = {
@@ -135,12 +139,31 @@ export function parseTranscriptLines(raw: string): readonly TranscriptMessage[] 
   return messages;
 }
 
+/**
+ * Where an untrusted cursor starts: byte zero for a transcript no bigger than the fallback
+ * window, since reading it whole costs nothing beyond what a real cursor would have read
+ * anyway, and a bounded 64 KiB tail otherwise. This bound is recovery reach only. It does not
+ * decide what is pre-birth; the server's birth fence at intake does that, by comparing each
+ * entry's timestamp against the substrate's creation instant.
+ */
+function untrustedStart(size: number): number {
+  return Math.max(0, size - FALLBACK_TAIL_BYTES);
+}
+
+/**
+ * A cursor goes untrusted two ways: it is genuinely absent (a fresh session, or one whose
+ * `~/.aion/hook-state` was cleared independently of the harness transcript it names, which
+ * survives a substrate reset untouched), or the file it named no longer matches (a rewritten
+ * rollout). Either way this treats the file as unread and falls back to a bounded tail rather
+ * than the true start of history: see `untrustedStart` for that bound, and the birth fence at
+ * intake for what actually keeps anything older than the substrate out.
+ */
 export function readRange(path: string, from: number | undefined): { text: string; start: number } {
   const handle = openSync(path, 'r');
   try {
     const { size } = fstatSync(handle);
     const trusted = from !== undefined && from >= 0 && from <= size;
-    const start = trusted ? from : Math.max(0, size - FALLBACK_TAIL_BYTES);
+    const start = trusted ? from : untrustedStart(size);
     const length = size - start;
     if (length <= 0) {
       return { text: '', start };

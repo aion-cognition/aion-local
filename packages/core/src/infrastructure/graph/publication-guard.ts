@@ -79,6 +79,36 @@ export async function bootstrapPublicationGuard(
   return { substrateId: pairing.substrateId, outcome: 'created' };
 }
 
+const READ_GUARD_CREATED_AT = `MATCH (g:${PUBLICATION_GUARD_LABEL} {${PUBLICATION_GUARD_ID_PROPERTY}: $substrateId})
+  RETURN g.created_at AS createdAt`;
+
+/**
+ * The substrate's own birth: the instant its one `PublicationGuard` node was minted, which the
+ * creation-gate above (see the module doc) makes a single, unrepeatable event keyed to this
+ * same substrate id. Undefined before the guard exists, which a caller reads as "birth
+ * unknown" rather than "born now": nothing can be judged older than a birth nobody has read
+ * yet.
+ */
+export async function readPublicationGuardBirth(
+  driver: Driver,
+  substrateId: string,
+): Promise<Date | undefined> {
+  const result = await driver.executeQuery(
+    READ_GUARD_CREATED_AT,
+    { substrateId },
+    {
+      routing: neo4j.routing.READ,
+    },
+  );
+  const [record] = result.records;
+  const createdAt = record?.get('createdAt') as string | null | undefined;
+  if (createdAt === null || createdAt === undefined) {
+    return undefined;
+  }
+  const parsed = new Date(createdAt);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+}
+
 /** Schema creation belongs to migrations; bootstrap refuses an absent or incompatible constraint. */
 export async function publicationGuardSchemaPresent(driver: Driver): Promise<boolean> {
   const result = await driver.executeQuery(

@@ -5,9 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   extractMessage,
+  FALLBACK_TAIL_BYTES,
   hasAssistantText,
   mentionsReflectionCall,
   parseTranscriptLines,
+  readRange,
   readTranscriptTail,
 } from './transcript.js';
 
@@ -144,6 +146,52 @@ describe('readTranscriptTail', () => {
       offset: 0,
       raw: '',
     });
+  });
+});
+
+describe('readRange', () => {
+  let dir: string;
+  let path: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'aion-transcript-range-'));
+    path = join(dir, 'transcript.jsonl');
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('reads from zero when an untrusted cursor meets a file no bigger than the fallback window', () => {
+    writeFileSync(path, 'x'.repeat(FALLBACK_TAIL_BYTES));
+
+    expect(readRange(path, undefined).start).toBe(0);
+  });
+
+  // The recovery case: a transcript already long when its cursor went missing, which is what
+  // a substrate reset leaves behind (the harness transcript survives; `~/.aion/hook-state`
+  // does not). This is client backfill: a bounded 64 KiB tail, not the current end, so a
+  // recoverable message still inside that window is not lost. The birth fence at intake, not
+  // this reader, is what excludes anything older than the substrate.
+  it('reads a bounded tail rather than nothing once the file passes the fallback window', () => {
+    const prefix = `${'x'.repeat(FALLBACK_TAIL_BYTES)}\n`;
+    const body = `${prefix}${DRIFTED_FLAT_CONTENT}\n`;
+    writeFileSync(path, body);
+
+    const range = readRange(path, undefined);
+
+    expect(range.start).toBe(Buffer.byteLength(prefix));
+    expect(range.text).toBe(`${DRIFTED_FLAT_CONTENT}\n`);
+  });
+
+  it('still honours a trusted cursor past the fallback window', () => {
+    const body = 'x'.repeat(FALLBACK_TAIL_BYTES + 1);
+    writeFileSync(path, body);
+
+    const range = readRange(path, 10);
+
+    expect(range.start).toBe(10);
+    expect(range.text).toBe(body.slice(10));
   });
 });
 

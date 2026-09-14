@@ -49,9 +49,15 @@ type Counters = {
 
 const NO_CHANGES: Counters = { nodesCreated: 0, relationshipsCreated: 0, propertiesSet: 0 };
 
+/**
+ * `toObject` is what the adapter in `connection.ts` reads (every statement routed through
+ * `runRead`/`inWriteTransaction` reaches a row this way). `get` is the raw driver `Record`
+ * method the handful of callers that talk to `driver.executeQuery` directly use instead, `
+ * publication-guard.ts` among them; both read the same row, so the fake needs only one shape.
+ */
 function toResult(rows: readonly Row[], counters: Counters = NO_CHANGES): unknown {
   return {
-    records: rows.map((row) => ({ toObject: () => row })),
+    records: rows.map((row) => ({ toObject: () => row, get: (key: string) => row[key] })),
     summary: { counters: { updates: () => counters } },
   };
 }
@@ -66,6 +72,8 @@ export class FakeGraph {
   readonly statements: RecordedStatement[] = [];
   /** Node ids a caller took a write lock on, in order. */
   readonly locked: string[] = [];
+  /** The once-only guard's birth stamp, by substrate id; empty until a test seeds one. */
+  readonly publicationGuards = new Map<string, string>();
 
   /** The fake answers `executeQuery` and `session`, which is the whole surface the adapter's helpers use. */
   get driver(): Driver {
@@ -93,6 +101,11 @@ export class FakeGraph {
 
   seedNode(id: string, labels: readonly string[], properties: Record<string, unknown> = {}): void {
     this.nodes.set(id, { id, labels, properties: { ...properties, id } });
+  }
+
+  /** The birth stamp `readPublicationGuardBirth` reads back for a paired substrate id. */
+  seedPublicationGuard(substrateId: string, createdAt: string): void {
+    this.publicationGuards.set(substrateId, createdAt);
   }
 
   /** The structural edges a test needs to already exist, without replaying the write that made them. */
@@ -178,6 +191,9 @@ export class FakeGraph {
     }
     if (cypher.includes('MATCH (n:Substrate)')) {
       return toResult(this.#substrateId());
+    }
+    if (cypher.includes('MATCH (g:PublicationGuard')) {
+      return toResult(this.#publicationGuardCreatedAt(parameters));
     }
     if (cypher.includes('UNWIND $ids AS id') && cypher.includes('MATCH (n:AionNode { id: id })')) {
       return toResult(this.#presentNodeIds(parameters));
@@ -408,6 +424,13 @@ export class FakeGraph {
   #substrateId(): Row[] {
     const substrate = this.nodesWithLabel('Substrate')[0];
     return substrate === undefined ? [] : [{ id: substrate.id }];
+  }
+
+  /** The guard's birth stamp, empty when nothing has seeded one for this substrate id. */
+  #publicationGuardCreatedAt(parameters: Record<string, unknown>): Row[] {
+    const substrateId = parameters.substrateId as string;
+    const createdAt = this.publicationGuards.get(substrateId);
+    return createdAt === undefined ? [] : [{ createdAt }];
   }
 
   /** The chain's tail: the member's session that no other session FOLLOWS. */

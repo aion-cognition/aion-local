@@ -16,10 +16,13 @@ import { admittedAll } from '@aion/core/recall/domain/test-support/admission.fix
 import {
   MemoryPackSchema,
   RecallRefusalSchema,
+  ReflectionOutputSchema,
+  ReflectionRefusalSchema,
   type CoverageRefusal,
   type Cue,
   type MemoryPack,
   type RecallRefusal,
+  type ReflectionRefusal,
   type StageTimingsMs,
 } from '@aion/protocol';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
@@ -305,6 +308,78 @@ describe('reflection results', () => {
     expect(result.content).toEqual([
       { type: 'text', text: 'Stored episode episode-1; queued for reflection (interactive lane).' },
     ]);
+  });
+
+  it('names a birth-fence trim in the rendered text, beside the normal ack', async () => {
+    const backend: ToolBackend = {
+      recall: () => Promise.resolve(pack()),
+      reflection: () =>
+        Promise.resolve({
+          episode_id: 'episode-1',
+          queued: true,
+          lane: 'interactive',
+          pre_birth_trim: { turns: 1, tool_executions: 0 },
+        } as const),
+      ...refusingArchiveBackend(),
+    };
+
+    const result = await callTool(
+      backend,
+      logger,
+      'reflection',
+      { observations: ['x'] },
+      'session-a',
+    );
+
+    expect(result.content).toEqual([
+      {
+        type: 'text',
+        text:
+          'Stored episode episode-1; queued for reflection (interactive lane). ' +
+          '1 turn(s) and 0 tool execution(s) trimmed as pre-birth.',
+      },
+    ]);
+  });
+
+  function refusal(): ReflectionRefusal {
+    return {
+      status: 'pre_birth_refusal',
+      substrate_born_at: '2026-09-14T10:07:37.000Z',
+      pre_birth_refused: { turns: 2, tool_executions: 0 },
+    };
+  }
+
+  /**
+   * A refusal is its own branch, on both halves of the answer: the same shape recall's
+   * coverage refusal takes.
+   */
+  it('returns a pre-birth refusal as its own branch, in the text and in the structure', async () => {
+    const backend: ToolBackend = {
+      ...backendReturning(),
+      reflection: () => Promise.resolve(refusal()),
+    };
+
+    const result = await callTool(backend, logger, 'reflection', { turns: [] }, 'session-a');
+
+    expect(result.structuredContent).toEqual(refusal());
+    expect(ReflectionRefusalSchema.safeParse(result.structuredContent).success).toBe(true);
+    expect(ReflectionOutputSchema.safeParse(result.structuredContent).success).toBe(false);
+    const { text } = result.content[0] as { text: string };
+    expect(text).toContain("substrate's birth at 2026-09-14T10:07:37.000Z");
+    expect(text).toContain('2 turn(s)');
+    expect(result.isError).toBeUndefined();
+  });
+
+  it('publishes both branches, with the accepted one exactly as it was advertised before', () => {
+    const validator = new AjvJsonSchemaValidator();
+    const advertised = (TOOL_DEFINITIONS[1]?.outputSchema ?? {}) as Record<string, unknown>;
+    const compiled = validator.getValidator(advertised);
+
+    expect(compiled({ episode_id: 'episode-1', queued: true, lane: 'interactive' }).valid).toBe(
+      true,
+    );
+    expect(compiled(refusal()).valid).toBe(true);
+    expect(advertised.type).toBe('object');
   });
 });
 

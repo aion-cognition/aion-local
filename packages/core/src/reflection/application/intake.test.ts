@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ReflectionNotStoredError } from './errors.js';
+import { ReflectionNotStoredError, ReflectionPreBirthRefusedError } from './errors.js';
 import { handleReflection, INTEGRATE_JOB_TYPE, type ReflectionIntakeDeps } from './intake.js';
 import { LaneAssigner } from './lanes.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
@@ -17,6 +17,7 @@ import {
   getExperienceByEpisode,
   listExperiencesAfter,
 } from '../../infrastructure/sqlite/experience-archive.js';
+import { readSubstratePairing } from '../../infrastructure/sqlite/publication-control.js';
 import {
   enqueueReflectionJob,
   listReflectionJobs,
@@ -186,6 +187,111 @@ describe('reflection intake hook capture', () => {
 
       expect(graph.nodes.get(result.episode_id)?.properties.origin_channel).toBe(origin?.channel);
     }
+  });
+});
+
+describe('reflection intake birth fence', () => {
+  const BIRTH = new Date('2026-09-14T10:07:37.000Z');
+
+  /** Seeds the guard the fixture's `directIntakePublisher` already paired at `beforeEach`. */
+  function seedBirth(birth: Date): void {
+    const pairing = readSubstratePairing(db);
+    if (pairing === undefined) {
+      throw new Error('the fixture pairs a substrate at beforeEach; nothing to seed a birth for');
+    }
+    graph.seedPublicationGuard(pairing.substrateId, birth.toISOString());
+  }
+
+  it('accepts every turn stamped after birth, with no trim disclosed', async () => {
+    seedBirth(BIRTH);
+    const payload = {
+      turns: [{ role: 'user', text: 'right after init', occurred_at: '2026-09-14T10:09:12Z' }],
+    };
+
+    const result = await handleReflection(deps, payload, { identity: 'session-a' });
+
+    expect(result.pre_birth_trim).toBeUndefined();
+    expect(graph.nodesWithLabel('Turn')).toHaveLength(1);
+  });
+
+  it('accepts a turn stamped at exactly the instant of birth', async () => {
+    seedBirth(BIRTH);
+    const payload = {
+      turns: [{ role: 'user', text: 'the first thing said', occurred_at: BIRTH.toISOString() }],
+    };
+
+    const result = await handleReflection(deps, payload, { identity: 'session-a' });
+
+    expect(result.pre_birth_trim).toBeUndefined();
+    expect(graph.nodesWithLabel('Turn')).toHaveLength(1);
+  });
+
+  // The established-substrate recovery property: a session that lost its cursor mid-life may
+  // still recover recent turns through the client's own fallback, and those turns land here as
+  // an ordinary push with no cursor of their own. The ones genuinely older than birth never
+  // return; the ones newer do, in the order they were spoken.
+  it('trims only the pre-birth turns out of a mixed, cursor-loss-shaped push', async () => {
+    seedBirth(BIRTH);
+    const payload = {
+      turns: [
+        { role: 'user', text: 'before init', occurred_at: '2026-09-14T10:02:10Z' },
+        { role: 'assistant', text: 'after init', occurred_at: '2026-09-14T10:09:12Z' },
+      ],
+    };
+
+    const result = await handleReflection(deps, payload, { identity: 'session-a' });
+
+    expect(result.pre_birth_trim).toEqual({ turns: 1, tool_executions: 0 });
+    const turns = graph.nodesWithLabel('Turn');
+    expect(turns).toHaveLength(1);
+    expect(turns[0]?.properties.text).toBe('after init');
+  });
+
+  it('refuses a push where every turn predates birth, writing nothing to the graph or the queue', async () => {
+    seedBirth(BIRTH);
+    const payload = {
+      turns: [
+        {
+          role: 'assistant',
+          text: 'a build-guard reply from before init',
+          occurred_at: '2026-09-14T10:02:10Z',
+        },
+      ],
+    };
+
+    const failure = await handleReflection(deps, payload, { identity: 'session-a' }).catch(
+      (err: unknown) => err,
+    );
+
+    expect(failure).toBeInstanceOf(ReflectionPreBirthRefusedError);
+    const refusal = failure as ReflectionPreBirthRefusedError;
+    expect(refusal.substrateBornAt).toEqual(BIRTH);
+    expect(refusal.refusedTurns).toBe(1);
+    expect(refusal.refusedToolExecutions).toBe(0);
+
+    expect(graph.nodesWithLabel('Episode')).toHaveLength(0);
+    expect(graph.nodesWithLabel('Turn')).toHaveLength(0);
+    expect(listReflectionJobs(db)).toHaveLength(0);
+    expect(embed).not.toHaveBeenCalled();
+  });
+
+  it('leaves every push untouched on a substrate whose birth has not been read', async () => {
+    // No `seedBirth` call: the pairing exists (the fixture always pairs one) but the guard the
+    // birth read looks for was never seeded, so the read comes back empty and the fence no-ops.
+    const payload = {
+      turns: [
+        {
+          role: 'user',
+          text: 'long before any of this existed',
+          occurred_at: '2000-01-01T00:00:00Z',
+        },
+      ],
+    };
+
+    const result = await handleReflection(deps, payload, { identity: 'session-a' });
+
+    expect(result.pre_birth_trim).toBeUndefined();
+    expect(graph.nodesWithLabel('Turn')).toHaveLength(1);
   });
 });
 

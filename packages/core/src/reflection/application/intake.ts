@@ -1,6 +1,6 @@
 import { ReflectionInputSchema, type ReflectionOutput } from '@aion/protocol';
 
-import { ReflectionNotStoredError } from './errors.js';
+import { ReflectionNotStoredError, ReflectionPreBirthRefusedError } from './errors.js';
 import type { ExperienceStoreDeps } from './experience-store.js';
 import {
   intakeOperationId,
@@ -12,12 +12,14 @@ import type { LaneAssigner, LaneDecision } from './lanes.js';
 import { recordRecallFeedback, redactFeedback } from './recall-feedback.js';
 import { redactProvenance } from './stated-references.js';
 import { isGraphUnavailable } from '../../infrastructure/graph/errors.js';
+import { readPublicationGuardBirth } from '../../infrastructure/graph/publication-guard.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   ARCHIVE_SCHEMA_VERSION,
   experienceArchiveKey,
 } from '../../infrastructure/sqlite/experience-archive.js';
+import { readSubstratePairing } from '../../infrastructure/sqlite/publication-control.js';
 import { readCurrentReadinessPolicy } from '../../infrastructure/sqlite/readiness-policies.js';
 import { countQueueJobs } from '../../infrastructure/sqlite/reflection-queue-admin.js';
 import {
@@ -27,6 +29,7 @@ import {
 } from '../../infrastructure/sqlite/reflection-queue.js';
 import { resolveSourceOccurrence } from '../../infrastructure/sqlite/source-occurrence.js';
 import { redactPayload } from '../../redaction/deep-walk.js';
+import { applyBirthFence, type BirthFenceOutcome } from '../domain/birth-fence.js';
 import { prepareEpisode } from '../domain/content.js';
 
 /** The one job intake enqueues. The reflection pipeline's stages fan out from it; intake never runs them. */
@@ -148,6 +151,43 @@ function queuedJob(
 }
 
 /**
+ * The substrate's own birth: the instant its `PublicationGuard` node was minted. Undefined on
+ * a substrate with no recorded pairing yet, and on one whose guard read comes back empty for
+ * the same reason; the birth fence reads either as "nothing to judge against" rather than
+ * "born now".
+ *
+ * Translates a graph outage the same way `resolveSession` does: this read reaches the graph
+ * before that one does, so an unavailable graph has to fail the same way here as it always
+ * has, rather than surfacing as a driver error nothing downstream recognises.
+ */
+async function substrateBirth(deps: ReflectionIntakeDeps): Promise<Date | undefined> {
+  const pairing = readSubstratePairing(deps.db);
+  if (pairing === undefined) {
+    return undefined;
+  }
+  try {
+    return await readPublicationGuardBirth(deps.driver, pairing.substrateId);
+  } catch (err) {
+    if (isGraphUnavailable(err)) {
+      throw new ReflectionNotStoredError('graph', err);
+    }
+    throw err;
+  }
+}
+
+/** Present only once a push actually loses turns or tool executions to the birth fence. */
+function preBirthTrimDisclosure(
+  fenced: BirthFenceOutcome,
+): Pick<ReflectionOutput, 'pre_birth_trim'> {
+  if (fenced.trimmedTurns === 0 && fenced.trimmedToolExecutions === 0) {
+    return {};
+  }
+  return {
+    pre_birth_trim: { turns: fenced.trimmedTurns, tool_executions: fenced.trimmedToolExecutions },
+  };
+}
+
+/**
  * The write path. Validate, redact, resolve the session, and publish the acceptance.
  *
  * Everything durable an acceptance makes happens inside that publication: which source this
@@ -202,9 +242,41 @@ export async function handleReflection(
     );
   }
 
+  const birth = await substrateBirth(deps);
+  const fenced = applyBirthFence(redacted.value, birth);
+  if (fenced.emptied) {
+    // `emptied` only turns true inside the branch of `applyBirthFence` that already received a
+    // defined `birth`, so this is redundant in fact and here only to narrow the type below.
+    if (birth !== undefined) {
+      deps.logger.info(
+        {
+          turns: fenced.trimmedTurns,
+          toolExecutions: fenced.trimmedToolExecutions,
+          substrateBornAt: birth.toISOString(),
+        },
+        'reflection payload predates the substrate entirely; refused',
+      );
+      throw new ReflectionPreBirthRefusedError({
+        substrateBornAt: birth,
+        refusedTurns: fenced.trimmedTurns,
+        refusedToolExecutions: fenced.trimmedToolExecutions,
+      });
+    }
+  }
+  if (fenced.trimmedTurns > 0 || fenced.trimmedToolExecutions > 0) {
+    deps.logger.warn(
+      {
+        turns: fenced.trimmedTurns,
+        toolExecutions: fenced.trimmedToolExecutions,
+        substrateBornAt: birth?.toISOString(),
+      },
+      "reflection payload trimmed to the substrate's birth",
+    );
+  }
+
   const statedReferences = redactProvenance(deps, provenance, deps.entropyThreshold);
   const identity = suppliedIdentity ?? options.identity;
-  const prepared = prepareEpisode(redacted.value, now);
+  const prepared = prepareEpisode(fenced.content, now);
   const sessionId = await resolveSession(deps, identity, prepared.occurredAt, now);
   // The arrival backstop is the caller's own reading and cannot be taken inside the operation,
   // which is serialized: by the time the guard is held the rate this measures has moved on. A
@@ -230,11 +302,13 @@ export async function handleReflection(
       identity,
       sessionId,
       prepared,
-      // The content alone. What the caller stated about other memories travels beside it as its
-      // own accepted batch, and folding it in here would put it in the identity hash the
-      // acceptance recomputes: the same experience pushed with and without its references would
-      // then be two occurrences.
-      payload: redacted.value,
+      // The content alone, after the birth fence: the acceptance re-derives its own `prepared`
+      // from this same value (see `intake-publication.ts`), so a pre-birth turn trimmed here
+      // and not from this field would still reach the graph through that path. What the
+      // caller stated about other memories travels beside it as its own accepted batch, and
+      // folding it in here would put it in the identity hash the acceptance recomputes: the
+      // same experience pushed with and without its references would then be two occurrences.
+      payload: fenced.content,
       references: statedReferences,
       origin,
       lane: decision.lane,
@@ -284,7 +358,13 @@ export async function handleReflection(
       { episodeId: accepted.sourceId, sessionId, lane: job.lane },
       'reflection payload already stored',
     );
-    return { episode_id: accepted.sourceId, queued: true, lane: job.lane, pending_ahead: ahead };
+    return {
+      episode_id: accepted.sourceId,
+      queued: true,
+      lane: job.lane,
+      pending_ahead: ahead,
+      ...preBirthTrimDisclosure(fenced),
+    };
   }
 
   deps.logger.info(
@@ -300,7 +380,13 @@ export async function handleReflection(
     'reflection stored',
   );
 
-  return { episode_id: accepted.sourceId, queued: true, lane: job.lane, pending_ahead: ahead };
+  return {
+    episode_id: accepted.sourceId,
+    queued: true,
+    lane: job.lane,
+    pending_ahead: ahead,
+    ...preBirthTrimDisclosure(fenced),
+  };
 }
 
 /**

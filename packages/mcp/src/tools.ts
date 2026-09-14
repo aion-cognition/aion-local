@@ -5,17 +5,21 @@ import {
   type Logger,
 } from '@aion/core';
 import {
+  isReflectionRefusal,
   MemoryPackSchema,
   RecallInputSchema,
   RecallRefusalSchema,
   ReflectionInputSchema,
   ReflectionOutputSchema,
+  ReflectionRefusalSchema,
   SourceInputSchema,
   SourceOutputSchema,
   SourceSearchInputSchema,
   SourceSearchOutputSchema,
   type RecallResult,
   type ReflectionOutput,
+  type ReflectionRefusal,
+  type ReflectionResult,
   type SourceOutput,
   type SourceSearchOutput,
 } from '@aion/protocol';
@@ -103,7 +107,7 @@ export const TOOL_DEFINITIONS: readonly Tool[] = [
     title: REFLECTION_TITLE,
     description: REFLECTION_DESCRIPTION,
     inputSchema: jsonSchemaFor(ReflectionInputSchema, 'input'),
-    outputSchema: jsonSchemaFor(ReflectionOutputSchema, 'output'),
+    outputSchema: jsonSchemaForEither([ReflectionOutputSchema, ReflectionRefusalSchema]),
     annotations: {
       title: REFLECTION_TITLE,
       readOnlyHint: false,
@@ -155,7 +159,7 @@ export const TOOL_DEFINITIONS: readonly Tool[] = [
  */
 export type ToolBackend = {
   readonly recall: (args: unknown, identity: string) => Promise<RecallResult>;
-  readonly reflection: (args: unknown, identity: string) => Promise<ReflectionOutput>;
+  readonly reflection: (args: unknown, identity: string) => Promise<ReflectionResult>;
   readonly sourceSearch: (args: unknown) => Promise<{ output: SourceSearchOutput; text: string }>;
   readonly source: (args: unknown) => Promise<{ output: SourceOutput; text: string }>;
 };
@@ -165,15 +169,42 @@ export type ToolBackend = {
  * rendered block alone would otherwise never learn that its episode was demoted behind a
  * bulk load, which is the one thing the ack exists to tell it. `pending_ahead` follows the
  * same reasoning: a text-only client is exactly the one with no other way to see how
- * far behind live traffic its own memory queued.
+ * far behind live traffic its own memory queued. A birth-fence trim is named the same way,
+ * beside whichever of those two already applies.
  */
 function ackText(output: ReflectionOutput): string {
   const base = `Stored episode ${output.episode_id}; queued for reflection (${output.lane} lane).`;
-  if (output.pending_ahead === undefined || output.pending_ahead === 0) {
-    return base;
+  const clauses: string[] = [];
+  if (output.pending_ahead !== undefined && output.pending_ahead > 0) {
+    const jobs = output.pending_ahead === 1 ? 'job' : 'jobs';
+    clauses.push(`${String(output.pending_ahead)} interactive ${jobs} ahead of it.`);
   }
-  const jobs = output.pending_ahead === 1 ? 'job' : 'jobs';
-  return `${base} ${String(output.pending_ahead)} interactive ${jobs} ahead of it.`;
+  if (output.pre_birth_trim !== undefined) {
+    const { turns, tool_executions: toolExecutions } = output.pre_birth_trim;
+    clauses.push(
+      `${String(turns)} turn(s) and ${String(toolExecutions)} tool execution(s) trimmed as ` +
+        'pre-birth.',
+    );
+  }
+  return clauses.length === 0 ? base : `${base} ${clauses.join(' ')}`;
+}
+
+/**
+ * A refusal reads as a refusal in text too: a client that renders only the block would
+ * otherwise be told nothing about the push it just made.
+ */
+function refusalText(result: ReflectionRefusal): string {
+  const { turns, tool_executions: toolExecutions } = result.pre_birth_refused;
+  return (
+    `Refused: every turn and tool execution in this push reads, by its own timestamp, before ` +
+    `the substrate's birth at ${result.substrate_born_at} (${String(turns)} turn(s), ` +
+    `${String(toolExecutions)} tool execution(s)); nothing was stored.`
+  );
+}
+
+/** The rendered block beside `structuredContent`. A refusal is its own branch, same as recall's. */
+function reflectionText(result: ReflectionResult): string {
+  return isReflectionRefusal(result) ? refusalText(result) : ackText(result);
 }
 
 /** The tools this service answers for, read off the definitions so the two cannot drift. */
@@ -280,7 +311,7 @@ export async function callTool(
 
     const stored = await backend.reflection(args, identity);
     return {
-      content: [{ type: 'text', text: ackText(stored) }],
+      content: [{ type: 'text', text: reflectionText(stored) }],
       structuredContent: stored,
     };
   } catch (err) {

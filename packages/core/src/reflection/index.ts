@@ -9,6 +9,14 @@ export { handleReflection, INTEGRATE_JOB_TYPE } from './application/intake.js';
 export type { ReflectionIntakeDeps } from './application/intake.js';
 
 /**
+ * The tool-facing wrapper over `handleReflection`, exported because the MCP service binds the
+ * `reflection` tool to it rather than to the plain handler: it is the one seam that also
+ * answers for a push the birth fence refused outright. See its own doc comment for how that
+ * compares to `recallResultFor` on the recall side.
+ */
+export { handleReflectionResult } from './application/reflection-result.js';
+
+/**
  * The other row an acceptance writes. Exported because `aion queue` is the surface that has to
  * tell the reflection backlog apart from the index obligations a different handler owns.
  */

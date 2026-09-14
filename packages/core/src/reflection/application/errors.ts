@@ -33,3 +33,33 @@ export class ReflectionNotStoredError extends Error {
     this.stage = stage;
   }
 }
+
+/**
+ * Every turn and tool execution a push carried read, by its own timestamp, before the
+ * substrate's own birth. Unlike `ReflectionNotStoredError` this is not a transient failure: a
+ * retry of the identical push earns the identical refusal, because the substrate has no
+ * business remembering content from before it existed. The birth fence throws this from
+ * `handleReflection` itself, which keeps that function's ordinary return shape for every other
+ * caller; `handleReflectionResult` is what turns it into the disclosed refusal a client sees.
+ */
+export class ReflectionPreBirthRefusedError extends Error {
+  readonly substrateBornAt: Date;
+  readonly refusedTurns: number;
+  readonly refusedToolExecutions: number;
+
+  constructor(input: {
+    readonly substrateBornAt: Date;
+    readonly refusedTurns: number;
+    readonly refusedToolExecutions: number;
+  }) {
+    super(
+      `reflection refused: every turn and tool execution in this push reads, by its own ` +
+        `timestamp, before the substrate's birth at ${input.substrateBornAt.toISOString()}; ` +
+        'nothing was stored.',
+    );
+    this.name = 'ReflectionPreBirthRefusedError';
+    this.substrateBornAt = input.substrateBornAt;
+    this.refusedTurns = input.refusedTurns;
+    this.refusedToolExecutions = input.refusedToolExecutions;
+  }
+}
