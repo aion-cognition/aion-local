@@ -72,11 +72,27 @@ export type RedactionRewriter = {
   readonly entropyThreshold: number;
 };
 
-function markedUnder(db: SqliteHandle, nodeId: string, rewriter: RedactionRewriter): boolean {
+/**
+ * Every rewriter a node's mark was made under. A mark from before the history was kept carries at
+ * most one, at its top level, so two processes stamped differently (the service and a CLI run)
+ * do not re-examine the node each time they take turns.
+ */
+function examinedUnder(db: SqliteHandle, nodeId: string): readonly RedactionRewriter[] {
   const summary = getLedgerEntry(db, redactionUnresolvedKey(nodeId))?.summary as
-    Partial<RedactionRewriter> | undefined;
-  return (
-    summary?.build === rewriter.build && summary.entropyThreshold === rewriter.entropyThreshold
+    (Partial<RedactionRewriter> & { examined?: unknown }) | undefined;
+  const listed = Array.isArray(summary?.examined)
+    ? (summary.examined as Partial<RedactionRewriter>[])
+    : [summary ?? {}];
+  return listed.filter(
+    (entry): entry is RedactionRewriter =>
+      typeof entry.build === 'string' && typeof entry.entropyThreshold === 'number',
+  );
+}
+
+function markedUnder(db: SqliteHandle, nodeId: string, rewriter: RedactionRewriter): boolean {
+  return examinedUnder(db, nodeId).some(
+    (entry) =>
+      entry.build === rewriter.build && entry.entropyThreshold === rewriter.entropyThreshold,
   );
 }
 
@@ -176,6 +192,7 @@ export function redactionResiduePurgeOperation(): IntrospectionOperation {
         markLedgerApplied(ctx.db, redactionUnresolvedKey(node.id), {
           reason: 'flagged by the node scan, with no single property this rewriter can redact',
           ...rewriter,
+          examined: [...examinedUnder(ctx.db, node.id), rewriter],
         });
         unresolved += 1;
         ctx.logger.warn(

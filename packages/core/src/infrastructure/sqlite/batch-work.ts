@@ -316,7 +316,8 @@ export function returnBatchWork(
  * caller has just read it. Only a discarded row reopens, and only for the substrate that owns it.
  * An applied one is answered, and a failed one names a reason that reading the graph again does
  * not change. The reason it was discarded stays on the row: it is the history of the question,
- * not a verdict on it.
+ * not a verdict on it. Its attempts start again, since the ones it had were asked of a premise
+ * that has since moved and come back.
  */
 export function reopenDiscardedBatchWork(
   db: SqliteHandle,
@@ -328,11 +329,37 @@ export function reopenDiscardedBatchWork(
     .prepare(
       `UPDATE batch_work
        SET state = 'pending', batch_id = NULL, reservation_id = NULL, submitted_at = NULL,
-           enqueued_at = ?, settled_at = NULL
+           enqueued_at = ?, settled_at = NULL, attempts = 0
        WHERE work_key = ? AND substrate_id = ? AND state = 'discarded'`,
     )
     .run(now.toISOString(), workKey, substrateId);
   return result.changes > 0;
+}
+
+/**
+ * Discards the owed work encoded for a provider the installation no longer selects, and says how
+ * many rows that was.
+ *
+ * Nothing will send such a row: submission takes only the selected provider's rows. Left pending,
+ * it would wait on a producer to nominate the same question again, and a question whose inputs
+ * moved in the meantime is never nominated under that key again. Discarded, it is settled as the
+ * stale question it is, and a producer that does ask it again reopens it and re-encodes it for
+ * the provider selected then. Submitted rows are not touched: the other provider holds them.
+ */
+export function discardPendingBatchWorkOf(
+  db: SqliteHandle,
+  substrateId: string,
+  provider: GenerationProvider,
+  reason: string,
+  now: Date,
+): number {
+  const result = db
+    .prepare(
+      `UPDATE batch_work SET state = 'discarded', last_error = ?, settled_at = ?
+       WHERE substrate_id = ? AND state = 'pending' AND provider = ?`,
+    )
+    .run(reason, now.toISOString(), substrateId, provider);
+  return result.changes;
 }
 
 /** A terminal outcome: applied, discarded as stale, or failed for good. */

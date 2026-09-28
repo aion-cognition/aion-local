@@ -3,13 +3,14 @@ import { z } from 'zod';
 import { AnthropicRequestError } from './anthropic-errors.js';
 import { parseJsonPayload } from './anthropic-json.js';
 import { readUsage, type UsageCounters } from './anthropic-usage.js';
-import type {
-  BatchClientOptions,
-  BatchPoll,
-  BatchRequest,
-  BatchRequestBound,
-  BatchResult,
-  BatchTransport,
+import {
+  BatchNotCreatedError,
+  type BatchClientOptions,
+  type BatchPoll,
+  type BatchRequest,
+  type BatchRequestBound,
+  type BatchResult,
+  type BatchTransport,
 } from './batch-transport.js';
 import { cacheWriteClassOf } from './request-blocks.js';
 import type { GenerationProvider } from './types.js';
@@ -223,8 +224,16 @@ export class AnthropicBatchTransport implements BatchTransport {
     };
   }
 
+  /** An error response is a refusal: the API answered and created nothing. */
   async create(requests: readonly BatchRequest[]): Promise<string> {
-    return (await createMessageBatch(this.#options, requests)).id;
+    try {
+      return (await createMessageBatch(this.#options, requests)).id;
+    } catch (err) {
+      if (err instanceof AnthropicRequestError) {
+        throw new BatchNotCreatedError('the batch API refused to create the job', { cause: err });
+      }
+      throw err;
+    }
   }
 
   async poll(batchId: string): Promise<BatchPoll> {

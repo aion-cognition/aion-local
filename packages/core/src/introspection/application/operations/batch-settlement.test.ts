@@ -211,16 +211,20 @@ describe('an installation that switched to OpenAI with an Anthropic job still ou
     expect(outcome.status).toBe('applied');
   });
 
-  it('names work still encoded for Anthropic that nothing has re-encoded, and sends it nowhere', async () => {
+  it('discards never-sent work still encoded for Anthropic, and sends it nowhere', async () => {
     owe('pair-stranded', 'anthropic');
 
     const outcome = await run('openai', { anthropic: ANTHROPIC_KEY, openai: OPENAI_KEY });
 
     expect(calls).toEqual([]);
-    expect(readBatchWork(db, 'pair-stranded')?.state).toBe('pending');
+    expect(readBatchWork(db, 'pair-stranded')).toMatchObject({
+      state: 'discarded',
+      provider: 'anthropic',
+    });
     expect(outcome.status).toBe('noop');
     expect(outcome.detail).toContain(
-      '1 pending encoded for anthropic wait for their producer to re-encode them for openai',
+      '1 never-sent rows encoded for anthropic discarded; a producer that asks again ' +
+        're-encodes them for openai',
     );
   });
 });

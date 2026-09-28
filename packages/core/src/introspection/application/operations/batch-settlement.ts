@@ -15,7 +15,11 @@ import {
   GENERATION_PROVIDERS,
   type GenerationProvider,
 } from '../../../infrastructure/providers/types.js';
-import { batchWorkCounts, outstandingBatchIds } from '../../../infrastructure/sqlite/batch-work.js';
+import {
+  batchWorkCounts,
+  discardPendingBatchWorkOf,
+  outstandingBatchIds,
+} from '../../../infrastructure/sqlite/batch-work.js';
 import { readSubstratePairing } from '../../../infrastructure/sqlite/publication-control.js';
 import type {
   IntrospectionOperation,
@@ -43,7 +47,8 @@ import type {
  * through the provider that took it, with that provider's key, whatever is selected now: the
  * charge is committed and the answer is still owed. A job whose provider has no key left is not
  * read, not called complete, and not sent again as new work. The detail names it, and it settles
- * once that key is back.
+ * once that key is back. Owed work the other provider never received is discarded as the stale
+ * question it is; a producer that asks it again reopens it for the selected provider.
  */
 
 /**
@@ -141,11 +146,17 @@ export function batchSettlementOperation(
         notes.push(`nothing submitted: ${unavailableReason({ provider: selected })}`);
       }
       for (const other of GENERATION_PROVIDERS.filter((provider) => provider !== selected)) {
-        const { pending } = batchWorkCounts(ctx.db, substrateId, other);
-        if (pending > 0) {
+        const dropped = discardPendingBatchWorkOf(
+          ctx.db,
+          substrateId,
+          other,
+          `encoded for ${other}, which the installation no longer selects`,
+          ctx.now,
+        );
+        if (dropped > 0) {
           notes.push(
-            `${String(pending)} pending encoded for ${other} wait for their producer to ` +
-              `re-encode them for ${selected}`,
+            `${String(dropped)} never-sent rows encoded for ${other} discarded; a producer that ` +
+              `asks again re-encodes them for ${selected}`,
           );
         }
       }

@@ -22,6 +22,8 @@ export type OpenAiBatchScript = {
   readonly errors?: readonly Record<string, unknown>[];
   /** The batch object's own `errors`, which a failed validation carries. */
   readonly batchErrors?: unknown;
+  /** How many file deletions fail with a 500 before they start succeeding. */
+  readonly deleteFailures?: number;
 };
 
 export type RecordedCall = {
@@ -73,6 +75,7 @@ export function openAiBatchApi(script: OpenAiBatchScript = {}): {
 } {
   const calls: RecordedCall[] = [];
   let polls = 0;
+  let deletions = 0;
   const impl = vi.fn(async (input: string | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
     const call = await record(url, init);
@@ -110,6 +113,10 @@ export function openAiBatchApi(script: OpenAiBatchScript = {}): {
     }
     const deleted = /^https:\/\/api\.openai\.com\/v1\/files\/([^/]+)$/.exec(url);
     if (deleted !== null && call.method === 'DELETE') {
+      deletions += 1;
+      if (deletions <= (script.deleteFailures ?? 0)) {
+        return new Response('storage unavailable', { status: 500 });
+      }
       return Response.json({ id: deleted[1], object: 'file', deleted: true });
     }
     return new Response(`no scripted answer for ${call.method} ${url}`, { status: 404 });

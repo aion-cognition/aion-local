@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { BatchNotCreatedError } from './batch-transport.js';
 import { OpenAiBatchTransport } from './openai-batches.js';
 import { OpenAiRequestError, responsesRequestBody } from './openai-provider.js';
 import {
@@ -77,9 +78,12 @@ describe('sending a job', () => {
     const { calls, impl } = openAiBatchApi({ createStatus: 429 });
     const transport = new OpenAiBatchTransport({ apiKey: KEY, fetchImpl: impl });
 
-    await expect(transport.create([{ customId: 'df-a', params: BODY }])).rejects.toBeInstanceOf(
-      OpenAiRequestError,
+    const refused = await transport.create([{ customId: 'df-a', params: BODY }]).then(
+      () => undefined,
+      (err: unknown) => err,
     );
+    expect(refused).toBeInstanceOf(BatchNotCreatedError);
+    expect((refused as Error).cause).toBeInstanceOf(OpenAiRequestError);
     expect(calls.map((call) => [call.method, call.url])).toEqual([
       ['POST', 'https://api.openai.com/v1/files'],
       ['POST', 'https://api.openai.com/v1/batches'],
@@ -92,7 +96,7 @@ describe('sending a job', () => {
     const transport = new OpenAiBatchTransport({ apiKey: KEY, fetchImpl: impl });
 
     await expect(transport.create([{ customId: 'df-a', params: BODY }])).rejects.toBeInstanceOf(
-      OpenAiRequestError,
+      BatchNotCreatedError,
     );
     expect(calls).toHaveLength(1);
   });
@@ -127,6 +131,7 @@ describe('reading where a job stands', () => {
       expect(await transport.poll(OPENAI_BATCH_ID)).toEqual({
         state: 'ended',
         sources: [OPENAI_OUTPUT_FILE, OPENAI_ERROR_FILE],
+        final: true,
       });
     }
   });
@@ -138,6 +143,7 @@ describe('reading where a job stands', () => {
     expect(await transport.poll(OPENAI_BATCH_ID)).toEqual({
       state: 'ended',
       sources: [OPENAI_OUTPUT_FILE],
+      final: true,
     });
   });
 

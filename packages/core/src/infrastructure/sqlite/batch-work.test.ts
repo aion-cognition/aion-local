@@ -5,11 +5,13 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  discardPendingBatchWorkOf,
   enqueueBatchWork,
   outstandingBatchIds,
   pendingBatchWork,
   readBatchWork,
   reencodePendingBatchWork,
+  reopenDiscardedBatchWork,
 } from './batch-work.js';
 import { SqliteStore } from './database.js';
 import type { GenerationProvider } from '../providers/types.js';
@@ -152,6 +154,33 @@ describe('re-encoding owed work for the provider selected now', () => {
     expect(reencode('pair-elsewhere')).toBe(false);
     expect(readBatchWork(store.db, 'pair-held')?.request).toEqual({ encodedFor: 'anthropic' });
     expect(readBatchWork(store.db, 'pair-elsewhere')?.provider).toBe('anthropic');
+  });
+
+  it('discards never-sent rows of the other provider, and a producer asking again brings one back for this one', () => {
+    owe('pair-stale', 'anthropic');
+    owe('pair-held', 'anthropic');
+    store.db
+      .prepare(
+        `UPDATE batch_work SET state = 'submitted', batch_id = 'msgbatch_1', attempts = 2
+         WHERE work_key = ?`,
+      )
+      .run('pair-held');
+    store.db.prepare(`UPDATE batch_work SET attempts = 2 WHERE work_key = 'pair-stale'`).run();
+    owe('pair-openai', 'openai');
+
+    expect(discardPendingBatchWorkOf(store.db, SUBSTRATE, 'anthropic', 'switched', NOW)).toBe(1);
+    expect(readBatchWork(store.db, 'pair-stale')?.state).toBe('discarded');
+    expect(readBatchWork(store.db, 'pair-held')?.state).toBe('submitted');
+    expect(readBatchWork(store.db, 'pair-openai')?.state).toBe('pending');
+
+    // The producer's own path when it nominates the same question: reopen, then re-encode.
+    expect(reopenDiscardedBatchWork(store.db, 'pair-stale', SUBSTRATE, NOW)).toBe(true);
+    expect(reencode('pair-stale')).toBe(true);
+    expect(readBatchWork(store.db, 'pair-stale')).toMatchObject({
+      state: 'pending',
+      provider: 'openai',
+      attempts: 0,
+    });
   });
 
   it("hands each provider's pass only the rows encoded for it", () => {

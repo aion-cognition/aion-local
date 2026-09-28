@@ -42,8 +42,39 @@ export type BatchResult =
  */
 export type BatchPoll =
   | { readonly state: 'working' }
-  | { readonly state: 'ended'; readonly sources: readonly string[] }
+  | {
+      readonly state: 'ended';
+      readonly sources: readonly string[];
+      /**
+       * Every request the job carried is accounted for in `sources`, so a row they never name got
+       * no answer and never will. Absent where a read can be partial and a later one completes it.
+       */
+      readonly final?: boolean;
+    }
   | { readonly state: 'refused'; readonly detail: string };
+
+/**
+ * The vendor answered a submission without creating a job. Nothing is running and nothing will
+ * bill, so the adapter releases the submission's hold rather than keeping it against a job that
+ * might exist, which is what a submission whose answer was lost has to do.
+ */
+export class BatchNotCreatedError extends Error {
+  constructor(message: string, options?: { readonly cause?: unknown }) {
+    super(message, options);
+    this.name = 'BatchNotCreatedError';
+  }
+}
+
+/**
+ * An answer the vendor would give again to the same request, such as a refusal. The row fails
+ * rather than being sent again, the way the synchronous route does not retry one.
+ */
+export class BatchAnswerRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BatchAnswerRefusedError';
+  }
+}
 
 /** What one stored request can be billed at, read off its own body. */
 export type BatchRequestBound = CacheWriteClass & {

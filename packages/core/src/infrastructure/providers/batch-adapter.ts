@@ -1,28 +1,30 @@
 import { AnthropicBatchTransport, legalCustomId } from './anthropic-batches.js';
-import { batchBoundUsd, batchHoldBound } from './batch-bounds.js';
-import type {
-  BatchClientOptions,
-  BatchPoll,
-  BatchResult,
-  BatchTransport,
+import { batchHoldBound } from './batch-bounds.js';
+import { reconcileSubmission } from './batch-reconcile.js';
+import { releaseBatch, retryReleases } from './batch-release.js';
+import {
+  BatchAnswerRefusedError,
+  BatchNotCreatedError,
+  type BatchClientOptions,
+  type BatchPoll,
+  type BatchResult,
+  type BatchTransport,
 } from './batch-transport.js';
 import { OpenAiBatchTransport } from './openai-batches.js';
 import type { SpendingGuard } from './spending.js';
 import type { GenerationProvider } from './types.js';
 import type { Logger } from '../logging/logger.js';
-import { appendApiCall, chargedApiUsd, unaccountedApiRequests } from '../sqlite/api-usage.js';
+import { appendApiCall } from '../sqlite/api-usage.js';
 import {
   markBatchSubmitted,
   pendingBatchWork,
   outstandingBatchIds,
   returnBatchWork,
   settleBatchWork,
-  settledBatchWorkKeys,
   submittedBatchWork,
   type BatchWorkItem,
 } from '../sqlite/batch-work.js';
 import type { SqliteHandle } from '../sqlite/database.js';
-import { settleGenerationSpend } from '../sqlite/spend-ledger.js';
 
 /**
  * Batched generation, from the substrate's side.
@@ -202,6 +204,15 @@ export async function submitBatchWork(
       })),
     );
   } catch (err) {
+    if (err instanceof BatchNotCreatedError) {
+      // The vendor answered and created nothing, so nothing runs and nothing bills.
+      hold?.release(clock(deps));
+      deps.logger.warn(
+        { err, owed: owed.length },
+        'batch submission refused; work stays queued and its hold is released',
+      );
+      return { submitted: 0, batchId: undefined };
+    }
     // Nothing is marked: the work is still owed, and the next pass re-sends it. The hold stays,
     // because a submission whose answer was lost may be one the remote accepted, and a released
     // hold would hand the same headroom to the re-send while the first batch runs.
@@ -322,13 +333,12 @@ async function consumeResult(
 
   if (result.type !== 'succeeded') {
     // Cancelled and expired work is still owed: the question was never answered. An error is
-    // owed too, up to the handler's own limits, because a 429 inside a batch is not a verdict.
-    returnBatchWork(deps.db, item.workKey, `${result.type}: ${result.detail}`, now);
+    // owed too, up to the attempt limit, because a 429 inside a batch is not a verdict.
     deps.logger.warn(
       { workKey: item.workKey, outcome: result.type },
       'batch result unusable; the work is owed again',
     );
-    return { returned: 1 };
+    return oweAgain(deps, item, `${result.type}: ${result.detail}`, now);
   }
 
   const handler = handlerFor(deps, item.surface);
@@ -347,10 +357,43 @@ async function consumeResult(
     return { applied: 1 };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    returnBatchWork(deps.db, item.workKey, reason, now);
+    if (err instanceof BatchAnswerRefusedError) {
+      settleBatchWork(deps.db, item.workKey, 'failed', reason, now);
+      deps.logger.warn({ workKey: item.workKey }, 'batch answer refused; not asked again');
+      return { failed: 1 };
+    }
     deps.logger.warn({ err, workKey: item.workKey }, 'batch result not applied; work owed again');
-    return { returned: 1 };
+    return oweAgain(deps, item, reason, now);
   }
+}
+
+/**
+ * How many times one question is sent before a failure to answer it is taken as its outcome. Each
+ * resend is paid for when an answer came back, and a request that fails the same way three times
+ * is failing on its content rather than on a passing condition. A producer that asks a changed
+ * question writes a new row, so a failed one does not stop the substrate asking again.
+ */
+export const MAX_BATCH_ATTEMPTS = 3;
+
+/** Returns the row to the queue, or fails it once it has used its attempts. */
+function oweAgain(
+  deps: BatchAdapterDeps,
+  item: BatchWorkItem,
+  reason: string,
+  now: Date,
+): Partial<ConsumeReport> {
+  if (item.attempts >= MAX_BATCH_ATTEMPTS) {
+    settleBatchWork(
+      deps.db,
+      item.workKey,
+      'failed',
+      `no usable answer after ${String(item.attempts)} attempts: ${reason}`,
+      now,
+    );
+    return { failed: 1 };
+  }
+  returnBatchWork(deps.db, item.workKey, reason, now);
+  return { returned: 1 };
 }
 
 /**
@@ -361,6 +404,7 @@ async function consumeResult(
  */
 export async function consumeBatchWork(deps: BatchAdapterDeps): Promise<ConsumeReport> {
   const transport = transportFor(deps);
+  await retryReleases(deps, transport);
   let report = EMPTY_CONSUME;
   for (const batchId of outstandingBatchIds(deps.db, deps.substrateId, transport.provider)) {
     let poll: BatchPoll;
@@ -396,33 +440,22 @@ export async function consumeBatchWork(deps: BatchAdapterDeps): Promise<ConsumeR
       );
     }
     // A row the batch never answered for stays submitted and is picked up the next time this
-    // batch is read, so a partial results file loses nothing.
-    reconcileSubmission(deps, transport, batchId, owed);
+    // batch is read, so a partial results file loses nothing. Where the vendor's read is final,
+    // no later read will answer it, and it is owed again now.
+    if (poll.state === 'ended' && poll.final === true) {
+      for (const item of submittedBatchWork(deps.db, batchId)) {
+        report = addConsumeReports(
+          report,
+          oweAgain(deps, item, 'the ended job returned no answer for it', clock(deps)),
+        );
+      }
+    }
+    reconcileSubmission({ ...deps, now: clock(deps) }, transport, batchId, owed);
     if (submittedBatchWork(deps.db, batchId).length === 0) {
       await releaseBatch(deps, transport, batchId);
     }
   }
   return report;
-}
-
-/**
- * Deletes what the vendor still stores for a job no row is waiting on. The job leaves the
- * outstanding list once its last row settles, so this runs once; a failure is logged and the
- * files stay behind rather than holding up the settlement already written.
- */
-async function releaseBatch(
-  deps: BatchAdapterDeps,
-  transport: BatchTransport,
-  batchId: string,
-): Promise<void> {
-  if (transport.release === undefined) {
-    return;
-  }
-  try {
-    await transport.release(batchId);
-  } catch (err) {
-    deps.logger.warn({ err, batchId }, 'settled batch files could not be deleted at the vendor');
-  }
 }
 
 /**
@@ -439,60 +472,4 @@ function refusedResults(
     type: 'errored',
     detail,
   }));
-}
-
-/**
- * Settles this batch's hold at what its answers were charged, plus a bound on the requests it has
- * not accounted for yet.
- *
- * A results file can be partial, and a row it never mentioned is still at the remote with work to
- * do. Settling the whole hold to the charges on the books would read those requests as free and
- * hand their headroom to the next submission, so the unresolved rows keep a reservation of their
- * own until an answer prices them.
- *
- * Both halves are recomputed rather than accumulated: the charges come from the books by request
- * identity, and the retained part is re-derived from the rows still outstanding. A batch read
- * again, in this process or a later one, settles to the same number instead of a growing one.
- *
- * A charge that cannot be priced leaves the hold untouched at its bound, which is the only honest
- * reading of money nobody can size. A charge with no usage row at all is the same money: the hold
- * settles at its bound as an unresolved obligation rather than at the total of whatever rows did
- * land.
- */
-function reconcileSubmission(
-  deps: BatchAdapterDeps,
-  transport: BatchTransport,
-  batchId: string,
-  owed: ReadonlyMap<string, BatchWorkItem>,
-): void {
-  const reservationId = [...owed.values()].find(
-    (item) => item.reservationId !== undefined,
-  )?.reservationId;
-  if (reservationId === undefined || deps.spending === undefined) {
-    return;
-  }
-  // Every request this batch has settled was answered, so every one of them is a charge. A
-  // settled row with no bill under its own request identity is a charge that was never written
-  // down, and the sum of the rows that were written cannot see it. The hold stays at its bound
-  // and the day names it as unresolved, which is what an obligation nobody can size costs. It
-  // outlives the work: the row is terminal and no answer is coming back to price it.
-  const unaccounted = unaccountedApiRequests(
-    deps.db,
-    settledBatchWorkKeys(deps.db, batchId).map((workKey) => `${batchId}:${workKey}`),
-  );
-  if (unaccounted.length > 0) {
-    settleGenerationSpend(deps.db, reservationId, undefined, clock(deps));
-    deps.logger.error(
-      { batchId, unaccounted: unaccounted.length },
-      'answers of this batch carry no usage record; its bound is held as an unaccounted charge',
-    );
-    return;
-  }
-  const charged = chargedApiUsd(deps.db, batchId);
-  if (charged === undefined) {
-    return;
-  }
-  const unresolved = submittedBatchWork(deps.db, batchId);
-  const retained = unresolved.length === 0 ? 0 : batchBoundUsd(transport, unresolved);
-  settleGenerationSpend(deps.db, reservationId, charged + retained, clock(deps));
 }

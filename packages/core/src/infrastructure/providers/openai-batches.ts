@@ -1,15 +1,17 @@
 import { z } from 'zod';
 
 import type { UsageCounters } from './anthropic-usage.js';
-import type {
-  BatchClientOptions,
-  BatchPoll,
-  BatchRequest,
-  BatchRequestBound,
-  BatchResult,
-  BatchTransport,
+import {
+  BatchAnswerRefusedError,
+  BatchNotCreatedError,
+  type BatchClientOptions,
+  type BatchPoll,
+  type BatchRequest,
+  type BatchRequestBound,
+  type BatchResult,
+  type BatchTransport,
 } from './batch-transport.js';
-import { OpenAiRequestError, readResponsesAnswer } from './openai-provider.js';
+import { OpenAiRefusalError, OpenAiRequestError, readResponsesAnswer } from './openai-provider.js';
 import { readOpenAiUsage } from './openai-usage.js';
 import type { GenerationProvider } from './types.js';
 
@@ -131,6 +133,9 @@ export class OpenAiBatchTransport implements BatchTransport {
    * over is deleted on the way out: it holds memory text, and a re-send uploads a file of its own.
    * Only a refusal deletes it. A creation whose answer was lost may be a job that is running, and
    * that job reads the file.
+   *
+   * A failed upload and a refused creation both leave no job, and say so as `BatchNotCreatedError`
+   * so the hold is released. A creation whose answer was lost says nothing of the kind.
    */
   async create(requests: readonly BatchRequest[]): Promise<string> {
     const lines = requests.map((request) =>
@@ -148,9 +153,15 @@ export class OpenAiBatchTransport implements BatchTransport {
       new Blob([`${lines.join('\n')}\n`], { type: 'application/jsonl' }),
       'batch.jsonl',
     );
-    const uploaded = FILE_SCHEMA.parse(
-      await (await this.#send('/files', { method: 'POST', body: form })).json(),
-    );
+    let uploaded: z.infer<typeof FILE_SCHEMA>;
+    try {
+      uploaded = FILE_SCHEMA.parse(
+        await (await this.#send('/files', { method: 'POST', body: form })).json(),
+      );
+    } catch (err) {
+      // No file id came back, so no job can have been created over this upload.
+      throw new BatchNotCreatedError('the batch input file was not uploaded', { cause: err });
+    }
     let created: Response;
     try {
       created = await this.#send('/batches', {
@@ -165,6 +176,7 @@ export class OpenAiBatchTransport implements BatchTransport {
     } catch (err) {
       if (err instanceof OpenAiRequestError) {
         await this.#deleteFile(uploaded.id).catch(() => undefined);
+        throw new BatchNotCreatedError('the batch API refused to create the job', { cause: err });
       }
       throw err;
     }
@@ -203,7 +215,9 @@ export class OpenAiBatchTransport implements BatchTransport {
     const sources = [batch.output_file_id, batch.error_file_id].filter(
       (fileId): fileId is string => typeof fileId === 'string',
     );
-    return { state: 'ended', sources };
+    // Neither file changes once the job has ended, so a request neither names (a line that would
+    // not parse, or one a cancellation never ran) got no answer and will not get one.
+    return { state: 'ended', sources, final: true };
   }
 
   /**
@@ -236,7 +250,14 @@ export class OpenAiBatchTransport implements BatchTransport {
   }
 
   answerOf(message: unknown): unknown {
-    return readResponsesAnswer(message);
+    try {
+      return readResponsesAnswer(message);
+    } catch (err) {
+      if (err instanceof OpenAiRefusalError) {
+        throw new BatchAnswerRefusedError(err.message);
+      }
+      throw err;
+    }
   }
 
   /**

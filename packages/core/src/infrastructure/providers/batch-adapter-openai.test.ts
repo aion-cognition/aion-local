@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { boundApiCost, estimateApiCost } from './api-pricing.js';
 import {
   consumeBatchWork,
+  MAX_BATCH_ATTEMPTS,
   submitBatchWork,
   type BatchAdapterDeps,
   type BatchWorkHandler,
@@ -267,7 +268,7 @@ describe('consuming what OpenAI returned', () => {
     expect(spend?.settled_usd).toBeCloseTo(2 * ANSWER_USD, 12);
   });
 
-  it('owes again what came back as an error line and keeps outstanding what never came back', async () => {
+  it('owes again what came back as an error line, and what the ended job never mentioned', async () => {
     owe('pair-a');
     owe('pair-b');
     owe('pair-c');
@@ -277,25 +278,69 @@ describe('consuming what OpenAI returned', () => {
       errors: [errorLine('pair-b', 'batch_expired')],
     });
 
-    expect(report).toMatchObject({ applied: 1, returned: 1 });
+    expect(report).toMatchObject({ applied: 1, returned: 2 });
     expect(readBatchWork(db, 'pair-b')).toMatchObject({ state: 'pending', batchId: undefined });
     expect(readBatchWork(db, 'pair-b')?.lastError).toContain('batch_expired');
-    // The job never mentioned it, so it is still at the remote rather than lost or re-asked.
-    expect(readBatchWork(db, 'pair-c')).toMatchObject({
-      state: 'submitted',
-      batchId: OPENAI_BATCH_ID,
+    // Neither file changes once the job has ended, so an unmentioned row will never be answered.
+    expect(readBatchWork(db, 'pair-c')).toMatchObject({ state: 'pending', batchId: undefined });
+    expect(readBatchWork(db, 'pair-c')?.lastError).toContain('returned no answer');
+    // Only the answered request is priced; nothing is left at the remote to hold for.
+    expect(spendRows()[0]?.settled_usd).toBeCloseTo(ANSWER_USD, 12);
+  });
+
+  it('fails a refused answer rather than asking it again', async () => {
+    owe('pair-a');
+
+    const report = await submitThenConsume({
+      output: [
+        outputLine('pair-a', {
+          ...responsesAnswer('{}', USAGE),
+          output: [{ type: 'message', content: [{ type: 'refusal', refusal: 'no' }] }],
+        }),
+      ],
     });
-    // The answered request is priced; the one still out keeps a bound of its own.
-    const retained = boundApiCost({
-      model: MODEL,
-      inputTokens: Buffer.byteLength(JSON.stringify(requestOn(MODEL)), 'utf8'),
-      outputTokens: 300,
-      pricingTier: 'batch',
-      cacheWrite: true,
-      cacheWriteTtl: '5m',
-      provider: 'openai',
-    }).maxUsd;
-    expect(spendRows()[0]?.settled_usd).toBeCloseTo(ANSWER_USD + retained, 12);
+
+    expect(report).toMatchObject({ failed: 1, returned: 0 });
+    expect(readBatchWork(db, 'pair-a')?.state).toBe('failed');
+    expect(db.prepare('SELECT count(*) AS n FROM api_calls').get()).toEqual({ n: 1 });
+  });
+
+  it('fails a row once it has used its attempts, instead of paying for it forever', async () => {
+    owe('pair-a');
+    const script = { output: [outputLine('pair-a', responsesAnswer('not json', USAGE))] };
+
+    for (let attempt = 1; attempt <= MAX_BATCH_ATTEMPTS; attempt += 1) {
+      await submitThenConsume(script);
+    }
+
+    expect(readBatchWork(db, 'pair-a')).toMatchObject({
+      state: 'failed',
+      attempts: MAX_BATCH_ATTEMPTS,
+    });
+    expect(readBatchWork(db, 'pair-a')?.lastError).toContain(
+      `no usable answer after ${String(MAX_BATCH_ATTEMPTS)} attempts`,
+    );
+  });
+
+  it('releases the hold when the upload is refused, since no job exists', async () => {
+    owe('pair-a');
+    const { impl } = openAiBatchApi({ uploadStatus: 403 });
+
+    const report = await submitBatchWork(deps(impl));
+
+    expect(report).toEqual({ submitted: 0, batchId: undefined });
+    expect(readBatchWork(db, 'pair-a')?.state).toBe('pending');
+    expect(spendRows()[0]?.state).toBe('released');
+  });
+
+  it('releases the hold when the job is refused, and deletes the upload', async () => {
+    owe('pair-a');
+    const { calls, impl } = openAiBatchApi({ createStatus: 400 });
+
+    await submitBatchWork(deps(impl));
+
+    expect(spendRows()[0]?.state).toBe('released');
+    expect(calls.map((call) => call.method)).toEqual(['POST', 'POST', 'DELETE']);
   });
 
   it('owes again an answer that carries no usable JSON, and still bills it', async () => {
@@ -351,18 +396,26 @@ describe('consuming what OpenAI returned', () => {
     ).toEqual([OPENAI_INPUT_FILE, OPENAI_OUTPUT_FILE, OPENAI_ERROR_FILE]);
   });
 
-  it('keeps the files while a row still waits on the job', async () => {
+  it('tries a failed file deletion again on the next pass until it succeeds', async () => {
     owe('pair-a');
-    owe('pair-c');
     const { calls, impl } = openAiBatchApi({
       output: [outputLine('pair-a', responsesAnswer('{"verdict":"a"}', USAGE))],
+      deleteFailures: 1,
     });
 
     await submitBatchWork(deps(impl));
     await consumeBatchWork(deps(impl));
+    const firstPass = calls.filter((call) => call.method === 'DELETE').length;
+    await consumeBatchWork(deps(impl));
+    await consumeBatchWork(deps(impl));
 
-    expect(readBatchWork(db, 'pair-c')?.state).toBe('submitted');
-    expect(calls.filter((call) => call.method === 'DELETE')).toEqual([]);
+    const deletes = calls.filter((call) => call.method === 'DELETE').map((call) => call.url);
+    expect(firstPass).toBe(1);
+    // The second pass deletes every file; the third finds nothing left to retry.
+    expect(deletes.slice(1).map((url) => url.split('/').pop())).toEqual([
+      OPENAI_INPUT_FILE,
+      OPENAI_OUTPUT_FILE,
+    ]);
   });
 
   it('never reads a job another provider holds', async () => {
