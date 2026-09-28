@@ -59,6 +59,9 @@ let graph: FakeGraph;
 let logger: Logger;
 let worker: ReflectionWorker | undefined;
 
+/** Every wakeup `dead_letter` sent the worker, by job. */
+const woken: string[] = [];
+
 const config: Config = {
   ...DEFAULTS,
   operational: { ...DEFAULTS.operational, workerMaxAttempts: MAX_ATTEMPTS },
@@ -102,9 +105,6 @@ function startWorker(runner: BuildBoundRunner): ReflectionWorker {
   );
   return worker;
 }
-
-/** Every wakeup `dead_letter` sent the worker, by job. */
-const woken: string[] = [];
 
 /** The maintenance loop's view of the substrate, with the worker's own wake hook as intake's. */
 function ctxFor(running: ReflectionWorker): OperationContext {

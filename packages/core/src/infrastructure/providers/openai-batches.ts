@@ -56,6 +56,7 @@ const FILE_SCHEMA = z.object({ id: z.string().min(1) });
 const BATCH_SCHEMA = z.object({
   id: z.string().min(1),
   status: z.string().optional(),
+  input_file_id: z.string().min(1).nullish(),
   output_file_id: z.string().min(1).nullish(),
   error_file_id: z.string().min(1).nullish(),
   errors: z.unknown().optional(),
@@ -163,13 +164,29 @@ export class OpenAiBatchTransport implements BatchTransport {
       });
     } catch (err) {
       if (err instanceof OpenAiRequestError) {
-        await this.#send(`/files/${encodeURIComponent(uploaded.id)}`, { method: 'DELETE' }).catch(
-          () => undefined,
-        );
+        await this.#deleteFile(uploaded.id).catch(() => undefined);
       }
       throw err;
     }
     return BATCH_SCHEMA.parse(await created.json()).id;
+  }
+
+  /**
+   * Deletes the files a settled job left in OpenAI's storage: the requests it was sent and the
+   * answers it wrote. Each holds memory text, `store: false` does not reach them, and the Files
+   * API keeps them until they are deleted. Nothing reads them once every row the job carried has
+   * settled. A file already gone counts as deleted.
+   */
+  async release(batchId: string): Promise<void> {
+    const response = await this.#send(`/batches/${encodeURIComponent(batchId)}`, {
+      method: 'GET',
+    });
+    const batch = BATCH_SCHEMA.parse(await response.json());
+    for (const fileId of [batch.input_file_id, batch.output_file_id, batch.error_file_id]) {
+      if (typeof fileId === 'string') {
+        await this.#deleteFile(fileId);
+      }
+    }
   }
 
   async poll(batchId: string): Promise<BatchPoll> {
@@ -241,6 +258,16 @@ export class OpenAiBatchTransport implements BatchTransport {
       model = answered;
     }
     return { model, usage: readOpenAiUsage(response?.usage) };
+  }
+
+  async #deleteFile(fileId: string): Promise<void> {
+    try {
+      await this.#send(`/files/${encodeURIComponent(fileId)}`, { method: 'DELETE' });
+    } catch (err) {
+      if (!(err instanceof OpenAiRequestError && err.status === 404)) {
+        throw err;
+      }
+    }
   }
 
   async #send(path: string, init: RequestInit): Promise<Response> {

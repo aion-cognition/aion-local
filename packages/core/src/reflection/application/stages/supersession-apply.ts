@@ -82,9 +82,9 @@ export type JudgedPair = {
  *
  * Three of these are what a count or an agreement rate may be built from: `closed` is a
  * judgment that acted on a live target, `vetoed` and `proposed` are judgments filed for
- * `proposal_resolution` to decide, and `stale` is neither. A stale judgment was made and then had nothing left to take,
- * because a family close earlier in the same run or a person reviewing a neighbouring proposal
- * had already taken the losing side. It is counted apart and scored by nothing: reading it as
+ * `proposal_resolution` to decide, and `stale` is neither. A stale judgment was made and then
+ * had nothing left to take, because a family close earlier in the same run or a person
+ * reviewing a neighbouring proposal had already taken the losing side. It is counted apart and scored by nothing: reading it as
  * a closure inflates what the judge did, and reading it as a veto invents a disagreement
  * nobody had.
  *

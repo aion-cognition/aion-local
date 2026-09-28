@@ -398,8 +398,31 @@ export async function consumeBatchWork(deps: BatchAdapterDeps): Promise<ConsumeR
     // A row the batch never answered for stays submitted and is picked up the next time this
     // batch is read, so a partial results file loses nothing.
     reconcileSubmission(deps, transport, batchId, owed);
+    if (submittedBatchWork(deps.db, batchId).length === 0) {
+      await releaseBatch(deps, transport, batchId);
+    }
   }
   return report;
+}
+
+/**
+ * Deletes what the vendor still stores for a job no row is waiting on. The job leaves the
+ * outstanding list once its last row settles, so this runs once; a failure is logged and the
+ * files stay behind rather than holding up the settlement already written.
+ */
+async function releaseBatch(
+  deps: BatchAdapterDeps,
+  transport: BatchTransport,
+  batchId: string,
+): Promise<void> {
+  if (transport.release === undefined) {
+    return;
+  }
+  try {
+    await transport.release(batchId);
+  } catch (err) {
+    deps.logger.warn({ err, batchId }, 'settled batch files could not be deleted at the vendor');
+  }
 }
 
 /**

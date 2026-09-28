@@ -15,6 +15,9 @@ import { GenerationSpendGuard } from './spending.js';
 import {
   errorLine,
   OPENAI_BATCH_ID,
+  OPENAI_ERROR_FILE,
+  OPENAI_INPUT_FILE,
+  OPENAI_OUTPUT_FILE,
   openAiBatchApi,
   outputLine,
   responsesAnswer,
@@ -330,6 +333,36 @@ describe('consuming what OpenAI returned', () => {
     expect(report).toMatchObject({ waiting: 1, applied: 0 });
     expect(readBatchWork(db, 'pair-a')?.state).toBe('submitted');
     expect(spendRows()[0]?.state).toBe('held');
+  });
+
+  it("deletes the job's files at OpenAI once every row it carried has settled", async () => {
+    owe('pair-a');
+    owe('pair-b');
+    const { calls, impl } = openAiBatchApi({
+      output: [outputLine('pair-a', responsesAnswer('{"verdict":"a"}', USAGE))],
+      errors: [errorLine('pair-b', 'batch_expired')],
+    });
+
+    await submitBatchWork(deps(impl));
+    await consumeBatchWork(deps(impl));
+
+    expect(
+      calls.filter((call) => call.method === 'DELETE').map((call) => call.url.split('/').pop()),
+    ).toEqual([OPENAI_INPUT_FILE, OPENAI_OUTPUT_FILE, OPENAI_ERROR_FILE]);
+  });
+
+  it('keeps the files while a row still waits on the job', async () => {
+    owe('pair-a');
+    owe('pair-c');
+    const { calls, impl } = openAiBatchApi({
+      output: [outputLine('pair-a', responsesAnswer('{"verdict":"a"}', USAGE))],
+    });
+
+    await submitBatchWork(deps(impl));
+    await consumeBatchWork(deps(impl));
+
+    expect(readBatchWork(db, 'pair-c')?.state).toBe('submitted');
+    expect(calls.filter((call) => call.method === 'DELETE')).toEqual([]);
   });
 
   it('never reads a job another provider holds', async () => {

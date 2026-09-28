@@ -96,6 +96,7 @@ export function openAiBatchApi(script: OpenAiBatchScript = {}): {
         id: OPENAI_BATCH_ID,
         object: 'batch',
         status,
+        input_file_id: OPENAI_INPUT_FILE,
         output_file_id: script.output === undefined ? null : OPENAI_OUTPUT_FILE,
         error_file_id: script.errors === undefined ? null : OPENAI_ERROR_FILE,
         ...(script.batchErrors === undefined ? {} : { errors: script.batchErrors }),
@@ -107,8 +108,9 @@ export function openAiBatchApi(script: OpenAiBatchScript = {}): {
     if (url === `${base}/files/${OPENAI_ERROR_FILE}/content`) {
       return new Response(jsonl(script.errors));
     }
-    if (url === `${base}/files/${OPENAI_INPUT_FILE}` && call.method === 'DELETE') {
-      return Response.json({ id: OPENAI_INPUT_FILE, object: 'file', deleted: true });
+    const deleted = /^https:\/\/api\.openai\.com\/v1\/files\/([^/]+)$/.exec(url);
+    if (deleted !== null && call.method === 'DELETE') {
+      return Response.json({ id: deleted[1], object: 'file', deleted: true });
     }
     return new Response(`no scripted answer for ${call.method} ${url}`, { status: 404 });
   });

@@ -72,4 +72,9 @@ export type BatchTransport = {
     message: unknown,
     request: unknown,
   ): { readonly model: string; readonly usage: UsageCounters };
+  /**
+   * Deletes what the vendor still stores for a job once every row it carried has settled. Absent
+   * where the vendor expires that on its own.
+   */
+  release?(batchId: string): Promise<void>;
 };
