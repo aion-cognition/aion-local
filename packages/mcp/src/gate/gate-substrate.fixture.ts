@@ -37,6 +37,7 @@ import {
   type CampaignProducerHandle,
 } from '@aion/core/infrastructure/providers/test-support/campaign-guard.js';
 import {
+  testGenerationConfig,
   testGenerationKey,
   testGenerationProvider,
 } from '@aion/core/infrastructure/providers/test-support/generation-provider.js';
@@ -133,6 +134,9 @@ export class GateSubstrate {
       // the substrate holds rather than on what an earlier question served or what that session
       // wrote itself.
       recall: { ...DEFAULTS.recall, sessionDedup: false, ownSessionFilter: false },
+      // The route the test provider takes, so a battery that reports its route from this config
+      // names the model it actually measured.
+      ...testGenerationConfig(DEFAULTS),
     };
     this.config = options.tune === undefined ? shipped : options.tune(shipped);
     this.#certifyJudgments = options.certifyJudgments;
