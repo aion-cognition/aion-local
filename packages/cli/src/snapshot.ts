@@ -269,9 +269,13 @@ export function renderSnapshot(
     `lag      p95 intake-to-enriched ${p95}, ${String(queue.reinforcementDropped)} reinforcement rows dropped`,
   );
   write(`recall   ${degraded}`);
+  // Open proposals are decided by the loop, not waiting on whoever reads this line.
+  const decider = config.maintenance.proposalResolution
+    ? 'proposal_resolution decides them'
+    : 'proposal_resolution is off';
   write(
-    `review   ${String(queue.supersessionProposalsOpen)} supersession, ` +
-      `${String(queue.entityMergeProposalsOpen)} entity-merge proposals open... aion proposals ls`,
+    `proposal ${String(queue.supersessionProposalsOpen)} supersession, ` +
+      `${String(queue.entityMergeProposalsOpen)} entity-merge open, ${decider}... aion proposals ls`,
   );
 
   renderLanes(config, write);

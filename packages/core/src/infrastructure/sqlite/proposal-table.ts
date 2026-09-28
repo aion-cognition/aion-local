@@ -3,7 +3,7 @@ import type { SqliteHandle } from './database.js';
 /**
  * Both proposal queues (supersession, entity merge) are the same table shape wearing different
  * column names: an `id`, two node columns naming the pair the proposal is about, and a
- * `resolved_at` that is null while a person still owes the row a decision. Reading one, listing
+ * `resolved_at` that is null while the row is still undecided. Reading one, listing
  * them, finding the ones that touch a node, resolving one, and counting what is left are
  * therefore one set of queries over three facts, written once here.
  *

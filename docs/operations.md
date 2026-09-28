@@ -406,7 +406,7 @@ here and nothing closes on its own.
 
 ```
 AION_PROPOSAL_RESOLUTION=true    # the default: the loop decides open proposals on their merits
-AION_PROPOSAL_RESOLUTION=false   # the kill switch: both queues wait for a person
+AION_PROPOSAL_RESOLUTION=false   # the kill switch: both queues wait for aion proposals and hygiene
 AION_RESOLUTION_BATCH=10         # open rows one run decides, oldest first across both queues
 ```
 
@@ -421,7 +421,9 @@ answer. The wider reading is what lets a second look reach a different one.
 
 The same two passes then decide. Both affirm and the row is applied through the path
 `aion proposals apply` takes, at the same default blade and the same relatedness floor, stamped
-`supersession_introspector_resolution` so lineage never reads as though a person decided.
+`supersession_introspector_resolution` so lineage never reads as though a person decided. A
+merge is stamped `merge_proposal_introspector_resolution`, and its decision record names tier 3
+with both passes' verdicts, for the same reason.
 Anything else dismisses the row. Either way the verdict and both passes' reasons go to the ops
 ledger under `introspection:resolution:<table>:<id>`. A model call that throws or comes back
 unusable decides nothing, and the row waits for the next run.

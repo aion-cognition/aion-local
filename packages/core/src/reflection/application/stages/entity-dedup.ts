@@ -60,7 +60,8 @@ export const ENTITY_DEDUP_TIER0_METHOD = 'reflection_entity_dedup_tier0';
 
 /**
  * What tier 3 does with a pair both passes called one thing. `unanimous` merges it; `propose`
- * queues it for a person and writes nothing to the graph, which is the kill switch.
+ * files it as a proposal for `proposal_resolution` to decide and writes nothing to the graph
+ * here, which is the kill switch.
  *
  * Tier 0 is outside the choice by construction. It asks no model, so there is no judgment for a
  * mode over judgments to gate, and a name that squashes onto another is the same name whichever
@@ -367,7 +368,7 @@ export class EntityDedupStage implements ReflectionStage {
    * The pair whose own rendered messages exceed what the route may spend. Nothing was asked and
    * nothing decided, so this is required evidence the substrate could not submit rather than a
    * judgment: it counts as withheld work carrying the pair and its reading, never as a judged
-   * pair or a proposal a person is expected to look at.
+   * pair or a filed proposal.
    */
   #overAllowance(
     ctx: StageContext,
@@ -461,9 +462,9 @@ export class EntityDedupStage implements ReflectionStage {
   }
 
   /**
-   * The residue lane. A pair the two passes split on is the one case left for a person, and it
-   * is the only thing that writes here now: the cross-type queue this used to fill was an
-   * artifact of an identity key that no longer exists.
+   * The residue lane. A pair the two passes split on is filed for `proposal_resolution` to decide
+   * again on wider evidence, and it is the only thing that writes here now: the cross-type queue
+   * this used to fill was an artifact of an identity key that no longer exists.
    */
   #recordProposal(
     ctx: StageContext,

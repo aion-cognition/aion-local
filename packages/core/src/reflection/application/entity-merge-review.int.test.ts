@@ -7,6 +7,7 @@ import {
   applyEntityMergeProposal,
   dismissEntityMergeProposal,
   ENTITY_MERGE_APPLY_METHOD,
+  ENTITY_MERGE_RESOLUTION_METHOD,
 } from './entity-merge-review.js';
 import { ProposalNotFoundError } from './proposals.js';
 import { upsertEdge } from '../../infrastructure/graph/edges.js';
@@ -37,10 +38,11 @@ import { getLedgerEntry } from '../../infrastructure/sqlite/ops-ledger.js';
 import { ENTITY_CASCADE_VERSION, entityMergeLedgerKey } from '../domain/entity-merge.js';
 
 /**
- * The path a cross-type merge proposal takes once a person agrees the pair is one identity.
- * Detection never applies these rows on its own (`entity-merge-proposals.ts`), so this is the
- * only place a proposal turns into a graph write, and the only case this file has to cover is
- * whether that write, and its refusals, behave.
+ * The path a cross-type merge proposal takes once it is decided to be one identity, by
+ * `proposal_resolution` on its own or by a person through `aion proposals`. Detection never
+ * applies these rows (`entity-merge-proposals.ts`), so this is the only place a proposal turns
+ * into a graph write, and this file covers whether that write, its record, and its refusals
+ * behave.
  */
 
 const EMBED_DIMENSION = 8;
@@ -160,6 +162,47 @@ describe('applying an entity-merge proposal', () => {
         entityMergeDecisionKey(result.canonical.id, [result.absorbed.id], ENTITY_CASCADE_VERSION),
       )?.id,
     ).toBe(result.decisionId);
+  }, 120_000);
+
+  it('stamps a merge the maintenance loop decided as its own two-pass decision, never a person', async () => {
+    const readerId = await seedEntity('Harbor Reader', 'service');
+    const tailId = await seedEntity('Harbor Tail', 'concept');
+    const proposalId = recordEntityMergeProposal(db, {
+      subject: { id: readerId, name: 'Harbor Reader', type: 'service' },
+      candidate: { id: tailId, name: 'Harbor Tail', type: 'concept' },
+      similarity: 0.88,
+      similaritySource: 'name_cosine',
+      episodeId: 'ep-harbor',
+    });
+    const judge = {
+      detect: { same: true, rationale: 'one service under two names' },
+      review: { same: true, rationale: 'nothing separates them' },
+    };
+
+    const result = await applyEntityMergeProposal(
+      { driver: harness.driver, db, logger },
+      {
+        id: proposalId,
+        now: NOW,
+        attribution: {
+          tier: 'tier3',
+          reasons: ['both passes found one referent'],
+          method: ENTITY_MERGE_RESOLUTION_METHOD,
+          judge,
+        },
+      },
+    );
+
+    if (result.outcome !== 'applied') {
+      throw new Error(`expected the merge to apply, got ${result.outcome}`);
+    }
+    const edge = await supersessionEdge(harness.driver, result.absorbed.id);
+    expect(edge?.provenance).toEqual([ENTITY_MERGE_RESOLUTION_METHOD]);
+    const decision = getEntityMergeDecision(db, result.decisionId);
+    expect(decision?.tier).toBe('tier3');
+    expect(decision?.reasons).toEqual(['both passes found one referent']);
+    expect(decision?.judge).toEqual(judge);
+    expect(getEntityMergeProposal(db, proposalId)?.resolvedAt).toEqual(expect.any(String));
   }, 120_000);
 
   it('returns already_resolved on a second apply, and writes nothing further', async () => {

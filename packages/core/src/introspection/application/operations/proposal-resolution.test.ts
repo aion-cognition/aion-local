@@ -376,6 +376,27 @@ describe('proposal_resolution on a contradiction both passes affirm', () => {
     expect((entry?.summary as { grounds: string }).grounds).toContain('poll interval');
   });
 
+  it.each([
+    ['anthropic', 'claude-haiku-4-5'],
+    ['openai', 'gpt-6-luna'],
+  ] as const)('decides the row on its own when %s runs generation', async (vendor, model) => {
+    const id = seedContradiction();
+    const provider: Provider = {
+      ...judgingProvider({ first: CONTRADICTS, second: CLOSES }),
+      route: { provider: vendor, model },
+    };
+
+    const result = await proposalResolutionOperation().run(
+      ctxFor(DEFAULTS, { driver: fakeDriver(PAIR), provider }),
+    );
+
+    expect(result.status).toBe('applied');
+    expect(getSupersessionProposal(db, id)?.resolvedAt).toBe(NOW.toISOString());
+    expect(getLedgerEntry(db, resolutionLedgerKey('supersession', id))?.summary).toMatchObject({
+      verdict: 'applied',
+    });
+  });
+
   it('puts the subject family and the session window in front of both passes', async () => {
     seedContradiction();
     const reads: FakeReads = [];
