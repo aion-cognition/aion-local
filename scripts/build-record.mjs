@@ -16,7 +16,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -45,8 +45,25 @@ function git(root, args, input) {
   return execFileSync('git', ['-C', root, ...args], {
     encoding: 'utf8',
     stdio: ['pipe', 'pipe', 'ignore'],
+    // Every CLI run asks for the state, and a status that took the index lock to refresh it
+    // could fail a person's own `git add` running beside it.
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
     ...(input === undefined ? {} : { input }),
   });
+}
+
+/**
+ * Whether the compiler, asked without building, would build anything. A build that exited clean
+ * need not have built everything: `npm run build -- packages/protocol` compiles one project and a
+ * dry run compiles none, so the record is written only when every project is current.
+ */
+function compilerCurrent(root) {
+  // `BUILD_RECORD_TSC` stands in for the compiler where there is none to ask, which is a test's
+  // fixture repository; nothing else sets it.
+  const tsc =
+    process.env.BUILD_RECORD_TSC ?? join(root, 'node_modules', 'typescript', 'bin', 'tsc');
+  const said = execFileSync('node', [tsc, '-b', '--dry'], { cwd: root, encoding: 'utf8' });
+  return !/would (build|update)/i.test(said);
 }
 
 function digest(parts) {
@@ -134,6 +151,9 @@ export function finish(root) {
   if (missing.length > 0) {
     return { recorded: false, reason: `the build left no ${missing.join(', ')}` };
   }
+  if (!compilerCurrent(root)) {
+    return { recorded: false, reason: 'the compiler still has projects to build' };
+  }
   const record = { ...after, compiler: compilerState(root) };
   writeFileSync(join(root, RECORD), `${JSON.stringify(record, null, 2)}\n`);
   return { recorded: true, stamp: after.stamp };
@@ -157,15 +177,37 @@ export function state(root) {
   return { source: source.stamp, built: holds ? source.stamp : undefined };
 }
 
+/**
+ * The two build steps never fail the build they wrap. A checkout with no git (a tarball, an image
+ * build) cannot say what it built, so it gets no record, says why, and compiles as it always did;
+ * no record reads as unstamped, which is the honest answer there.
+ */
+function withoutRecord(root, step) {
+  try {
+    return step();
+  } catch (err) {
+    rmSync(join(root, RECORD), { force: true });
+    rmSync(join(root, PENDING), { force: true });
+    const reason = err instanceof Error ? err.message.split('\n')[0] : String(err);
+    return { recorded: false, reason: `the source could not be read (${reason})` };
+  }
+}
+
 function main() {
   const [command, rootArg] = process.argv.slice(2);
   const root = resolve(rootArg ?? join(dirname(fileURLToPath(import.meta.url)), '..'));
   if (command === 'begin') {
-    begin(root);
+    const outcome = withoutRecord(root, () => {
+      begin(root);
+      return { recorded: true };
+    });
+    if (!outcome.recorded) {
+      process.stderr.write(`build record skipped: ${outcome.reason}\n`);
+    }
     return;
   }
   if (command === 'finish') {
-    const outcome = finish(root);
+    const outcome = withoutRecord(root, () => finish(root));
     if (!outcome.recorded) {
       process.stderr.write(
         `build record not written: ${outcome.reason}; build again from a stable checkout ` +
@@ -183,6 +225,18 @@ function main() {
   process.exitCode = 2;
 }
 
-if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+/** Run as a script, through whatever path reached it: a symlinked checkout resolves to the file. */
+function invokedDirectly() {
+  if (process.argv[1] === undefined) {
+    return false;
+  }
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (invokedDirectly()) {
   main();
 }

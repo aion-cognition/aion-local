@@ -1,5 +1,13 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  unlinkSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,6 +32,15 @@ const SCRIPT = join(
 const SPAWNS = 30_000;
 
 let repo: string;
+let tools: string;
+
+/**
+ * A compiler that answers the dry run the way `tsc -b --dry` does: nothing when every project is
+ * current, a "would build" line when one is not. Which one it says is the file's contents.
+ */
+function compilerSays(output: string): void {
+  writeFileSync(join(tools, 'said.txt'), output);
+}
 
 function git(...args: string[]): string {
   return execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim();
@@ -70,6 +87,14 @@ function commit(message: string): void {
 }
 
 beforeEach(() => {
+  tools = mkdtempSync(join(tmpdir(), 'aion-build-record-tsc-'));
+  writeFileSync(
+    join(tools, 'tsc.mjs'),
+    "import { readFileSync } from 'node:fs';\n" +
+      "process.stdout.write(readFileSync(new URL('./said.txt', import.meta.url), 'utf8'));\n",
+  );
+  compilerSays('');
+  process.env.BUILD_RECORD_TSC = join(tools, 'tsc.mjs');
   repo = mkdtempSync(join(tmpdir(), 'aion-build-record-'));
   git('init', '-q');
   git('config', 'user.email', 'test@example.invalid');
@@ -86,7 +111,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  delete process.env.BUILD_RECORD_TSC;
   rmSync(repo, { recursive: true, force: true });
+  rmSync(tools, { recursive: true, force: true });
 });
 
 describe('the build stamp', () => {
@@ -214,6 +241,37 @@ describe('the build stamp', () => {
       write('packages/core/src/index.test.ts', 'export const edited = true;\n');
 
       expect(state().built).not.toBe('');
+    },
+    SPAWNS,
+  );
+
+  it(
+    'writes no record for a build that exited clean without building every project',
+    () => {
+      record('begin');
+      compile();
+      compilerSays("A non-dry build would build project '/repo/packages/cli/tsconfig.json'\n");
+      const finished = spawnSync('node', [SCRIPT, 'finish', repo], { encoding: 'utf8' });
+
+      expect(finished.stderr).toContain('the compiler still has projects to build');
+      expect(state().built).toBe('');
+    },
+    SPAWNS,
+  );
+
+  it(
+    'lets a checkout with no git build without a record rather than failing the build',
+    () => {
+      rmSync(join(repo, '.git'), { recursive: true, force: true });
+
+      const began = spawnSync('node', [SCRIPT, 'begin', repo], { encoding: 'utf8' });
+      compile();
+      const finished = spawnSync('node', [SCRIPT, 'finish', repo], { encoding: 'utf8' });
+
+      expect(began.status).toBe(0);
+      expect(finished.status).toBe(0);
+      expect(began.stderr).toContain('build record skipped');
+      expect(existsSync(join(repo, 'packages/mcp/dist/aion-build.json'))).toBe(false);
     },
     SPAWNS,
   );

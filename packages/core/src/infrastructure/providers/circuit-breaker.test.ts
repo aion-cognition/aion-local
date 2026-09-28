@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { CircuitBreaker, CircuitOpenError } from './circuit-breaker.js';
+import { GenerationCeilingReachedError } from './errors.js';
 
 describe('CircuitBreaker', () => {
   it('passes through successful calls and resets the failure count', async () => {
@@ -79,6 +80,16 @@ describe('CircuitBreaker', () => {
     await expect(breaker.run(aborted)).rejects.toThrow('aborted');
     await expect(breaker.run(aborted)).rejects.toThrow('aborted');
 
+    await expect(breaker.run(() => Promise.resolve('ok'))).resolves.toBe('ok');
+  });
+
+  it('does not count generation that was refused before dispatch, such as a spent ceiling', async () => {
+    const breaker = new CircuitBreaker({ failureThreshold: 2 });
+    const refused = () => Promise.reject(new GenerationCeilingReachedError('cognitive', 5, 5));
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await expect(breaker.run(refused)).rejects.toBeInstanceOf(GenerationCeilingReachedError);
+    }
     await expect(breaker.run(() => Promise.resolve('ok'))).resolves.toBe('ok');
   });
 });

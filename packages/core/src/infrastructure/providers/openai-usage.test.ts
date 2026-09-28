@@ -90,4 +90,19 @@ describe('pricing GPT-6 Luna', () => {
     // Past the threshold the whole request holds at the long card.
     expect(bound(300_000)).toBeCloseTo((300_000 * 0.25 + 1_000 * 0.75) / 1_000_000, 12);
   });
+
+  it("bounds a model the table does not carry at the top of OpenAI's own card, not Anthropic's", () => {
+    const bound = (provider?: 'openai') =>
+      boundApiCost({
+        model: 'a-model-nobody-priced',
+        inputTokens: 1_000_000,
+        outputTokens: 1_000_000,
+        pricingTier: 'standard',
+        cacheWrite: false,
+        ...(provider === undefined ? {} : { provider }),
+      });
+
+    expect(bound('openai')).toEqual({ maxUsd: 750, priced: false });
+    expect(bound()).toEqual({ maxUsd: 60, priced: false });
+  });
 });

@@ -5,6 +5,7 @@ import {
   remoteBannerLines,
   resolveProviderRouting,
   routingSummary,
+  routingWarnings,
 } from './routing.js';
 import type { GenerationProvider } from './types.js';
 import { DEFAULTS } from '../config/defaults.js';
@@ -129,5 +130,21 @@ describe('what a person reads about the route', () => {
     expect(banner).toContain('AION_REFLECT_PROVIDER=openai needs AION_OPENAI_API_KEY');
     expect(banner).toContain('capture, embeddings and every graph read still work');
     expect(banner).toContain('recall serves the existing ranking');
+  });
+
+  it('warns at boot about a role with no key and a role naming an unpriced model', () => {
+    const base = config({ anthropic: 'sk-ant-test', openai: 'sk-test' }, { recall: 'openai' });
+    const unpriced = { ...base, openai: { ...base.openai, model: 'gpt-nobody-priced' } };
+
+    expect(routingWarnings(resolveProviderRouting(config({ anthropic: 'sk-ant-test' })))).toEqual(
+      [],
+    );
+    expect(routingWarnings(resolveProviderRouting(unpriced))).toEqual([
+      expect.stringContaining('openai:gpt-nobody-priced, which has no price on record'),
+    ]);
+    expect(routingWarnings(resolveProviderRouting(config({}, { reflect: 'openai' })))).toEqual([
+      expect.stringContaining('AION_RECALL_PROVIDER=anthropic needs AION_ANTHROPIC_API_KEY'),
+      expect.stringContaining('AION_REFLECT_PROVIDER=openai needs AION_OPENAI_API_KEY'),
+    ]);
   });
 });

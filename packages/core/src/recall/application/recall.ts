@@ -27,6 +27,7 @@ import { serveFrom, type ServedAnswer, type ServingAssembly } from './serving-as
 import {
   boundaryIssues,
   commitServingEffects,
+  servedReading,
   servingEffects,
   withCoverage,
   type RecallCommit,
@@ -288,10 +289,10 @@ export async function handleRecall(
   const ids = [...candidates.keys()];
   // What the floors refused, read under the same evidence as the rest so the assessment can be
   // shown it; bounded by the pack's own slots, since no more than that could be shown.
-  const reach = assessmentReach(deps.config, fusion.value.refused);
-  const readIds = [...ids, ...reach.map((item) => item.id)];
+  const reach = assessmentReach(deps.config, fusion.value.refused, candidates);
+  const readIds = [...ids, ...reach.items.map((item) => item.id)];
   const [claims, reading, restated] = await Promise.all([
-    relatedClaims(deps, [...ranked, ...reach], mode),
+    relatedClaims(deps, [...ranked, ...reach.items], mode),
     readEvidence(deps, {
       ids: readIds,
       sessionId,
@@ -312,19 +313,15 @@ export async function handleRecall(
   // this call has to answer as though the session had been served nothing.
   const served =
     dedup && !resetDelivery ? readServedItems(deps.db, sessionId) : new Map<string, string>();
-  const assessment =
-    deps.config.recall.mode === 'assess'
-      ? await timed(() =>
-          runAssessment(deps, {
-            query: cueInput,
-            found: [...fusion.value.items, ...reach],
-            associated: resonance.value.items,
-            reminders: intentions.items,
-            serving: { served, dedup },
-            view,
-          }),
-        )
-      : undefined;
+  const assessment = await runAssessment(deps, {
+    query: cueInput,
+    found: [...fusion.value.items, ...reach.items],
+    unreached: reach.beyond,
+    associated: resonance.value.items,
+    reminders: intentions.items,
+    serving: { served, dedup },
+    view,
+  });
 
   const timings: StageTimingsMs = {
     cues: cues.ms,
@@ -380,7 +377,7 @@ export async function handleRecall(
         : (decision: PackDecision) => assemblyDecisions.push(decision),
     );
   };
-  const assessed = assessedFor(assessment?.value, {
+  const assessed = assessedFor(assessment?.run, {
     ranking: assembly,
     candidates,
     route: deps.provider.route,
@@ -391,8 +388,9 @@ export async function handleRecall(
   // What the answer covers, attached to the pack the caller receives rather than to the one
   // assembly measured: coverage moves no bucket and costs no token budget.
   const { checked } = options;
+  const covered = servedReading(view, reach.items, assessed?.chosen ?? []);
   const stated =
-    checked === undefined ? serving.pack : withCoverage(serving.pack, checked.coverage, view);
+    checked === undefined ? serving.pack : withCoverage(serving.pack, checked.coverage, covered);
 
   // Every successful-read write in one place, reset first, shaped for the boundary that checks
   // the coverage contract in the same transaction it commits them.
@@ -415,6 +413,7 @@ export async function handleRecall(
     resonantCount: resonance.value.items.length,
     empty:
       fusion.value.items.length === 0 &&
+      reach.items.length === 0 &&
       resonance.value.items.length === 0 &&
       intentions.items.length === 0,
     resetDelivery,
@@ -437,7 +436,7 @@ export async function handleRecall(
     answer = withCoverage(
       serving.pack,
       checked.coverage,
-      evidence,
+      servedReading(evidence, reach.items, []),
       boundaryIssues(disposition.reason, resetDelivery),
     );
   }

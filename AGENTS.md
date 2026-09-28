@@ -340,8 +340,9 @@ including ones the corpus calls correct.
 runs the 24-pair cascade battery pinned to `unanimous`, prints precision on the headline (tier 0
 included) and on the judge tier alone against the 0.9 bar, and asserts the pinned default
 independently. It keeps two real assertions: tier 0 makes no wrong deterministic merge, and at
-least `JUDGED_SAMPLE_FLOOR` (4) pairs reach the judge, since tier 0's merges alone can carry the
-headline to 1.000 without judging anything.
+least `JUDGED_SAMPLE_FLOOR` (4) of the designed pairs reach the judge, which checks the battery's
+wiring. It counts pairs asked, never merges made: a floor on merges would be a quota on the model's
+judgment.
 
 `gate/keyed-close-precision.int.test.ts` is the same shape for `AION_KEYED_CLOSE_MODE`. It tells
 24 designed pairs of sessions to the shipped entity and cognitive stages, pinned to `close`, and

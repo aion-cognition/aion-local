@@ -1,3 +1,4 @@
+import { isPricedModel } from './api-pricing.js';
 import type { GenerationProvider } from './types.js';
 import type { Config } from '../config/schema.js';
 
@@ -137,4 +138,28 @@ export function remoteBannerLines(routing: ProviderRouting): readonly string[] {
   }
   lines.push('         embeddings and every graph read stay local.');
   return lines;
+}
+
+/**
+ * What the service says at boot about a route it cannot run as asked: a role with no key for its
+ * provider, and a role naming a model the price table does not carry, which every dispatch then
+ * holds at the top of that provider's card.
+ */
+export function routingWarnings(routing: ProviderRouting): readonly string[] {
+  const warnings: string[] = [];
+  for (const route of routeList(routing)) {
+    if (!route.available) {
+      warnings.push(
+        `${route.role} generation has nowhere to run (${unavailableReason(route)}): capture, ` +
+          'embedding and recall run, and that generation stays queued until the key is set',
+      );
+    } else if (!isPricedModel(route.model)) {
+      warnings.push(
+        `${route.role} generation names ${route.provider}:${route.model}, which has no price on ` +
+          "record: each call is held at the top of that provider's card, so the daily ceiling " +
+          'admits few of them. Add the model to api-pricing.ts to price it.',
+      );
+    }
+  }
+  return warnings;
 }

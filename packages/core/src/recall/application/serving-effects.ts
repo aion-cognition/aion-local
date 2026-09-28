@@ -149,6 +149,27 @@ export function servingEffects(input: ServingEffectsInput): ServingEffects {
   };
 }
 
+/**
+ * The reading a coverage statement is made from. A gap about a floor refusal the pack does not
+ * serve is not a gap in the answer, and the ranking path never read one, so it is left out.
+ */
+export function servedReading(
+  view: ResolvedEvidenceView,
+  reach: readonly FusedItem[],
+  served: readonly string[],
+): ResolvedEvidenceView {
+  const unserved = new Set(reach.map((item) => item.id).filter((id) => !served.includes(id)));
+  if (unserved.size === 0) {
+    return view;
+  }
+  return {
+    ...view,
+    issues: view.issues.filter(
+      (issue) => issue.address.kind !== 'id' || !unserved.has(issue.address.id),
+    ),
+  };
+}
+
 /** Whether the statement says anything a reader of the text alone would need to be told. */
 function worthSaying(coverage: HistoryCoverage): boolean {
   return (

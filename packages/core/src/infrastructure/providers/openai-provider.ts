@@ -180,6 +180,7 @@ async function askOpenAi(
     // five-minute write rate on the price card. Any request can incur it, so every one is held there.
     cacheWrite: true,
     cacheWriteTtl: '5m',
+    provider: 'openai',
     now: new Date(started),
   });
   if (held !== undefined && 'refused' in held) {

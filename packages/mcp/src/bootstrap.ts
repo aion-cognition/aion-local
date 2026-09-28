@@ -43,7 +43,7 @@ import {
   ReflectionWorker,
   runCheckedRecall,
   routingSummary,
-  unavailableReason,
+  routingWarnings,
   SessionManager,
   SessionNarrativeCloser,
   SqliteStore,
@@ -237,13 +237,8 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       { routing: router.routing.roles },
       `provider routing: ${routingSummary(router.routing)}`,
     );
-    for (const route of Object.values(router.routing.roles)) {
-      if (!route.available) {
-        logger.warn(
-          `${route.role} generation has nowhere to run (${unavailableReason(route)}): capture, ` +
-            'embedding and recall run, and that generation stays queued until the key is set',
-        );
-      }
+    for (const warning of routingWarnings(router.routing)) {
+      logger.warn(warning);
     }
     await reconcileModels(config, logger);
     // Deliberately not awaited: binding the port never waits on Ollama, and an early recall

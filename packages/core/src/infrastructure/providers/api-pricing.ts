@@ -1,4 +1,4 @@
-import type { ApiCall, ApiPricingTier } from './types.js';
+import type { ApiCall, ApiPricingTier, GenerationProvider } from './types.js';
 
 type TokenRates = {
   readonly input: number;
@@ -98,6 +98,27 @@ const UNLISTED_MODEL_PRICES: TokenPrices = {
 };
 
 /**
+ * The same bound for a model named on the OpenAI route, at the top of OpenAI's own published
+ * standard card, read 2026-09-27: o1-pro at $150 per million input tokens and $600 per million
+ * output tokens, with writes and reads at the card's 1.25x and 0.1x. The Anthropic figure above is
+ * under a quarter of that, so an unpriced OpenAI model held there could spend past the ceiling.
+ * Under the shipped daily ceiling this bound admits almost nothing, which is the honest answer
+ * for a model nobody has priced: add it to the table.
+ */
+const UNLISTED_OPENAI_MODEL_PRICES: TokenPrices = {
+  input: 150,
+  output: 600,
+  cacheCreation: 187.5,
+  cacheCreation1h: 187.5,
+  cacheRead: 15,
+};
+
+/** Whether the table carries this model, so a dispatch is priced rather than only bounded. */
+export function isPricedModel(model: string): boolean {
+  return API_PRICES.has(model);
+}
+
+/**
  * Unpriced models return undefined, never an invented zero-dollar estimate.
  *
  * `singleRequest` says the counts are one response's, which is the only reading a long-context
@@ -176,6 +197,8 @@ export type ApiCostBound = {
    * an hour-long write past a ceiling it cannot actually afford.
    */
   readonly cacheWriteTtl?: '5m' | '1h';
+  /** Whose card an unlisted model is bounded at. Absent reads as Anthropic's, the batch lane's. */
+  readonly provider?: GenerationProvider;
 };
 
 /**
@@ -197,7 +220,9 @@ export function boundApiCost(bound: ApiCostBound): {
   const price = API_PRICES.get(bound.model);
   // Judged on the bound's whole input, so a summed batch that passes a long-context threshold
   // holds at the long card: a bound errs high, and no batched model carries one today.
-  const card = ratesFor(price ?? UNLISTED_MODEL_PRICES, bound.inputTokens);
+  const unlisted =
+    bound.provider === 'openai' ? UNLISTED_OPENAI_MODEL_PRICES : UNLISTED_MODEL_PRICES;
+  const card = ratesFor(price ?? unlisted, bound.inputTokens);
   const writeRate = bound.cacheWriteTtl === '1h' ? card.cacheCreation1h : card.cacheCreation;
   const inputRate = bound.cacheWrite ? writeRate : card.input;
   return {

@@ -84,4 +84,15 @@ describe('generationRoute', () => {
     expect(generationRoute({}, undefined)).toBe('unknown');
     expect(generationRoute({}, '')).toBe('unknown');
   });
+  it('answers for the provider reflection is routed to, not for whichever key is set', () => {
+    expect(
+      generationRoute({ AION_OPENAI_API_KEY: 'sk-openai', AION_ANTHROPIC_API_KEY: '' }, undefined),
+    ).toBe('unknown');
+    expect(
+      generationRoute(
+        { AION_REFLECT_PROVIDER: 'openai', AION_OPENAI_API_KEY: 'sk-openai' },
+        undefined,
+      ),
+    ).toBe('keyed');
+  });
 });

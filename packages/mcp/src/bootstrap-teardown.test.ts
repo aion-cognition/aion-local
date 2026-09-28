@@ -124,6 +124,7 @@ vi.mock('@aion/core', async (importOriginal) => {
     introspectionOperations: () => [],
     unbackedPins: () => [],
     routingSummary: () => 'fake routing',
+    routingWarnings: () => [],
     modelAdvisor: () => ({}),
     bootstrapBackbone: async () => ({
       member: { id: 'member-1' },

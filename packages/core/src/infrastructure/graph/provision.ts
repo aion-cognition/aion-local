@@ -113,9 +113,13 @@ function versionSeries(version: string): string {
  * is read off the server when it will answer, because the one on this machine beats a path from
  * a manual: a Homebrew install, a tarball and a package install each keep it somewhere else.
  */
-export function gdsRemedyLines(pluginsDir: string | undefined): readonly string[] {
+export function gdsRemedyLines(
+  pluginsDir: string | undefined,
+  serverSeries: string = PINNED_GDS_SERIES,
+): readonly string[] {
   return [
-    `1. Download the graph-data-science jar for the ${PINNED_GDS_SERIES} series (the open-gds jar,`,
+    // The server's own series, because the plugin is built against the kernel it ships beside.
+    `1. Download the graph-data-science jar for the ${serverSeries} series (the open-gds jar,`,
     '   github.com/neo4j/graph-data-science/releases; neo4j.com/deployment-center is the other source).',
     `2. Put it in this server's plugins directory: ${pluginsDir ?? '$NEO4J_HOME/plugins'}`,
     '3. Add both lines to neo4j.conf. The first lets the procedures run unsandboxed, the second',
@@ -167,7 +171,7 @@ export async function readNeo4jPairing(driver: Driver, uri: string): Promise<Neo
     throw new Neo4jPairingError(
       `graph-data-science is not installed on the Neo4j at ${uri} (server ${serverVersion}). ` +
         'The substrate needs it: community detection and node similarity both run as gds procedures.',
-      gdsRemedyLines(await readPluginsDirectory(driver)),
+      gdsRemedyLines(await readPluginsDirectory(driver), versionSeries(serverVersion)),
       { cause: err },
     );
   }
@@ -218,7 +222,7 @@ export async function verifyNeo4jPairing(driver: Driver, uri: string): Promise<N
     throw new Neo4jPairingError(`${uri}: ${describePairing(pairing)}`, [
       `Install the graph-data-science release for the ${versionSeries(pairing.serverVersion)} series,`,
       "or a server on the plugin's series. The two move together by design.",
-      ...gdsRemedyLines(await readPluginsDirectory(driver)),
+      ...gdsRemedyLines(await readPluginsDirectory(driver), versionSeries(pairing.serverVersion)),
     ]);
   }
   return pairing;

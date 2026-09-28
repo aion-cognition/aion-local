@@ -227,6 +227,7 @@ export {
   remoteBannerLines,
   resolveProviderRouting,
   routingSummary,
+  routingWarnings,
   unavailableReason,
 } from './providers/routing.js';
 export { ProviderRouter } from './providers/role-provider.js';

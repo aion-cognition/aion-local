@@ -1,20 +1,37 @@
-import type { AssessmentReport, Degradation, RecallTurn } from '@aion/protocol';
+import type { AssessmentReport, Degradation } from '@aion/protocol';
 import { z } from 'zod';
 
+import {
+  assessmentPool,
+  buildAssessmentMessages,
+  candidateBudget,
+  type AssessmentPool,
+  type AssessmentQuery,
+  type PoolEntry,
+  type Population,
+} from './assessment-pool.js';
 import { capsFor } from './recall-policy.js';
-import { servable, type ServingAssembly } from './serving-assembly.js';
+import type { ServingAssembly } from './serving-assembly.js';
 import type { Config } from '../../infrastructure/config/schema.js';
-import { isAbortError } from '../../infrastructure/errors.js';
+import { isAbortError, roundMs } from '../../infrastructure/errors.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import { isGenerationUnavailable } from '../../infrastructure/providers/errors.js';
-import type { ChatMessage, JsonSchema, Provider } from '../../infrastructure/providers/types.js';
-import { RECALL_ASSESSMENT_PROMPT } from '../../prompts/recall-assessment.js';
+import type { JsonSchema, Provider } from '../../infrastructure/providers/types.js';
 import { describeMeasurement } from '../domain/admission.js';
 import type { FusedItem } from '../domain/fusion.js';
-import { kindOf, type BucketCaps } from '../domain/pack-buckets.js';
-import { renderCandidate, toPackItem } from '../domain/pack-item.js';
 import { MAX_ASSESSOR_NOTE_CHARS } from '../domain/pack-notes.js';
 import type { ResolvedEvidenceView } from '../domain/resolved-view.js';
+
+export {
+  assessmentPool,
+  buildAssessmentMessages,
+  candidateBudget,
+  MAX_CANDIDATE_CHARS,
+  type AssessmentPool,
+  type AssessmentQuery,
+  type PoolEntry,
+  type Population,
+} from './assessment-pool.js';
 
 /**
  * Recall's `assess` mode: after retrieval and the evidence reading, the recall model is shown what
@@ -28,13 +45,6 @@ import type { ResolvedEvidenceView } from '../domain/resolved-view.js';
  */
 
 export const RECALL_ASSESSMENT_SURFACE = 'recall_assessment';
-
-/**
- * The most of one memory's text the model is shown. The cut is marked with what it left out, so
- * a long episode reads as long rather than as short, and it keeps one transcript from spending
- * the call's input on itself alone.
- */
-export const MAX_CANDIDATE_CHARS = 800;
 
 /** The answer is a list of numbers and at most one short note. */
 const ASSESSMENT_MAX_TOKENS = 1024;
@@ -55,24 +65,6 @@ const AssessmentOutputSchema = z.object({
 });
 
 /** How a candidate reached the pool, which is also the pack bucket it serves in. */
-export type Population = 'found' | 'associated' | 'reminder';
-
-export type PoolEntry = { readonly item: FusedItem; readonly population: Population };
-
-export type AssessmentPool = {
-  /** What the model is shown, numbered from one in this order. */
-  readonly entries: readonly PoolEntry[];
-  /** Servable candidates the pack caps kept out of view. */
-  readonly omitted: number;
-};
-
-/** The call's inputs as the caller supplied them, already redacted. */
-export type AssessmentQuery = {
-  readonly query: string;
-  readonly summary?: string;
-  readonly recentTurns?: readonly RecallTurn[];
-};
-
 export type AssessmentOutcome =
   | {
       readonly kind: 'selected';
@@ -81,137 +73,6 @@ export type AssessmentOutcome =
       readonly note?: string;
     }
   | { readonly kind: 'failed'; readonly reason: Degradation['reason']; readonly error?: unknown };
-
-/**
- * How many candidates one call may be shown: every slot the pack has. It is the retrieval limit
- * the ranking path already serves under, so the model sees as many memories as a pack could hold
- * and no second capacity rule appears.
- */
-export function candidateBudget(caps: BucketCaps): number {
-  return Object.values(caps).reduce((sum, cap) => sum + cap, 0);
-}
-
-/**
- * What the model is shown, in the order it is shown. Retrieval's ranking decides only who fits:
- * the admitted candidates, then what the floors refused, each best first, then the associations
- * and the triggered reminders, which keep their own slots so a long list of direct finds never
- * crowds them out. A memory the pack would withhold anyway is left out rather than wasted on.
- */
-export function assessmentPool(input: {
-  readonly found: readonly FusedItem[];
-  readonly associated: readonly FusedItem[];
-  readonly reminders: readonly FusedItem[];
-  readonly serving: Pick<ServingAssembly, 'served' | 'dedup'>;
-  readonly view: ResolvedEvidenceView;
-  readonly caps: BucketCaps;
-}): AssessmentPool {
-  const seen = new Set<string>();
-  const unique = (items: readonly FusedItem[]): FusedItem[] =>
-    items.filter((item) => {
-      if (seen.has(item.id)) {
-        return false;
-      }
-      seen.add(item.id);
-      return true;
-    });
-  const found = unique(input.found);
-  const associated = unique(input.associated);
-  const reminders = unique(input.reminders);
-  const open = servable(
-    { ranked: [...found, ...associated, ...reminders], ...input.serving },
-    input.view,
-  );
-  const allowed = (item: FusedItem): boolean =>
-    open.selected.includes(item) &&
-    !open.suppressedOwn.has(item.id) &&
-    !open.suppressed.has(item.id);
-  const shownReminders = reminders.filter(allowed).slice(0, input.caps.intentions);
-  const shownAssociated = associated.filter(allowed).slice(0, input.caps.resonant);
-  const room = Math.max(
-    0,
-    candidateBudget(input.caps) - shownReminders.length - shownAssociated.length,
-  );
-  const allowedFound = found.filter(allowed);
-  const shownFound = allowedFound.slice(0, room);
-  const entries: PoolEntry[] = [
-    ...shownFound.map((item) => ({ item, population: 'found' as const })),
-    ...shownAssociated.map((item) => ({ item, population: 'associated' as const })),
-    ...shownReminders.map((item) => ({ item, population: 'reminder' as const })),
-  ];
-  const servableCount =
-    allowedFound.length + associated.filter(allowed).length + reminders.filter(allowed).length;
-  return { entries, omitted: servableCount - entries.length };
-}
-
-function excerpt(content: string): string {
-  if (content.length <= MAX_CANDIDATE_CHARS) {
-    return content;
-  }
-  const rest = content.length - MAX_CANDIDATE_CHARS;
-  return `${content.slice(0, MAX_CANDIDATE_CHARS)} [... ${String(rest)} more characters]`;
-}
-
-const SECTION_HEADINGS: Readonly<Record<Population, string>> = {
-  found: 'Candidates retrieval found for the query:',
-  associated: "Candidates associated with the situation rather than the query's words:",
-  reminder: 'Standing intentions this situation triggered:',
-};
-
-function candidateLines(pool: AssessmentPool, view: ResolvedEvidenceView): string {
-  const numbers = new Map(pool.entries.map((entry, index) => [entry.item.id, index + 1]));
-  const sections: string[] = [];
-  let current: Population | undefined;
-  let lines: string[] = [];
-  pool.entries.forEach((entry, index) => {
-    if (entry.population !== current) {
-      if (current !== undefined) {
-        sections.push([SECTION_HEADINGS[current], ...lines].join('\n'));
-      }
-      current = entry.population;
-      lines = [];
-    }
-    const { item } = entry;
-    const provenance = view.provenance.get(item.id);
-    const relatedClaim = view.relatedClaims.get(item.id);
-    const packItem = toPackItem({ ...item, content: excerpt(item.content) }, index + 1, {
-      ...(provenance === undefined ? {} : { provenance }),
-      ...(relatedClaim === undefined ? {} : { relatedClaim }),
-    });
-    lines.push(renderCandidate(packItem, kindOf(item.labels), (id) => numbers.get(id)));
-  });
-  if (current !== undefined) {
-    sections.push([SECTION_HEADINGS[current], ...lines].join('\n'));
-  }
-  if (pool.omitted > 0) {
-    sections.push(
-      `(${String(pool.omitted)} further candidate(s) retrieval found are not shown, for space.)`,
-    );
-  }
-  return sections.join('\n\n');
-}
-
-export function buildAssessmentMessages(
-  input: AssessmentQuery,
-  pool: AssessmentPool,
-  view: ResolvedEvidenceView,
-): ChatMessage[] {
-  const summary = input.summary?.trim();
-  const turns = input.recentTurns ?? [];
-  const sections = [
-    `Query:\n${input.query.trim()}`,
-    `Conversation summary:\n${summary === undefined || summary === '' ? '(none provided)' : summary}`,
-    `Recent turns:\n${
-      turns.length === 0
-        ? '(none provided)'
-        : turns.map((turn) => `${turn.role}: ${turn.text}`).join('\n')
-    }`,
-    candidateLines(pool, view),
-  ];
-  return [
-    { role: 'system', content: RECALL_ASSESSMENT_PROMPT },
-    { role: 'user', content: sections.join('\n\n') },
-  ];
-}
 
 /**
  * The model's numbers, as real candidate ids, in its order. A number that names no candidate is
@@ -328,6 +189,8 @@ export type AssessedServing = {
   readonly report: AssessmentReport;
   /** Ids the model was shown, which the recall's telemetry counts as offered. */
   readonly shown: readonly string[];
+  /** Ids the model chose, which the pack serves; empty for a failed call. */
+  readonly chosen: readonly string[];
   /** Every candidate the pack may hold, for the effects that record what it served. */
   readonly candidates: ReadonlyMap<string, FusedItem>;
   readonly degradation?: Degradation;
@@ -369,6 +232,7 @@ export function assessedServing(input: {
       },
       report,
       shown,
+      chosen: [],
       candidates: input.candidates,
       degradation,
     };
@@ -392,13 +256,13 @@ export function assessedServing(input: {
     ...(outcome.note === undefined ? {} : { note: outcome.note.slice(0, MAX_ASSESSOR_NOTE_CHARS) }),
   };
   const candidates = new Map(input.candidates);
-  for (const entry of chosen) {
-    candidates.set(entry.item.id, entry.item);
+  for (const item of [...chosen.map((entry) => entry.item), ...pool.withheld]) {
+    candidates.set(item.id, item);
   }
   return {
     assembly: {
       ...ranking,
-      ranked: chosen.map((entry) => entry.item),
+      ranked: [...chosen.map((entry) => entry.item), ...pool.withheld],
       assembly: {
         ...ranking.assembly,
         items: of('found'),
@@ -411,16 +275,18 @@ export function assessedServing(input: {
     },
     report,
     shown,
+    chosen: chosen.map((entry) => entry.item.id),
     candidates,
   };
 }
 
-/**
- * The assessment for one recall: the pool, then the call. Everything it reads was already read by
- * the stages before it, so the only new cost is the model call itself.
- */
+/** One recall's assessment: what the model was shown and what it answered. */
 export type AssessmentRun = { readonly pool: AssessmentPool; readonly outcome: AssessmentOutcome };
 
+/**
+ * The `assess` mode's model call, timed, or nothing in the other two modes. The pool is built
+ * here and the call made; everything it reads was read by the stages before it.
+ */
 export async function runAssessment(
   deps: Pick<AssessmentDeps, 'provider' | 'logger'> & { readonly config: Config },
   input: {
@@ -430,22 +296,35 @@ export async function runAssessment(
     readonly reminders: readonly FusedItem[];
     readonly serving: Pick<ServingAssembly, 'served' | 'dedup'>;
     readonly view: ResolvedEvidenceView;
+    readonly unreached: number;
   },
-): Promise<AssessmentRun> {
+): Promise<{ readonly run: AssessmentRun; readonly ms: number } | undefined> {
+  if (deps.config.recall.mode !== 'assess') {
+    return undefined;
+  }
+  const started = performance.now();
   const pool = assessmentPool({ ...input, caps: capsFor(deps.config) });
   const call = { ...deps, budgetMs: deps.config.recall.cueBudgetMs };
-  return { pool, outcome: await assessCandidates(call, input.query, pool, input.view) };
+  const outcome = await assessCandidates(call, input.query, pool, input.view);
+  return { run: { pool, outcome }, ms: roundMs(performance.now() - started) };
 }
 
-/** The floors' refusals the assessment may be shown: none outside the `assess` mode. */
+/**
+ * The floors' refusals the assessment may be shown, and how many more it may not: none outside the
+ * `assess` mode. One the run already holds another way (a triggered intention, say) is left to
+ * that way, so it keeps its own bucket and rationale.
+ */
 export function assessmentReach(
   config: Config,
   refused: readonly FusedItem[],
-): readonly FusedItem[] {
+  held: ReadonlyMap<string, FusedItem>,
+): { readonly items: readonly FusedItem[]; readonly beyond: number } {
   if (config.recall.mode !== 'assess') {
-    return [];
+    return { items: [], beyond: 0 };
   }
-  return refused.slice(0, candidateBudget(capsFor(config)));
+  const open = refused.filter((item) => !held.has(item.id));
+  const items = open.slice(0, candidateBudget(capsFor(config)));
+  return { items, beyond: open.length - items.length };
 }
 
 /** What a finished run serves, over the ranking assembly the path built anyway. */
@@ -478,11 +357,15 @@ export function withoutAssessment(
   if (assessed.report.outcome !== 'selected') {
     return assessed.assembly;
   }
-  return {
-    ...ranking,
-    assembly: {
-      ...ranking.assembly,
-      assessment: { ...assessed.report, outcome: 'discarded', selected: 0 },
-    },
+  // The note and the unknown count describe a selection that is not served, so they go with it.
+  const { report } = assessed;
+  const discarded: AssessmentReport = {
+    outcome: 'discarded',
+    shown: report.shown,
+    omitted: report.omitted,
+    selected: 0,
+    ...(report.provider === undefined ? {} : { provider: report.provider }),
+    ...(report.model === undefined ? {} : { model: report.model }),
   };
+  return { ...ranking, assembly: { ...ranking.assembly, assessment: discarded } };
 }

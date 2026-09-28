@@ -11,18 +11,21 @@ import { dirname, join } from 'node:path';
  * the substrate is local-first, the key is optional spend, and local reflection measured 18.5s a
  * call. Hooks are route-agnostic now.
  *
- * There is no configuration in which no route exists, and that is the routing rule rather than an
- * assumption made here: a role pinned to Anthropic with no key resolves to the local model, which
- * `aion status` and `aion doctor` both report. So this answers which route a fire feeds and never
- * refuses on it. What a fire still fails open on is the service not answering, which is a fact
- * about a running process rather than about configuration.
+ * A capture feeds reflection, so the answer is about the provider `AION_REFLECT_PROVIDER` names
+ * and the key that provider reads. With no key there, reflection has nowhere to run and its work
+ * queues, which `aion status` and `aion doctor` both report; `local` is that answer. Either way
+ * this never refuses a fire: what a fire still fails open on is the service not answering, which
+ * is a fact about a running process rather than about configuration.
  *
- * `unknown` stays a real answer: a `.env` this cannot read says nothing, and the local route is
- * the safe reading of nothing.
+ * `unknown` stays a real answer: a `.env` this cannot read says nothing.
  */
 
-/** Either remote provider's key; which one a role uses is the routing knobs' business. */
-const KEY_ENV_VARS = ['AION_ANTHROPIC_API_KEY', 'AION_OPENAI_API_KEY'] as const;
+/** The key each remote provider reads, and the knob that routes the background role to one. */
+const KEY_ENV_VARS = {
+  anthropic: 'AION_ANTHROPIC_API_KEY',
+  openai: 'AION_OPENAI_API_KEY',
+} as const;
+const REFLECT_PROVIDER_ENV_VAR = 'AION_REFLECT_PROVIDER';
 
 const ENV_FILE_NAME = '.env';
 
@@ -79,16 +82,25 @@ export function generationRoute(
   env: NodeJS.ProcessEnv,
   scriptPath: string | undefined,
 ): GenerationRoute {
-  if (KEY_ENV_VARS.some((name) => (env[name] ?? '').trim() !== '')) {
+  const envFile =
+    scriptPath === undefined || scriptPath === ''
+      ? undefined
+      : join(repoRootOf(scriptPath), ENV_FILE_NAME);
+  // What a capture feeds is reflection, so the answer is about the key its provider reads: a key
+  // for the other provider leaves reflection with nowhere to run.
+  const named =
+    env[REFLECT_PROVIDER_ENV_VAR] ??
+    (envFile === undefined ? undefined : envFileValue(envFile, REFLECT_PROVIDER_ENV_VAR));
+  const keyVar = KEY_ENV_VARS[named?.trim() === 'openai' ? 'openai' : 'anthropic'];
+  if ((env[keyVar] ?? '').trim() !== '') {
     return 'keyed';
   }
-  if (scriptPath === undefined || scriptPath === '') {
+  if (envFile === undefined) {
     return 'unknown';
   }
-  const envFile = join(repoRootOf(scriptPath), ENV_FILE_NAME);
-  const recorded = KEY_ENV_VARS.map((name) => envFileValue(envFile, name));
-  if (recorded.every((value) => value === undefined)) {
+  const recorded = envFileValue(envFile, keyVar);
+  if (recorded === undefined) {
     return 'unknown';
   }
-  return recorded.some((value) => (value ?? '').trim() !== '') ? 'keyed' : 'local';
+  return recorded.trim() === '' ? 'local' : 'keyed';
 }

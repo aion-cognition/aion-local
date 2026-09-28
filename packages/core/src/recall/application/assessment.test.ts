@@ -7,6 +7,8 @@ import {
   assessCandidates,
   assessedServing,
   assessmentPool,
+  assessmentReach,
+  candidateBudget,
   buildAssessmentMessages,
   readSelection,
   RECALL_ASSESSMENT_SURFACE,
@@ -16,7 +18,9 @@ import { runCheckedRecall, type CheckedRecallDeps } from './checked-recall.js';
 import { CueCache } from './cues.js';
 import type { ReadCoordinator } from './read-completion.js';
 import type { RecallCompletion } from './recall-observers.js';
+import { capsFor } from './recall-policy.js';
 import type { ServingAssembly } from './serving-assembly.js';
+import { servedReading } from './serving-effects.js';
 import * as stageReads from './stage-reads.js';
 import { EvidenceResolver } from '../../evidence/application/resolver.js';
 import { OWNERSHIP_SCOPES } from '../../evidence/domain/ownership.js';
@@ -331,6 +335,58 @@ describe('what gets served for an outcome', () => {
   });
 });
 
+describe('the floor refusals the assessment reaches', () => {
+  const assess = { ...DEFAULTS, recall: { ...DEFAULTS.recall, mode: 'assess' as const } };
+
+  it('leaves one the run holds another way to that way, and counts what it cannot reach', () => {
+    const refused = Array.from({ length: 60 }, (_, n) => item(`r${String(n)}`));
+    const held = new Map([['r0', item('r0')]]);
+
+    const reach = assessmentReach(assess, refused, held);
+
+    const budget = candidateBudget(capsFor(assess));
+    expect(reach.items.map((entry) => entry.id)).not.toContain('r0');
+    expect(reach.items).toHaveLength(budget);
+    expect(reach.beyond).toBe(59 - budget);
+    const cues = { ...DEFAULTS, recall: { ...DEFAULTS.recall, mode: 'cues' as const } };
+    expect(assessmentReach(cues, refused, held)).toEqual({ items: [], beyond: 0 });
+  });
+
+  it('counts refusals past its reach as omitted from view', () => {
+    const shown = assessmentPool({
+      found: [item('a')],
+      associated: [],
+      reminders: [],
+      serving: { served: new Map(), dedup: true },
+      view: EMPTY_VIEW,
+      caps: CAPS,
+      unreached: 7,
+    });
+
+    expect(shown.omitted).toBe(7);
+  });
+
+  it('leaves gaps about refusals the pack does not serve out of the coverage reading', () => {
+    const issue = (id: string) =>
+      ({
+        address: { kind: 'id', id },
+        field: 'ownership',
+        reason: 'unverified_scope',
+        required: true,
+      }) as const;
+    const view: ResolvedEvidenceView = {
+      ...EMPTY_VIEW,
+      issues: [issue('admitted'), issue('chosen'), issue('passed-over')],
+    };
+
+    const read = servedReading(view, [item('chosen'), item('passed-over')], ['chosen']);
+
+    expect(
+      read.issues.map((entry) => (entry.address.kind === 'id' ? entry.address.id : '')),
+    ).toEqual(['admitted', 'chosen']);
+  });
+});
+
 /**
  * The default mode end to end through the covered entry point, over a real store and a stubbed
  * coordinator, with fusion's answer pinned so the candidates are known.
@@ -528,6 +584,19 @@ describe('recall in the assess mode', () => {
     expect([...readServedItems(store.db, IDENTITY).keys()]).toEqual(['under-floor']);
   });
 
+  it('keeps what the session already holds out of view, and still says it withheld it', async () => {
+    await recall(() => Promise.resolve({ selected: [1, 2] }));
+
+    const second = await recall(() => Promise.resolve({ selected: [] }));
+
+    const shown = second.requests[0]?.messages[1]?.content ?? '';
+    expect(shown).not.toContain('admitted memory top');
+    expect(shown).toContain('we chose Valkey');
+    expect(second.pack.metadata.suppressed_repeats).toBe(2);
+    expect(second.pack.rendered_text).toContain('2 items already served this session');
+    expect([...readServedItems(store.db, IDENTITY).keys()].sort()).toEqual(['second', 'top']);
+  });
+
   it('keeps the model order across the pack', async () => {
     const { pack } = await recall(() => Promise.resolve({ selected: [3, 2] }));
 
@@ -561,9 +630,13 @@ describe('recall in the assess mode', () => {
   it('drops a selection whose evidence moved before it was recorded, and serves the ranking', async () => {
     declineWith = 'pending_publication';
 
-    const { pack, effects } = await recall(() => Promise.resolve({ selected: [3] }));
+    const { pack, effects } = await recall(() =>
+      Promise.resolve({ selected: [3], note: 'only the licence decision helps' }),
+    );
 
     expect(effects).toBe('withheld');
+    expect(pack.metadata.assessment?.note).toBeUndefined();
+    expect(pack.rendered_text).not.toContain('assessment says');
     expect([...emittedPackIds(pack)]).toEqual(['top', 'second']);
     expect(pack.metadata.assessment).toMatchObject({ outcome: 'discarded', selected: 0 });
     expect([...(completions[0]?.emitted ?? [])]).toEqual(['top', 'second']);
