@@ -99,14 +99,16 @@ Claude Code harness hooks. The hooks turn the agent's judgment call about when t
 a fixed cadence: recall at session start and on a substantial prompt, capture on compaction,
 stop, subagent stop, and session end.
 
-- `aion init local` provisions the substrate without a key. Capture, embedding and recall run;
-  generation queues.
-- `aion init full` asks for an Anthropic key, records it in `.env`, and generation runs.
+- `aion init local` provisions the substrate without asking for a key. Capture, embedding and
+  recall run; generation queues until the selected provider has one.
+- `aion init full` asks for the key of the provider `AION_GENERATION_PROVIDER` selects
+  (`anthropic` when unset, or `openai`), records it in `.env`, and generation runs.
 
 Hooks belong to both: they fire on every install, and a capture with no key is stored and queued
 rather than refused. To add a key to an existing install, put it in `.env` as
-`AION_ANTHROPIC_API_KEY=...` and rerun `./bin/aion init`; the service restarts with it and the
-queued work drains. Removing it and rerunning init puts generation back in the queue.
+`AION_ANTHROPIC_API_KEY=...`, or `AION_OPENAI_API_KEY=...` under `AION_GENERATION_PROVIDER=openai`,
+and rerun `./bin/aion init`; the service restarts with it and the queued work drains. Removing it
+and rerunning init puts generation back in the queue.
 
 `aion hooks install | uninstall | status` does the hook half on its own. `--harness codex`
 points the same commands at `$CODEX_HOME/hooks.json` and the aion server block in the

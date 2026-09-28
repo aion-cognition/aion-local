@@ -349,7 +349,10 @@ export function statusHooks(options: HooksCommandOptions, write: Writer): number
   return 0;
 }
 
-/** `aion init full` installs the same way `aion hooks install` does, with the full profile. */
+/**
+ * `aion init local` and `aion init full` both install the same way `aion hooks install` does,
+ * with the full hooks profile.
+ */
 export function installFullProfile(write: Writer): number {
   return installHooks(defaultHooksOptions({ ...DEFAULT_HOOKS_FLAGS, profile: 'full' }), write);
 }

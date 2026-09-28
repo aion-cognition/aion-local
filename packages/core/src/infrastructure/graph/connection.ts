@@ -286,6 +286,20 @@ export class GraphConnection {
     }
   }
 
+  /**
+   * One `health()` on a driver of its own, closed before the answer returns. A caller asking only
+   * whether the server answers has no use for the driver afterwards, and an open one keeps the
+   * event loop alive: the command that probed prints its last line and never exits.
+   */
+  static async probe(endpoint: Neo4jEndpoint): Promise<GraphHealth> {
+    const connection = new GraphConnection(endpoint);
+    try {
+      return await connection.health();
+    } finally {
+      await connection.close();
+    }
+  }
+
   async close(): Promise<void> {
     await this.#driver.close();
   }

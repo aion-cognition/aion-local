@@ -50,26 +50,22 @@ import {
 } from './native-install.js';
 import { stdoutWriter, type Writer } from './output.js';
 import { envFilePath, envTemplatePath, resolveRepoDir } from './paths.js';
+import { fullProfileKey, keyNoticeLines, resolveProviderKey } from './provider-key.js';
 import { renderRegistration } from './registration.js';
 import { withSubstrate } from './substrate.js';
-
-export const ANTHROPIC_KEY_ENV_VAR = 'AION_ANTHROPIC_API_KEY';
 
 /** Neo4j's first boot downloads and installs the GDS plugin, which outlasts the 60s default. */
 const NEO4J_READY_TIMEOUT_MS = 180_000;
 
-const MISSING_ANTHROPIC_KEY =
-  `the full profile routes generation to Anthropic and needs ${ANTHROPIC_KEY_ENV_VAR}. ` +
-  'Set it in the environment or .env, or run `aion init full` from a terminal.';
-
 /**
- * `local` is the substrate on its own: Ollama for every generation role. `full` adds an Anthropic
- * key, which routes generation there and is optional spend rather than a capability.
+ * `local` is the substrate on its own and asks for no key: capture, embedding and recall run, and
+ * generation queues until the provider `AION_GENERATION_PROVIDER` selects has one. `full` settles
+ * that provider's key and records it. Neither generates locally, since Ollama only embeds.
  *
  * Both install the Claude Code hooks, which make the recall and reflection cadence a schedule
  * rather than a judgment call. They used to be the keyed profile's alone, because the local model
- * of that build could not keep up with a capture every turn; it can, and a capture is worth
- * storing on either route.
+ * of that build could not keep up with a capture every turn. There is no local model now, and a
+ * capture with no key is stored and queued rather than lost.
  *
  * This is the generation profile; `--install` is the install profile, which is what the substrate
  * runs on, docker or native. Two different questions, and the second one is a flag because it is
@@ -142,34 +138,6 @@ export async function resolveInitProfile(input: InitProfileInput): Promise<InitP
   }
   const answer = (await input.ask('Profile, local or full [local]: ')).trim().toLowerCase();
   return answer === 'full' ? 'full' : 'local';
-}
-
-export type AnthropicKeyInput = {
-  readonly configured: string;
-  readonly fromEnvFile: string | undefined;
-  readonly assumeYes: boolean;
-  readonly interactive: boolean;
-  readonly ask: (question: string) => Promise<string>;
-};
-
-/**
- * The key `aion init full` settles. It is asked for because `full` is the profile that routes
- * generation to Anthropic, and a profile that names a provider with no credential for it is a
- * request nobody can serve. Every other install needs no key for anything, hooks included.
- */
-export async function resolveAnthropicKey(input: AnthropicKeyInput): Promise<string> {
-  const existing = (input.configured === '' ? (input.fromEnvFile ?? '') : input.configured).trim();
-  if (existing !== '') {
-    return existing;
-  }
-  if (input.assumeYes || !input.interactive) {
-    throw new CliUsageError(MISSING_ANTHROPIC_KEY);
-  }
-  const answer = (await input.ask('Anthropic API key: ')).trim();
-  if (answer === '') {
-    throw new CliUsageError(MISSING_ANTHROPIC_KEY);
-  }
-  return answer;
 }
 
 async function askOnTerminal(question: string): Promise<string> {
@@ -396,9 +364,8 @@ async function initialize(
 }
 
 /**
- * The key is settled before the substrate comes up, not after. Provisioning reads routing to
- * decide which local models are worth pulling, and the MCP service it starts reads `.env`
- * once at boot, so a key written afterwards would leave both on the local path until the next
+ * The key is settled before the substrate comes up, not after. The MCP service init starts reads
+ * `.env` once at boot, so a key written afterwards would leave generation queued until the next
  * restart.
  */
 async function prepareFullProfile(
@@ -412,19 +379,21 @@ async function prepareFullProfile(
   // template copy inside ensureNeo4jPassword would never fire; seed it here first so a
   // fresh install's .env carries the full documented surface, not just what init wrote.
   seedEnvFromTemplate(envPath, envTemplatePath(repoDir));
-  const key = await resolveAnthropicKey({
-    configured: config.anthropic.apiKey,
-    fromEnvFile: envFileValue(envPath, ANTHROPIC_KEY_ENV_VAR),
+  const { provider, envVar, configured } = fullProfileKey(config);
+  const key = await resolveProviderKey({
+    provider,
+    configured,
+    fromEnvFile: envFileValue(envPath, envVar),
     assumeYes: flags.assumeYes,
     interactive: process.stdin.isTTY,
     ask: askOnTerminal,
   });
-  if (key === config.anthropic.apiKey) {
+  if (key === configured) {
     return config;
   }
-  upsertEnvValue(envPath, ANTHROPIC_KEY_ENV_VAR, key);
-  process.env[ANTHROPIC_KEY_ENV_VAR] = key;
-  write(`anthropic key recorded in ${envPath}`);
+  upsertEnvValue(envPath, envVar, key);
+  process.env[envVar] = key;
+  write(`${envVar} recorded in ${envPath}`);
   return loadConfig(process.env);
 }
 
@@ -462,14 +431,12 @@ export function runInit(
       await initialize(resolved, flags, profile, write, logger);
 
       write('');
-      // Every profile, because hooks are route-agnostic: they capture a turn and hand it to
-      // whichever generation route this install resolved, and the local one is a route. The
-      // generation profile decides where that digest runs and what it costs, not whether the
-      // substrate is allowed to remember.
+      // Every profile, because hooks are route-agnostic: they capture a turn and hand it to the
+      // queue, which drains on the selected provider once it has a key. The generation profile
+      // decides whether init settles that key, not whether the substrate is allowed to remember.
       installFullProfile(write);
-      if (profile !== 'full') {
-        write('Hooks run on the local route. `aion init full` adds a key and routes them to');
-        write('Anthropic instead; see docs/harness.md.');
+      for (const line of keyNoticeLines(resolved)) {
+        write(line);
       }
       write('\naion init: ready');
       return 0;

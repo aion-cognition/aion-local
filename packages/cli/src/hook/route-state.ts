@@ -32,7 +32,7 @@ const ENV_FILE_NAME = '.env';
 /** `<repo>/packages/cli/dist/hook-main.js` is where the harness invokes this from. */
 const SCRIPT_DEPTH = 4;
 
-/** `keyed` routes generation to a remote provider per the routing knobs; `local` is the Ollama route. */
+/** `keyed`: the selected provider has its key. `local`: it has none, so reflection work queues. */
 export type GenerationRoute = 'keyed' | 'local' | 'unknown';
 
 /** One pair of matching quotes wraps a value. Anything else, mismatched ends included, is literal. */

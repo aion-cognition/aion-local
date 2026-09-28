@@ -1,12 +1,27 @@
+import { DEFAULTS, loadConfig, type Config, type GenerationProvider } from '@aion/core';
 import { describe, expect, it } from 'vitest';
 
-import { parseInitFlags, resolveAnthropicKey, resolveInitProfile } from './init.js';
+import { parseInitFlags, resolveInitProfile } from './init.js';
 import { resolveMemberName } from './member-name.js';
+import { fullProfileKey, keyNoticeLines, resolveProviderKey } from './provider-key.js';
 import { registrationCommand, registrationJson } from './registration.js';
 
 const never = async (): Promise<string> => {
   throw new Error('prompt must not run');
 };
+
+/** Each key set or left empty on its own, so a test can give a key to the provider not selected. */
+function keyed(
+  provider: GenerationProvider,
+  keys: { anthropic?: string; openai?: string },
+): Config {
+  return {
+    ...DEFAULTS,
+    generation: { ...DEFAULTS.generation, provider },
+    anthropic: { ...DEFAULTS.anthropic, apiKey: keys.anthropic ?? '' },
+    openai: { ...DEFAULTS.openai, apiKey: keys.openai ?? '' },
+  };
+}
 
 describe('parseInitFlags', () => {
   it('defaults to interactive confirmation', () => {
@@ -108,10 +123,34 @@ describe('resolveInitProfile', () => {
   });
 });
 
-describe('resolveAnthropicKey', () => {
+describe('fullProfileKey', () => {
+  it('settles the Anthropic key when nothing selects a provider', () => {
+    expect(fullProfileKey(loadConfig({ AION_ANTHROPIC_API_KEY: 'sk-ant' }))).toEqual({
+      provider: 'anthropic',
+      envVar: 'AION_ANTHROPIC_API_KEY',
+      configured: 'sk-ant',
+    });
+  });
+
+  it("settles the selected provider's key and never reads the other one", () => {
+    expect(fullProfileKey(keyed('openai', { anthropic: 'sk-ant' }))).toEqual({
+      provider: 'openai',
+      envVar: 'AION_OPENAI_API_KEY',
+      configured: '',
+    });
+    expect(fullProfileKey(keyed('anthropic', { openai: 'sk-oai' }))).toEqual({
+      provider: 'anthropic',
+      envVar: 'AION_ANTHROPIC_API_KEY',
+      configured: '',
+    });
+  });
+});
+
+describe('resolveProviderKey', () => {
   it('prefers the configured key, then the one already in .env', async () => {
     await expect(
-      resolveAnthropicKey({
+      resolveProviderKey({
+        provider: 'openai',
         configured: 'sk-configured',
         fromEnvFile: 'sk-file',
         assumeYes: false,
@@ -120,7 +159,8 @@ describe('resolveAnthropicKey', () => {
       }),
     ).resolves.toBe('sk-configured');
     await expect(
-      resolveAnthropicKey({
+      resolveProviderKey({
+        provider: 'openai',
         configured: '',
         fromEnvFile: 'sk-file',
         assumeYes: false,
@@ -130,37 +170,89 @@ describe('resolveAnthropicKey', () => {
     ).resolves.toBe('sk-file');
   });
 
-  it('asks for a missing key on a terminal', async () => {
-    await expect(
-      resolveAnthropicKey({
-        configured: '',
-        fromEnvFile: undefined,
-        assumeYes: false,
-        interactive: true,
-        ask: async () => '  sk-typed ',
-      }),
-    ).resolves.toBe('sk-typed');
+  it('asks for a missing key on a terminal, naming the provider and its variable', async () => {
+    const questions: string[] = [];
+    const ask = async (question: string): Promise<string> => {
+      questions.push(question);
+      return '  sk-typed ';
+    };
+    for (const provider of ['anthropic', 'openai'] as const) {
+      await expect(
+        resolveProviderKey({
+          provider,
+          configured: '',
+          fromEnvFile: undefined,
+          assumeYes: false,
+          interactive: true,
+          ask,
+        }),
+      ).resolves.toBe('sk-typed');
+    }
+    expect(questions).toEqual([
+      'anthropic API key (AION_ANTHROPIC_API_KEY): ',
+      'openai API key (AION_OPENAI_API_KEY): ',
+    ]);
   });
 
-  it('fails by name under --yes and with no terminal to ask on', async () => {
+  it('fails naming the selected provider and its variable under --yes', async () => {
     await expect(
-      resolveAnthropicKey({
+      resolveProviderKey({
+        provider: 'openai',
         configured: '',
         fromEnvFile: undefined,
         assumeYes: true,
         interactive: true,
         ask: never,
       }),
-    ).rejects.toThrow(/needs AION_ANTHROPIC_API_KEY/);
+    ).rejects.toThrow(
+      'the full profile needs AION_OPENAI_API_KEY for AION_GENERATION_PROVIDER=openai.',
+    );
     await expect(
-      resolveAnthropicKey({
+      resolveProviderKey({
+        provider: 'anthropic',
+        configured: '',
+        fromEnvFile: undefined,
+        assumeYes: false,
+        interactive: false,
+        ask: never,
+      }),
+    ).rejects.toThrow(
+      'the full profile needs AION_ANTHROPIC_API_KEY for AION_GENERATION_PROVIDER=anthropic.',
+    );
+  });
+
+  it('fails the same way when the terminal answer is empty', async () => {
+    await expect(
+      resolveProviderKey({
+        provider: 'openai',
         configured: '',
         fromEnvFile: undefined,
         assumeYes: false,
         interactive: true,
         ask: async () => '',
       }),
-    ).rejects.toThrow(/needs AION_ANTHROPIC_API_KEY/);
+    ).rejects.toThrow(/needs AION_OPENAI_API_KEY for AION_GENERATION_PROVIDER=openai/);
+  });
+});
+
+describe('keyNoticeLines', () => {
+  it('says nothing about keys when the selected provider has one', () => {
+    expect(keyNoticeLines(keyed('openai', { openai: 'sk-oai' }))).toEqual([]);
+    expect(keyNoticeLines(keyed('anthropic', { anthropic: 'sk-ant' }))).toEqual([]);
+  });
+
+  it('names the variable the selection needs, and that generation waits for it', () => {
+    // The Anthropic key is set and does not count: only the selected provider's key does.
+    const text = keyNoticeLines(keyed('openai', { anthropic: 'sk-ant' })).join(' ');
+    expect(text).toContain('AION_GENERATION_PROVIDER=openai needs AION_OPENAI_API_KEY');
+    expect(text).toContain('Generation waits for a key');
+    expect(text).toContain('`aion init full` records it');
+    expect(text).not.toMatch(/local route|Anthropic/);
+  });
+
+  it('reads an unset selector as Anthropic', () => {
+    const text = keyNoticeLines(loadConfig({})).join(' ');
+    expect(text).toContain('AION_GENERATION_PROVIDER=anthropic needs AION_ANTHROPIC_API_KEY');
   });
 });
 

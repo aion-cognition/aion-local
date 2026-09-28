@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { GraphConnection } from './connection.js';
 
-const driverFactory = vi.fn((..._args: unknown[]) => ({ close: vi.fn() }));
+const driverFactory = vi.fn((..._args: unknown[]): Record<string, unknown> => ({ close: vi.fn() }));
 
 vi.mock('neo4j-driver', () => ({
   default: {
@@ -42,5 +42,44 @@ describe('the driver timeouts a tool call inherits', () => {
 
     const options = driverFactory.mock.calls[0]?.[2] as Record<string, number>;
     expect(options.connectionAcquisitionTimeout).toBeGreaterThan(options.connectionTimeout ?? 0);
+  });
+});
+
+/**
+ * A driver left open keeps the event loop alive, so a command that probes and then returns
+ * prints its last line and never exits. The probe owns its driver and closes it on both answers.
+ */
+describe('a one-shot probe', () => {
+  const endpoint = { uri: 'bolt://127.0.0.1:7687', password: 'secret' };
+
+  it('closes its driver after a server that answers', async () => {
+    const close = vi.fn(async () => undefined);
+    driverFactory.mockImplementationOnce(() => ({
+      getServerInfo: async () => ({
+        address: '127.0.0.1:7687',
+        protocolVersion: 5.8,
+        agent: 'Neo4j/2026.01.0',
+      }),
+      close,
+    }));
+
+    await expect(GraphConnection.probe(endpoint)).resolves.toMatchObject({ reachable: true });
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes its driver after a server that refuses, and still returns the refusal', async () => {
+    const close = vi.fn(async () => undefined);
+    driverFactory.mockImplementationOnce(() => ({
+      getServerInfo: async () => {
+        throw new Error('The client is unauthorized due to authentication failure.');
+      },
+      close,
+    }));
+
+    await expect(GraphConnection.probe(endpoint)).resolves.toEqual({
+      reachable: false,
+      error: 'The client is unauthorized due to authentication failure.',
+    });
+    expect(close).toHaveBeenCalledTimes(1);
   });
 });

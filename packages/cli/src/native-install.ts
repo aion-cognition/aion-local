@@ -140,7 +140,7 @@ export async function provisionNativeGraph(
 ): Promise<NativeGraphRecord | undefined> {
   const { uri } = config.neo4j;
   write(`neo4j at ${uri}`);
-  const probe = await new GraphConnection({ uri, password }).health();
+  const probe = await GraphConnection.probe({ uri, password });
   if (probe.reachable) {
     write('  already running');
     await readPairing(uri, password, write);

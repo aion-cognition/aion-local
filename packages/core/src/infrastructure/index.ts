@@ -221,9 +221,10 @@ export {
 
 export type { EdgeWeightDistribution } from './graph/edge-weight-distribution.js';
 
-export type { Embedder, Provider } from './providers/types.js';
+export type { Embedder, GenerationProvider, Provider } from './providers/types.js';
 export { embedQueryPrefix } from './providers/embed-models.js';
 export {
+  PROVIDER_KEY_ENV_VARS,
   remoteBannerLines,
   resolveProviderRouting,
   routingSummary,
