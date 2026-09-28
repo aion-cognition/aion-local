@@ -77,7 +77,10 @@ export function jsonSpans(text: string): readonly JsonSpan[] {
  * shape, and taking the first value hands the caller the draft the model itself rejected, which
  * is where the invalid enum values come from. The last complete value is the one it settled on.
  */
-export function parseJsonPayload(text: string): unknown {
+export function parseJsonPayload(
+  text: string,
+  unreadable: (detail: string) => Error = (detail) => new AnthropicResponseError(detail),
+): unknown {
   const trimmed = text.trim();
   const fenced = FENCED_JSON.exec(trimmed);
   try {
@@ -94,5 +97,5 @@ export function parseJsonPayload(text: string): unknown {
     }
   }
 
-  throw new AnthropicResponseError('carried no complete JSON value');
+  throw unreadable('carried no complete JSON value');
 }

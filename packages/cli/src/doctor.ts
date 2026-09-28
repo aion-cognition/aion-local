@@ -11,6 +11,8 @@ import {
   readVectorIndexes,
   reconcileEnrichment,
   resolveProviderRouting,
+  routingSummary,
+  unavailableReason,
   scanRedactionResidue,
   type Config,
   type GraphConnection,
@@ -252,9 +254,13 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
         }
 
         const routing = resolveProviderRouting(config);
-        const generation = routing.keyPresent
-          ? `generation on anthropic (${routing.roles.reflect.model})`
-          : 'generation queued: no AION_ANTHROPIC_API_KEY set';
+        const waiting = Object.values(routing.roles)
+          .filter((route) => !route.available)
+          .map(unavailableReason);
+        const generation =
+          waiting.length === 0
+            ? `generation ${routingSummary(routing)}`
+            : `generation queued (${[...new Set(waiting)].join('; ')}): ${routingSummary(routing)}`;
         return {
           ok: true,
           detail: `${config.models.embed} → ${vector.length} dimensions, ${generation}`,

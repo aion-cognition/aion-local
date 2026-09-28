@@ -9,10 +9,16 @@ import { applyEnvDefaults } from '../env-file.js';
  * a setup file, before any test module is imported, so a battery that reads the key at module
  * scope sees the loaded value.
  *
- * Two keys and no more. The throwaway Neo4j containers carry credentials of their own, and a
- * setting sitting in the file would change a run without saying so. An exported value wins over
- * the file.
+ * Each remote route's key and model, and no more. The throwaway Neo4j containers carry
+ * credentials of their own, and a setting sitting in the file would change a run without saying
+ * so: which route a battery measures (`AION_REFLECT_PROVIDER`) is exported by the person running
+ * it, never read from here. An exported value wins over the file.
  */
 const REPO_ROOT = fileURLToPath(new URL('../../../../../../', import.meta.url));
 
-applyEnvDefaults(join(REPO_ROOT, '.env'), ['AION_ANTHROPIC_API_KEY', 'AION_ANTHROPIC_MODEL']);
+applyEnvDefaults(join(REPO_ROOT, '.env'), [
+  'AION_ANTHROPIC_API_KEY',
+  'AION_ANTHROPIC_MODEL',
+  'AION_OPENAI_API_KEY',
+  'AION_OPENAI_MODEL',
+]);

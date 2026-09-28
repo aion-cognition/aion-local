@@ -1,6 +1,6 @@
 import type { ApiCall, ApiPricingTier } from './types.js';
 
-type TokenPrices = {
+type TokenRates = {
   readonly input: number;
   readonly output: number;
   /** Writing an entry that lives five minutes: 1.25x ordinary input. */
@@ -8,6 +8,14 @@ type TokenPrices = {
   /** Writing an entry that lives an hour: 2x ordinary input. */
   readonly cacheCreation1h: number;
   readonly cacheRead: number;
+};
+
+type TokenPrices = TokenRates & {
+  /**
+   * The card a request is billed on in full once its input passes the threshold. Absent where the
+   * model has one card at every length.
+   */
+  readonly longContext?: { readonly aboveInputTokens: number; readonly rates: TokenRates };
 };
 
 /**
@@ -38,10 +46,39 @@ const HAIKU_45_PRICES: TokenPrices = {
   cacheCreation1h: 2,
   cacheRead: 0.1,
 };
+// USD per million tokens, read 2026-09-27 from https://developers.openai.com/api/docs/pricing
+// (Standard tier) and the model page. OpenAI caches automatically and bills a write at 1.25x
+// ordinary input with no hour-long class, so both write rates are the one write price. The long
+// card applies to the whole request past 272K input tokens: the pricing table lists the long-context
+// rates, and the Luna family's model pages state the threshold.
+const GPT_6_LUNA_PRICES: TokenPrices = {
+  input: 0.1,
+  output: 0.5,
+  cacheCreation: 0.125,
+  cacheCreation1h: 0.125,
+  cacheRead: 0.01,
+  longContext: {
+    aboveInputTokens: 272_000,
+    rates: {
+      input: 0.2,
+      output: 0.75,
+      cacheCreation: 0.25,
+      cacheCreation1h: 0.25,
+      cacheRead: 0.02,
+    },
+  },
+};
 const API_PRICES: ReadonlyMap<string, TokenPrices> = new Map([
   ['claude-haiku-4-5', HAIKU_45_PRICES],
   ['claude-haiku-4-5-20251001', HAIKU_45_PRICES],
+  ['gpt-6-luna', GPT_6_LUNA_PRICES],
 ]);
+
+/** The card one request is billed on, given every input token it sent, cached or not. */
+function ratesFor(price: TokenPrices, inputTokens: number): TokenRates {
+  const long = price.longContext;
+  return long !== undefined && inputTokens > long.aboveInputTokens ? long.rates : price;
+}
 
 /**
  * The rate a model the table does not carry is bounded at: the top of the same published card,
@@ -60,18 +97,30 @@ const UNLISTED_MODEL_PRICES: TokenPrices = {
   cacheRead: 1,
 };
 
-/** Unpriced models return undefined, never an invented zero-dollar estimate. */
+/**
+ * Unpriced models return undefined, never an invented zero-dollar estimate.
+ *
+ * `singleRequest` says the counts are one response's, which is the only reading a long-context
+ * threshold can be judged on: it applies per request, and a day's rows summed pass it without any
+ * one of them having done so. A summed group is priced on the ordinary card, which is exact for
+ * every request this program builds (the largest judgment allowance is 16K characters).
+ */
 export function estimateApiCost(
   call: Pick<
     ApiCall,
     'model' | 'inputTokens' | 'outputTokens' | 'cacheCreationTokens' | 'cacheReadTokens'
   > &
     Partial<Pick<ApiCall, 'pricingTier' | 'cacheCreation5mTokens' | 'cacheCreation1hTokens'>>,
+  options: { readonly singleRequest?: boolean } = {},
 ): number | undefined {
-  const price = API_PRICES.get(call.model);
-  if (price === undefined) {
+  const card = API_PRICES.get(call.model);
+  if (card === undefined) {
     return undefined;
   }
+  const price =
+    options.singleRequest === true
+      ? ratesFor(card, call.inputTokens + call.cacheCreationTokens + call.cacheReadTokens)
+      : card;
   return (
     (multiplierFor(call.pricingTier) *
       (call.inputTokens * price.input +
@@ -99,7 +148,7 @@ export function estimateApiCost(
 function cacheCreationCost(
   call: Pick<ApiCall, 'cacheCreationTokens'> &
     Partial<Pick<ApiCall, 'cacheCreation5mTokens' | 'cacheCreation1hTokens'>>,
-  price: TokenPrices,
+  price: TokenRates,
 ): number {
   const hour = call.cacheCreation1hTokens;
   const minutes = call.cacheCreation5mTokens;
@@ -146,7 +195,9 @@ export function boundApiCost(bound: ApiCostBound): {
   readonly priced: boolean;
 } {
   const price = API_PRICES.get(bound.model);
-  const card = price ?? UNLISTED_MODEL_PRICES;
+  // Judged on the bound's whole input, so a summed batch that passes a long-context threshold
+  // holds at the long card: a bound errs high, and no batched model carries one today.
+  const card = ratesFor(price ?? UNLISTED_MODEL_PRICES, bound.inputTokens);
   const writeRate = bound.cacheWriteTtl === '1h' ? card.cacheCreation1h : card.cacheCreation;
   const inputRate = bound.cacheWrite ? writeRate : card.input;
   return {

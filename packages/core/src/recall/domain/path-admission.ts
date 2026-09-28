@@ -25,6 +25,15 @@ import {
  * stats. Shared between `fuse`'s ordinary gate and the path-strength lane below, which admits by
  * a different rule but reports itself identically once it has decided to let an entry through.
  */
+/** The ranked score: RRF, boosted, superseded-discounted, the same for admitted and refused. */
+export function fusedScoreOf(entry: Accumulator, options: FusionOptions): number {
+  const ranked =
+    entry.score *
+    boostFor(entry.best.labels, options.labelBoosts) *
+    mentionSalience(entry.best.mentionCount);
+  return entry.best.currency === 'superseded' ? ranked * SUPERSEDED_RANK_WEIGHT : ranked;
+}
+
 export function admitEntry(
   entry: Accumulator,
   evidence: AdmissionEvidence,
@@ -33,12 +42,7 @@ export function admitEntry(
   decisions: AdmissionDecision[],
   methodStats: Map<Rationale['method'], MethodLegStat>,
 ): void {
-  const superseded = entry.best.currency === 'superseded';
-  const ranked =
-    entry.score *
-    boostFor(entry.best.labels, options.labelBoosts) *
-    mentionSalience(entry.best.mentionCount);
-  const fusedScore = superseded ? ranked * SUPERSEDED_RANK_WEIGHT : ranked;
+  const fusedScore = fusedScoreOf(entry, options);
   decisions.push({
     id: entry.best.id,
     reason: 'admitted',

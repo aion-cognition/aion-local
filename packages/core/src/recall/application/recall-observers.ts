@@ -1,7 +1,16 @@
-import type { MemoryPack } from '@aion/protocol';
+import type {
+  AssessmentReport,
+  Cue,
+  Degradation,
+  MemoryPack,
+  StageTimingsMs,
+} from '@aion/protocol';
 import { createHash } from 'node:crypto';
 
+import type { triggeredIntentions } from './intentions.js';
+import type { ResonanceResult } from './resonance.js';
 import type { Seed, SeedStrategy } from './seeds.js';
+import type { ServedAnswer } from './serving-assembly.js';
 import { configDigest } from '../../infrastructure/config/digest.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 import type { ReadMode } from '../../infrastructure/graph/read-modes.js';
@@ -13,7 +22,7 @@ import type {
 } from '../domain/activation-observations.js';
 import type { ActivatedNode, ActivationRun } from '../domain/activation.js';
 import type { AdmissionReport } from '../domain/admission.js';
-import type { FusedItem } from '../domain/fusion.js';
+import type { FusedItem, FusionResult } from '../domain/fusion.js';
 import type { PackDecision } from '../domain/pack-decisions.js';
 import {
   buildRecallTrace,
@@ -104,7 +113,7 @@ function digest(value: string): string {
 function routeOf(config: Config): TraceRoute {
   const routing = resolveProviderRouting(config);
   return {
-    cueProvider: 'anthropic',
+    cueProvider: routing.roles.cue.provider,
     cueModel: routing.roles.cue.model,
     cueReason: routing.roles.cue.available ? 'key' : 'no-key',
     embedModel: routing.embedModel,
@@ -207,4 +216,71 @@ export function emitRecallTrace(
     logger.warn({ err }, 'recall trace observer failed');
     return undefined;
   }
+}
+
+export type ServedLog = {
+  readonly sessionId: string;
+  readonly cues: readonly Cue[];
+  readonly degradations: readonly Degradation[];
+  readonly seeds: readonly Seed[];
+  readonly activation: ActivationRun;
+  readonly fusion: FusionResult;
+  readonly resonance: ResonanceResult;
+  readonly intentions: Awaited<ReturnType<typeof triggeredIntentions>>;
+  readonly serving: ServedAnswer;
+  readonly emitted: ReadonlySet<string>;
+  readonly timings: StageTimingsMs;
+  readonly assessment?: AssessmentReport;
+};
+
+/** The one log line a finished recall writes, split out of `recall.ts` at its size cap. */
+export function logServed(
+  logger: Pick<Logger, 'info'>,
+  withheld: boolean,
+  values: ServedLog,
+): void {
+  const { serving, fusion, resonance, intentions } = values;
+  const degradations = [
+    ...values.degradations,
+    ...(serving.pack.metadata.degraded ?? []).filter((rung) => rung.stage === 'assessment'),
+  ];
+  logger.info(
+    {
+      sessionId: values.sessionId,
+      cues: values.cues.length,
+      degraded: degradations.length > 0,
+      degradations,
+      seeds: values.seeds.length,
+      activated: values.activation.activated.length,
+      termination: values.activation.termination,
+      items: fusion.items.length,
+      resonant: resonance.items.length,
+      // What the substrate volunteered, and why it volunteered nothing when it did not.
+      intentions: intentions.items.length,
+      intentionsSkipped: intentions.skipped,
+      // What the wire dropped that cognition still counted, so a pack that shrank mid-session
+      // reads as the subtraction rather than as retrieval going quiet.
+      suppressedRepeats: serving.suppressed.size,
+      // The other half of the same reading: how much of the answer was this session quoting
+      // itself, which is a number worth watching as the conversation gets long.
+      suppressedOwn: serving.suppressedOwn.size,
+      // And the third: one assertion the substrate holds twice, printed once. Read off the
+      // pack, because eligibility is decided here and the withholding is decided by assembly.
+      suppressedDuplicates: serving.pack.metadata.suppressed_duplicates ?? 0,
+      // What the caller was handed, which is the number every exposure write is charged
+      // against. Beside the candidate count it reads as how much of retrieval reached the wire.
+      emitted: values.emitted.size,
+      // Why the second pass was quiet: a setting, a query nothing anchored, or a substrate
+      // whose enrichment has not written the context vectors yet. Absent when it searched.
+      resonanceSkipped: resonance.skipped,
+      // What the floor rejected and the floor it used, so a thin pack is readable from the
+      // log without re-running the query.
+      admission: fusion.admission,
+      // What the recall model was shown and chose, which is what a surprising pack is read against.
+      ...(values.assessment === undefined ? {} : { assessment: values.assessment }),
+      tokenEstimate: serving.pack.metadata.token_estimate,
+      timings: values.timings,
+    },
+    withheld ? 'recall withheld' : 'recall served',
+  );
 }

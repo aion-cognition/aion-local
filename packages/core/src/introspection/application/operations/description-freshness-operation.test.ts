@@ -259,6 +259,17 @@ describe('what the nomination writes down', () => {
     expect(db.prepare('SELECT count(*) AS rows FROM batch_work').get()).toEqual({ rows: 1 });
   });
 
+  it('sends nothing to the Anthropic batch lane while background generation is routed to OpenAI', async () => {
+    const outcome = await descriptionFreshnessOperation().run({
+      ...contextFor(unusedProvider(), new AbortController().signal),
+      config: { ...CONFIG, generation: { ...CONFIG.generation, reflectProvider: 'openai' } },
+    });
+
+    expect(outcome.status).toBe('noop');
+    expect(outcome.detail).toContain('AION_REFLECT_PROVIDER=openai');
+    expect(db.prepare('SELECT count(*) AS n FROM batch_work').get()).toEqual({ n: 0 });
+  });
+
   it('enqueues nothing for a store with no substrate identity', async () => {
     db.prepare('DELETE FROM publication_control').run();
 

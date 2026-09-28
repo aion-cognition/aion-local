@@ -53,6 +53,7 @@ const STAGES: readonly (keyof StageTimingsMs)[] = [
   'activation',
   'fusion',
   'resonance',
+  'assessment',
 ];
 
 /**
@@ -106,6 +107,22 @@ export function renderPack(entry: LastPackEntry, write: Writer): void {
   }
   for (const rung of entry.pack.metadata.degraded ?? []) {
     write(`degraded  ${rung.stage}: ${rung.reason}`);
+  }
+  const { assessment } = entry.pack.metadata;
+  if (assessment !== undefined) {
+    const by =
+      assessment.model === undefined ? '' : ` by ${assessment.provider ?? '?'}:${assessment.model}`;
+    const unknown =
+      assessment.unknown === undefined
+        ? ''
+        : `, ${String(assessment.unknown)} unknown numbers dropped`;
+    write(
+      `assessed  ${assessment.outcome}${by}: ${String(assessment.selected)} of ${String(assessment.shown)} shown` +
+        ` (${String(assessment.omitted)} not shown${unknown})`,
+    );
+    if (assessment.note !== undefined) {
+      write(`          note: ${assessment.note}`);
+    }
   }
   write('');
 

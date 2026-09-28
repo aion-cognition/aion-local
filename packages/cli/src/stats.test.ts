@@ -197,7 +197,7 @@ describe('renderStats', () => {
     expect(text).toContain('calls        20 across 4 sessions (5.0 per session)');
     expect(text).toContain('empty packs  2 (10.0%)');
     // The degraded-cue rate is the shared base view's `recall` line; cadence does not repeat it.
-    expect(text).toContain('recall   5.0% of recent recalls degraded on cues');
+    expect(text).toContain('recall   5.0% of recent recalls degraded on the recall model call');
   });
 
   it('renders the spirit metric as a share of pack items per method', () => {

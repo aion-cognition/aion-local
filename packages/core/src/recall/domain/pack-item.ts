@@ -8,7 +8,7 @@ import type {
 } from '@aion/protocol';
 
 import type { FusedItem } from './fusion.js';
-import { BUCKET_HEADINGS, type PackBucket } from './pack-buckets.js';
+import { BUCKET_HEADINGS, PACK_BUCKETS, type PackBucket } from './pack-buckets.js';
 import { standingFor } from './standing.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 
@@ -63,6 +63,7 @@ const RULE_PHRASES: Readonly<Record<AdmissionRule, string>> = {
   context_threshold: 'context threshold',
   typed_admission: 'typed tier',
   path_strength: 'path strength',
+  assessment: 'selected by assessment over the floor',
 };
 
 /**
@@ -349,7 +350,85 @@ export function renderItem(entry: PackEntry): string {
   );
 }
 
+/**
+ * One candidate as the recall assessment reads it: the memory, what kind of statement it is, when
+ * it happened, and whether it still holds, in the words the pack itself uses. How retrieval found
+ * it and what it scored stay off, because they say how the memory was found rather than whether
+ * it helps, and they are the ranking the assessment is there to judge rather than repeat.
+ *
+ * A successor or a related claim among the other candidates is named by its number, so the model
+ * can weigh a correction against what it corrects.
+ */
+export function renderCandidate(
+  item: MemoryPackItem,
+  kind: string,
+  numberOf: (id: string) => number | undefined,
+): string {
+  const facts = [kind];
+  if (item.standing !== undefined) {
+    facts.push(renderStanding(item.standing));
+  }
+  if (item.occurred_at !== undefined) {
+    facts.push(`occurred ${item.occurred_at}`);
+  }
+  if (item.superseded_by !== undefined) {
+    const successor = numberOf(item.superseded_by.id);
+    facts.push(
+      successor === undefined
+        ? `superseded ${renderDay(item.superseded_by.at)}, successor not among these`
+        : `superseded ${renderDay(item.superseded_by.at)} by #${String(successor)}`,
+    );
+  }
+  if (item.currency === 'expired') {
+    facts.push('expired');
+  }
+  const held = item.context === undefined ? '' : `\n   holds when: ${item.context}`;
+  const why = item.why === undefined ? '' : `\n   why: ${item.why}`;
+  const correction =
+    item.claimed_correction === undefined
+      ? ''
+      : `\n   a correction of it was stated ${renderDay(item.claimed_correction.at)}`;
+  const related =
+    item.related_claim === undefined
+      ? ''
+      : `\n   current related claim: ${item.related_claim.text}`;
+  return (
+    `${String(item.rank)}. ${item.content}${held}${why}\n   ${facts.join(' | ')}` +
+    `${correction}${related}`
+  );
+}
+
 export function renderBucket(bucket: PackBucket, entries: readonly PackEntry[]): string {
   const blocks = entries.map((entry) => renderItem(entry));
   return `${BUCKET_HEADINGS[bucket]}\n${blocks.join('\n')}`;
+}
+
+export const PACK_HEADING = '# Memory';
+
+/** The whole rendered block: the note, then the legend and the buckets, or what an empty pack says. */
+export function renderPack(
+  selection: ReadonlyMap<PackBucket, readonly PackEntry[]>,
+  note: string | undefined,
+  emptyBody: () => string,
+): string {
+  const sections: string[] = [];
+  if (note !== undefined) {
+    sections.push(note);
+  }
+  const buckets: string[] = [];
+  for (const bucket of PACK_BUCKETS) {
+    const entries = selection.get(bucket);
+    if (entries === undefined || entries.length === 0) {
+      continue;
+    }
+    buckets.push(renderBucket(bucket, entries));
+  }
+  if (buckets.length === 0) {
+    sections.push(emptyBody());
+  } else {
+    // The legend explains a word every item below carries, so it goes above them and only when
+    // there are items to explain. An empty pack has nothing to key.
+    sections.push(STANDING_LEGEND, ...buckets);
+  }
+  return `${PACK_HEADING}\n\n${sections.join('\n\n')}`;
 }

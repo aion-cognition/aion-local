@@ -51,7 +51,9 @@ export type Rationale = z.infer<typeof RationaleSchema>;
  * vector one: evidence the graph carries that a cosine against the query cannot see.
  * `path_strength` is the disclosed lane: an activation-only arrival no floor could judge at all
  * (no cosine, no exact match), let in on its own activation path within a bounded per-pack slot
- * count. Not a floor rule; the floors refuse it first, every time.
+ * count. Not a floor rule; the floors refuse it first, every time. `assessment` is an item the
+ * floors refused and the recall model selected as useful here: its evidence lists what retrieval
+ * measured, so a reader can see the model chose it over the floor rather than through it.
  */
 export const AdmissionRuleSchema = z.enum([
   'vector_floor',
@@ -61,6 +63,7 @@ export const AdmissionRuleSchema = z.enum([
   'context_threshold',
   'typed_admission',
   'path_strength',
+  'assessment',
 ]);
 
 export type AdmissionRule = z.infer<typeof AdmissionRuleSchema>;
@@ -262,22 +265,25 @@ export const StageTimingsMsSchema = z.strictObject({
   activation: z.number().nonnegative(),
   fusion: z.number().nonnegative(),
   resonance: z.number().nonnegative().optional(),
+  /** The recall model's judgment of the candidates, present only where one was asked for. */
+  assessment: z.number().nonnegative().optional(),
 });
 
 export type StageTimingsMs = z.infer<typeof StageTimingsMsSchema>;
 
 /**
- * Recall has three legs that can drop out without failing the call: the cue model, the embedding
- * call, and the graph. A consumer cannot tell any of them from the items alone, because a pack
+ * Recall has four legs that can drop out without failing the call: the cue model, the embedding
+ * call, the graph, and the model that assesses the candidates. A consumer cannot tell any of them from the items alone, because a pack
  * thinned by an outage reads exactly like a pack thinned by a query nothing matches. Each rung
  * that fired names itself here, and the field stays absent on a normal run.
  *
  * `timeout`, `model_error` and `invalid_output` are the inference stages' reasons. `unavailable`
  * means the leg could not run: no seed strategy reached the graph, or no key backs cue
- * extraction, which makes the pack a raw-query pack.
+ * extraction, which makes the pack a raw-query pack. A degraded assessment means the pack is the
+ * existing ranking of the same candidates rather than the model's selection of them.
  */
 export const DegradationSchema = z.strictObject({
-  stage: z.enum(['cues', 'embed', 'graph']),
+  stage: z.enum(['cues', 'embed', 'graph', 'assessment']),
   reason: z.enum(['timeout', 'model_error', 'invalid_output', 'unavailable']),
 });
 
@@ -343,6 +349,31 @@ export const AdmissionReportSchema = z.strictObject({
 export type AdmissionReportOutput = z.infer<typeof AdmissionReportSchema>;
 
 /**
+ * What the recall model was shown and what became of its answer. `selected` means the pack is its
+ * selection, in its order, including a selection of nothing. `fallback` means the call produced no
+ * usable answer and the pack is the existing ranking, with the reason in `degraded`. `discarded`
+ * means the model answered but the evidence it judged moved before the answer could be recorded,
+ * so the pack was rebuilt from the existing ranking instead.
+ */
+export const AssessmentReportSchema = z.strictObject({
+  outcome: z.enum(['selected', 'fallback', 'discarded']),
+  provider: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+  /** Candidates the model was shown. */
+  shown: z.number().int().nonnegative(),
+  /** Candidates retrieval found beyond what the pack caps let the model be shown. */
+  omitted: z.number().int().nonnegative(),
+  /** Real candidates the model selected. */
+  selected: z.number().int().nonnegative(),
+  /** Numbers the model returned that named no candidate, dropped. Absent at zero. */
+  unknown: z.number().int().positive().optional(),
+  /** The model's own caveat about its selection, when it gave one. */
+  note: z.string().min(1).optional(),
+});
+
+export type AssessmentReport = z.infer<typeof AssessmentReportSchema>;
+
+/**
  * A list, because the rungs are independent: a full Ollama outage takes the cue and embed
  * legs together, and reporting only the worse of the two understates how thin the answer
  * is. Present means at least one rung fired.
@@ -392,6 +423,8 @@ export const MemoryPackMetadataSchema = z.strictObject({
    * `last_pack` before the field existed still parses.
    */
   history_coverage: HistoryCoverageSchema.optional(),
+  /** Present on a pack the recall model assessed, or was asked to and could not. */
+  assessment: AssessmentReportSchema.optional(),
 });
 
 /**

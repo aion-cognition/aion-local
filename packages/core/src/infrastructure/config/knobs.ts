@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { GENERATION_KNOBS, OPENAI_KNOBS } from './generation-knobs.js';
 import { nonNegativeInt, positive, positiveInt, proportion, text } from './knob-types.js';
 import { MAINTENANCE_KNOBS } from './maintenance-knobs.js';
 import { REFLECTION_KNOBS } from './reflection-knobs.js';
@@ -119,8 +120,8 @@ export const KNOBS = {
     // budget on 2026-09-13. The provider clamps it under the call's own max_tokens, since
     // thinking is billed and counted as output.
     thinkingBudgetTokens: ['AION_ANTHROPIC_THINKING_BUDGET_TOKENS', positiveInt, 2048],
-    // Dollars of generation one UTC day may commit, across ordinary Messages calls and batch
-    // submissions together. Every dispatch holds its own conservative maximum against it before
+    // Dollars of generation one UTC day may commit, across ordinary calls on either remote API
+    // and batch submissions together; the name predates the second provider. Every dispatch holds its own conservative maximum against it before
     // it is sent and replaces that with what it cost when the answer lands, so the number bounds
     // committed spend rather than reported spend. Past it, background work queues and recall
     // falls back to the raw query: exhaustion is generation being unavailable, the same shape a
@@ -130,7 +131,14 @@ export const KNOBS = {
     // and a runaway loop reaches it in minutes.
     dailyCeilingUsd: ['AION_ANTHROPIC_DAILY_CEILING_USD', positive, 5],
   },
+  generation: GENERATION_KNOBS,
+  openai: OPENAI_KNOBS,
   recall: {
+    // What the recall role's one model call does. `assess`: retrieval runs on the caller's own
+    // query and the model judges which of the retrieved memories help. `cues`: the model extracts
+    // search cues first and the existing ranking decides, which is the path before assessment.
+    // `raw`: no model call and the existing ranking decides, a control for comparing the two.
+    mode: ['AION_RECALL_MODE', z.enum(['assess', 'cues', 'raw']), 'assess'],
     // Three, not two: the cross-session graph routes every path through a Session hub, and
     // Episode -PARTICIPATES_IN-> Session -FOLLOWS-> Session -PARTICIPATES_IN-> Episode is three
     // hops. At two the FOLLOWS chain reaches nothing but a contentless Session node.

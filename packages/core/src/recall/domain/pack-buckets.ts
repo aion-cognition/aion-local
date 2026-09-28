@@ -69,6 +69,11 @@ const BUCKET_BY_LABEL: Readonly<Record<string, PackBucket>> = {
   Preference: 'preferences',
 };
 
+/** The label that says what kind of memory a node is, for a reader that is shown no bucket. */
+export function kindOf(labels: readonly string[]): string {
+  return labels.find((label) => label in BUCKET_BY_LABEL) ?? labels.join('/');
+}
+
 export const BUCKET_HEADINGS: Readonly<Record<PackBucket, string>> = {
   facts: '## Facts',
   episodes: '## Episodes',

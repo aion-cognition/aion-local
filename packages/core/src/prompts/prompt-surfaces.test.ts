@@ -54,7 +54,7 @@ const ROUTE_SUFFIXES = ['_LOCAL', '_KEYED'];
 
 describe('the prompt surfaces', () => {
   it('reads the directory rather than an empty one', () => {
-    expect(surfaceFiles().length).toBe(19);
+    expect(surfaceFiles().length).toBe(20);
   });
 
   it('exports no prompt under a route-specific name', async () => {

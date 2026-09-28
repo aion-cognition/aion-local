@@ -1,13 +1,21 @@
 import { AnthropicProvider } from './anthropic-provider.js';
 import { GenerationUnavailableError } from './errors.js';
 import { OllamaProvider } from './ollama-provider.js';
+import { OpenAiProvider } from './openai-provider.js';
 import type { FrameOverride } from './request-blocks.js';
-import { resolveProviderRouting, type GenerationRole, type ProviderRouting } from './routing.js';
+import {
+  resolveProviderRouting,
+  unavailableReason,
+  type GenerationRole,
+  type ProviderRouting,
+  type RoleRoute,
+} from './routing.js';
 import type { SpendingGuard } from './spending.js';
 import type {
   ApiCall,
   Embedder,
   GenerationBackend,
+  GenerationProvider,
   Provider,
   StructuredRequest,
   Vector,
@@ -21,7 +29,7 @@ import type { Config } from '../config/schema.js';
  */
 export type GenerationEvent = {
   readonly role: GenerationRole;
-  readonly provider: 'anthropic';
+  readonly provider: GenerationProvider;
   readonly model: string;
   readonly durationMs: number;
   readonly ok: boolean;
@@ -51,26 +59,40 @@ export type ProviderRouterOptions = {
 };
 
 /**
- * A backend that refuses every call, for a substrate with no key. It is a backend rather than an
- * absent one so the shape of the call path is the same either way: the caller asks, the answer
- * is that generation has nowhere to run, and the caller's own handling decides whether that
+ * A backend that refuses every call, for a role whose provider has no key. It is a backend rather
+ * than an absent one so the shape of the call path is the same either way: the caller asks, the
+ * answer is that generation has nowhere to run, and the caller's own handling decides whether that
  * means a queued job or a degraded pack.
  */
 class UnavailableGeneration implements GenerationBackend {
+  readonly #route: RoleRoute;
+
+  constructor(route: RoleRoute) {
+    this.#route = route;
+  }
+
   generate(req: StructuredRequest): Promise<unknown> {
-    return Promise.reject(new GenerationUnavailableError(req.surface ?? 'unlabeled'));
+    const surface = req.surface ?? 'unlabeled';
+    return Promise.reject(
+      new GenerationUnavailableError(
+        surface,
+        `generation for "${surface}" has nowhere to run: ${unavailableReason(this.#route)}; ` +
+          'the work stays queued until one is set',
+      ),
+    );
   }
 }
 
 /**
  * One role's `Provider`: the local embedder, and the remote generation backend. Callers keep
- * naming their own model from config; the router substitutes the routed one, so no call site
+ * naming their own model from config; the backend substitutes the routed one, so no call site
  * needs a second model knob.
  */
 class RoutedProvider implements Provider {
   readonly #embedder: Embedder;
   readonly #generator: GenerationBackend;
   readonly #role: GenerationRole;
+  readonly #provider: GenerationProvider;
   readonly #model: string;
   readonly #onGeneration: ((event: GenerationEvent) => void) | undefined;
   readonly #now: () => number;
@@ -78,22 +100,22 @@ class RoutedProvider implements Provider {
   constructor(
     embedder: Embedder,
     generator: GenerationBackend,
-    role: GenerationRole,
-    model: string,
+    route: RoleRoute,
     onGeneration: ((event: GenerationEvent) => void) | undefined,
     now: () => number,
   ) {
     this.#embedder = embedder;
     this.#generator = generator;
-    this.#role = role;
-    this.#model = model;
+    this.#role = route.role;
+    this.#provider = route.provider;
+    this.#model = route.model;
     this.#onGeneration = onGeneration;
     this.#now = now;
   }
 
-  /** One provider name now, kept on the interface because call sites size prompts by it. */
-  get route(): { readonly provider: 'anthropic' } {
-    return { provider: 'anthropic' };
+  /** Where this role's calls go, for a call site that sizes its prompt or names the model. */
+  get route(): { readonly provider: GenerationProvider; readonly model: string } {
+    return { provider: this.#provider, model: this.#model };
   }
 
   embed(texts: readonly string[]): Promise<Vector[]> {
@@ -105,7 +127,7 @@ class RoutedProvider implements Provider {
     const report = (ok: boolean): void => {
       this.#onGeneration?.({
         role: this.#role,
-        provider: 'anthropic',
+        provider: this.#provider,
         model: this.#model,
         durationMs: this.#now() - started,
         ok,
@@ -129,19 +151,21 @@ class RoutedProvider implements Provider {
 
 /**
  * Resolves routing once and hands out one `Provider` per role. Both roles share one Ollama
- * client (embeddings are local) and one Anthropic client (so a remote outage opens one breaker
- * rather than one per role).
+ * client (embeddings are local) and one client per remote provider, so a remote outage opens one
+ * breaker rather than one per role.
  */
 export class ProviderRouter {
   readonly routing: ProviderRouting;
+  readonly #options: ProviderRouterOptions;
   readonly #ollama: OllamaProvider;
-  readonly #generator: GenerationBackend;
+  readonly #backends = new Map<GenerationProvider, GenerationBackend>();
   readonly #byRole = new Map<GenerationRole, RoutedProvider>();
   readonly #onGeneration: ((event: GenerationEvent) => void) | undefined;
   readonly #now: () => number;
 
   constructor(options: ProviderRouterOptions) {
     const { config } = options;
+    this.#options = options;
     this.routing = resolveProviderRouting(config);
     this.#onGeneration = options.onGeneration;
     this.#now = options.now ?? Date.now;
@@ -151,26 +175,50 @@ export class ProviderRouter {
       embedKeepAlive: config.ollama.embedKeepAlive,
       ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
     });
-    this.#generator = this.routing.keyPresent
-      ? new AnthropicProvider({
-          // Trimmed, because routing decided the key was present after trimming it. A key read
-          // from a file keeps its trailing newline, and fetch rejects that header value outright.
-          apiKey: config.anthropic.apiKey.trim(),
-          model: config.anthropic.model,
-          promptCache: config.anthropic.promptCache,
-          ...(options.frameOverride === undefined ? {} : { frameOverride: options.frameOverride }),
-          thinkingBudgetTokens: config.anthropic.thinkingBudgetTokens,
-          now: this.#now,
-          ...(options.recordApiCall === undefined ? {} : { recordApiCall: options.recordApiCall }),
-          ...(options.spending === undefined ? {} : { spending: options.spending }),
-          ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
-        })
-      : new UnavailableGeneration();
   }
 
   /** The local embedder itself, for a caller that only ever embeds. */
   get embedder(): Embedder {
     return this.#ollama;
+  }
+
+  /** The one client for a provider that has a key, built the first time a role routes to it. */
+  #backend(provider: GenerationProvider): GenerationBackend {
+    const existing = this.#backends.get(provider);
+    if (existing !== undefined) {
+      return existing;
+    }
+    const { config } = this.#options;
+    const shared = {
+      now: this.#now,
+      ...(this.#options.frameOverride === undefined
+        ? {}
+        : { frameOverride: this.#options.frameOverride }),
+      ...(this.#options.recordApiCall === undefined
+        ? {}
+        : { recordApiCall: this.#options.recordApiCall }),
+      ...(this.#options.spending === undefined ? {} : { spending: this.#options.spending }),
+      ...(this.#options.fetchImpl === undefined ? {} : { fetchImpl: this.#options.fetchImpl }),
+    };
+    // Keys are trimmed, because routing decided each was present after trimming it. A key read
+    // from a file keeps its trailing newline, and fetch rejects that header value outright.
+    const backend =
+      provider === 'openai'
+        ? new OpenAiProvider({
+            ...shared,
+            apiKey: config.openai.apiKey.trim(),
+            model: config.openai.model,
+            reasoningEffort: config.openai.reasoningEffort,
+          })
+        : new AnthropicProvider({
+            ...shared,
+            apiKey: config.anthropic.apiKey.trim(),
+            model: config.anthropic.model,
+            promptCache: config.anthropic.promptCache,
+            thinkingBudgetTokens: config.anthropic.thinkingBudgetTokens,
+          });
+    this.#backends.set(provider, backend);
+    return backend;
   }
 
   forRole(role: GenerationRole): Provider {
@@ -181,9 +229,8 @@ export class ProviderRouter {
     const route = this.routing.roles[role];
     const provider = new RoutedProvider(
       this.#ollama,
-      this.#generator,
-      role,
-      route.model,
+      route.available ? this.#backend(route.provider) : new UnavailableGeneration(route),
+      route,
       this.#onGeneration,
       this.#now,
     );

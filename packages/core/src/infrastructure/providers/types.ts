@@ -1,5 +1,10 @@
 export type Vector = readonly number[];
 
+/** The remote APIs a generation role can be routed to. Embeddings never leave the machine. */
+export const GENERATION_PROVIDERS = ['anthropic', 'openai'] as const;
+
+export type GenerationProvider = (typeof GENERATION_PROVIDERS)[number];
+
 export type ChatRole = 'system' | 'user' | 'assistant';
 
 export type ChatMessage = {
@@ -24,10 +29,10 @@ export type StructuredRequest = {
   temperature?: number;
   signal?: AbortSignal;
   /**
-   * Whether the model reasons before it answers. `true` turns on Haiku 4.5's extended thinking
-   * with an explicit token budget. That model takes no adaptive mode, so the budget is a request
-   * field rather than an effort word. Anything but `true` sends no thinking configuration, which
-   * is the model's own default of off.
+   * Whether the model reasons before it answers. On the Anthropic route `true` turns on Haiku
+   * 4.5's extended thinking with an explicit token budget; on the OpenAI route it sends the
+   * configured reasoning effort. Anything but `true` asks for no reasoning: no thinking
+   * configuration on Anthropic, effort `none` on OpenAI.
    *
    * Extraction tasks set this false; a caller that wants the model to reason sets it true.
    */
@@ -93,22 +98,22 @@ export type Embedder = {
 };
 
 /**
- * `embed` runs locally; `generate` leaves the machine for the Anthropic API. One interface
+ * `embed` runs locally; `generate` leaves the machine for the routed remote API. One interface
  * covers both so callers never branch on which implementation is behind it.
  */
 export type Provider = Embedder & {
   generate(req: StructuredRequest): Promise<unknown>;
   /**
-   * Where `generate` resolved, for a call site that sizes its own prompt to the model behind it.
-   * Structural rather than the routing layer's own type, so this module stays free of that
-   * import and no existing implementation grows a field. An absent route is a test fake, which
-   * gets the small-model prompt shapes.
+   * Where `generate` resolved, for a call site that sizes its own prompt to the model behind it
+   * or names that model in a log. Structural rather than the routing layer's own type, so this
+   * module stays free of that import. An absent route is a test fake, which gets the small-model
+   * prompt shapes.
    */
-  readonly route?: { readonly provider: 'anthropic' };
+  readonly route?: { readonly provider: GenerationProvider; readonly model?: string };
 };
 
 /**
- * Half a provider: what the remote route offers. Anthropic has no embeddings API, so the
+ * Half a provider: what the remote route offers. Neither remote API is the embedder, so the
  * routing layer pairs one of these with the local embedder rather than letting a second
  * implementation of `Provider` exist without `embed`.
  */

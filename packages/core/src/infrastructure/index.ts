@@ -223,7 +223,12 @@ export type { EdgeWeightDistribution } from './graph/edge-weight-distribution.js
 
 export type { Embedder, Provider } from './providers/types.js';
 export { embedQueryPrefix } from './providers/embed-models.js';
-export { remoteBannerLines, resolveProviderRouting, routingSummary } from './providers/routing.js';
+export {
+  remoteBannerLines,
+  resolveProviderRouting,
+  routingSummary,
+  unavailableReason,
+} from './providers/routing.js';
 export { ProviderRouter } from './providers/role-provider.js';
 export { listResidentModels, reconcileResidentModels } from './providers/model-reconciliation.js';
 export type { ReconciliationReport } from './providers/model-reconciliation.js';

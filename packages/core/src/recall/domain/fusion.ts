@@ -12,7 +12,7 @@ import {
   type Measurement,
   type TypedInboundEvidence,
 } from './admission.js';
-import { admitByPathStrength, admitEntry } from './path-admission.js';
+import { admitByPathStrength, admitEntry, fusedScoreOf } from './path-admission.js';
 import { applyClusterCap, mmrOrder } from './ranking.js';
 import type { Currency, SupersededBy } from '../../infrastructure/graph/read-modes.js';
 import type { Vector } from '../../infrastructure/providers/types.js';
@@ -30,6 +30,13 @@ export type FusionLeg = 'vector' | 'bm25' | 'graph_traversal';
 
 export type FusionResult = {
   readonly items: readonly FusedItem[];
+  /**
+   * What the floors turned away, best fused score first: measured under the floor, or measured
+   * by nothing. Never served on the ranking path. The recall model's assessment is shown them,
+   * because a floor calibrated against embedding noise is a search limit, not a judgment of what
+   * would help, and the model cannot choose a memory it never sees.
+   */
+  readonly refused: readonly FusedItem[];
   readonly admission: AdmissionReport;
   /** Per-method sole/shared find counts and summed RRF contribution, admitted items only. */
   readonly methodStats: MethodLegStats;
@@ -334,6 +341,7 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
   const decisions: AdmissionDecision[] = [];
   const methodStats = new Map<Rationale['method'], MethodLegStat>();
   const unmeasuredArrivals: Accumulator[] = [];
+  const refusedEntries: Accumulator[] = [];
   let droppedBelowFloor = 0;
   let droppedUnmeasured = 0;
   let droppedUnmeasuredArrival = 0;
@@ -348,6 +356,7 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
       // neither measures anything against the query. The third is the one worth alarming on:
       // a node the spread reached on its own, whose content vector is still pending, so the
       // traversal leg is contributing reach that no floor can ever judge.
+      refusedEntries.push(entry);
       const rejected = (reason: AdmissionDecisionReason): void => {
         decisions.push({
           id: entry.best.id,
@@ -395,6 +404,20 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
   );
 
   items.sort(compareFused);
+  const admittedIds = new Set(items.map((item) => item.id));
+  const refused = refusedEntries
+    .filter((entry) => !admittedIds.has(entry.best.id))
+    .map((entry): FusedItem => ({
+      ...entry.best,
+      relevance: entry.relevance,
+      // No rule counted a cosine for it, which is what zero means on this field.
+      measured: 0,
+      evidence: [...entry.evidence],
+      ...(entry.activation === undefined ? {} : { activation: entry.activation }),
+      ...(entry.typedEvidence === undefined ? {} : { typedEvidence: entry.typedEvidence }),
+      score: fusedScoreOf(entry, options),
+    }))
+    .sort(compareFused);
   // Merging by id above is the whole of the identity question fusion can answer. Two ids carrying
   // one sentence are a decision about standing, subject identity and the graph's own key, and
   // none of those are here: the pack fold makes it, once the provenance read has come back.
@@ -427,6 +450,7 @@ export function fuse(lists: readonly RankedList[], options: FusionOptions): Fusi
 
   return {
     items: ordered,
+    refused,
     admission: {
       policy: options.admission,
       considered: merged.size,

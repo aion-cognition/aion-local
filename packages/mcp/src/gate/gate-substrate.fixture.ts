@@ -36,7 +36,10 @@ import {
   openCampaignProducer,
   type CampaignProducerHandle,
 } from '@aion/core/infrastructure/providers/test-support/campaign-guard.js';
-import { testGenerationProvider } from '@aion/core/infrastructure/providers/test-support/generation-provider.js';
+import {
+  testGenerationKey,
+  testGenerationProvider,
+} from '@aion/core/infrastructure/providers/test-support/generation-provider.js';
 import {
   directCompletionPublisher,
   directIntakePublisher,
@@ -99,7 +102,7 @@ export type GateSubstrateOptions = {
  * none, there is nothing to measure against: a pinned default judged on a substrate that made no
  * model call is a number about nothing. The batteries skip, visibly, instead.
  */
-export const REMOTE_JUDGE_ABSENT = (process.env.AION_ANTHROPIC_API_KEY ?? '').trim() === '';
+export const REMOTE_JUDGE_ABSENT = testGenerationKey() === '';
 
 export class GateSubstrate {
   readonly label: string;

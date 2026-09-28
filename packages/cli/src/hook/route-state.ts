@@ -21,14 +21,15 @@ import { dirname, join } from 'node:path';
  * the safe reading of nothing.
  */
 
-const ANTHROPIC_KEY_ENV_VAR = 'AION_ANTHROPIC_API_KEY';
+/** Either remote provider's key; which one a role uses is the routing knobs' business. */
+const KEY_ENV_VARS = ['AION_ANTHROPIC_API_KEY', 'AION_OPENAI_API_KEY'] as const;
 
 const ENV_FILE_NAME = '.env';
 
 /** `<repo>/packages/cli/dist/hook-main.js` is where the harness invokes this from. */
 const SCRIPT_DEPTH = 4;
 
-/** `keyed` routes generation to Anthropic per the routing knobs; `local` is the Ollama route. */
+/** `keyed` routes generation to a remote provider per the routing knobs; `local` is the Ollama route. */
 export type GenerationRoute = 'keyed' | 'local' | 'unknown';
 
 /** One pair of matching quotes wraps a value. Anything else, mismatched ends included, is literal. */
@@ -78,15 +79,16 @@ export function generationRoute(
   env: NodeJS.ProcessEnv,
   scriptPath: string | undefined,
 ): GenerationRoute {
-  if ((env[ANTHROPIC_KEY_ENV_VAR] ?? '').trim() !== '') {
+  if (KEY_ENV_VARS.some((name) => (env[name] ?? '').trim() !== '')) {
     return 'keyed';
   }
   if (scriptPath === undefined || scriptPath === '') {
     return 'unknown';
   }
-  const recorded = envFileValue(join(repoRootOf(scriptPath), ENV_FILE_NAME), ANTHROPIC_KEY_ENV_VAR);
-  if (recorded === undefined) {
+  const envFile = join(repoRootOf(scriptPath), ENV_FILE_NAME);
+  const recorded = KEY_ENV_VARS.map((name) => envFileValue(envFile, name));
+  if (recorded.every((value) => value === undefined)) {
     return 'unknown';
   }
-  return recorded.trim() === '' ? 'local' : 'keyed';
+  return recorded.some((value) => (value ?? '').trim() !== '') ? 'keyed' : 'local';
 }

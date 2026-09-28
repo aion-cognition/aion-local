@@ -12,6 +12,7 @@ import {
 } from '@aion/core';
 import { openCampaignProducer } from '@aion/core/infrastructure/providers/test-support/campaign-guard.js';
 import type { CampaignProducerHandle } from '@aion/core/infrastructure/providers/test-support/campaign-guard.js';
+import { testGenerationConfig } from '@aion/core/infrastructure/providers/test-support/generation-provider.js';
 import {
   DEFAULT_SUPERSEDE_AUTO_CONFIDENCE,
   DEFAULT_SUPERSEDE_MODE,
@@ -108,14 +109,13 @@ type RetroScore = {
 let retro: RetroScore[] = [];
 
 function batteryConfig(): Config {
-  const apiKey = process.env.AION_ANTHROPIC_API_KEY ?? '';
   return {
     ...DEFAULTS,
     ollama: {
       ...DEFAULTS.ollama,
       url: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
     },
-    anthropic: { ...DEFAULTS.anthropic, apiKey },
+    ...testGenerationConfig(DEFAULTS),
   };
 }
 

@@ -59,6 +59,13 @@ function provider(): Provider {
   return { embed, generate } as unknown as Provider;
 }
 
+/**
+ * This file drives the `cues` recall mode, the path before assessment and still a selectable
+ * one: its cue call, its degradation ladder and its redaction. `assessment.test.ts` drives the
+ * default mode.
+ */
+const CUES_MODE = { ...DEFAULTS, recall: { ...DEFAULTS.recall, mode: 'cues' as const } };
+
 function deps(overrides: Partial<RecallDeps> = {}): RecallDeps {
   return {
     driver: graph.driver,
@@ -68,7 +75,7 @@ function deps(overrides: Partial<RecallDeps> = {}): RecallDeps {
       workspaceId: WORKSPACE_ID,
     }),
     provider: provider(),
-    config: DEFAULTS,
+    config: CUES_MODE,
     cueCache: new CueCache(),
     logger,
     ...overrides,

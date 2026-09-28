@@ -1,4 +1,4 @@
-import type { Degradation, PackTruncation } from '@aion/protocol';
+import type { AssessmentReport, Degradation, PackTruncation } from '@aion/protocol';
 
 import type { AdmissionReport } from './admission.js';
 
@@ -13,7 +13,11 @@ const STAGE_PHRASES: Readonly<Record<Degradation['stage'], string>> = {
   cues: 'cue extraction',
   embed: 'embedding',
   graph: 'graph reads',
+  assessment: 'memory assessment, so this is the retrieval ranking',
 };
+
+/** Long enough for a caveat, short enough that the model cannot write the pack's text for it. */
+export const MAX_ASSESSOR_NOTE_CHARS = 240;
 
 const TRUNCATION_PHRASES: Readonly<Record<PackTruncation, string>> = {
   activation_budget: 'spread truncated on the activation budget',
@@ -32,10 +36,12 @@ export type HonestyInput = {
   readonly repeats: number;
   readonly own: number;
   readonly duplicates: number;
+  /** What the recall model said about its own selection, when it said anything. */
+  readonly assessorNote?: string;
 };
 
-function plural(count: number, noun: string): string {
-  return `${String(count)} ${noun}${count === 1 ? '' : 's'}`;
+function plural(count: number, noun: string, many = `${noun}s`): string {
+  return `${String(count)} ${count === 1 ? noun : many}`;
 }
 
 /**
@@ -71,6 +77,9 @@ export function honestyNote(input: HonestyInput): string | undefined {
   }
   if (input.duplicates > 0) {
     clauses.push(`${plural(input.duplicates, 'item')} restating one already served here`);
+  }
+  if (input.assessorNote !== undefined) {
+    clauses.push(`assessment says: ${input.assessorNote}`);
   }
   if (clauses.length === 0) {
     return undefined;
@@ -115,7 +124,19 @@ function emptyOpening(repeats: number, own: number): string {
  * this is the copy that reaches a client reading only the rendered block, which is also the
  * client most likely to read a note about a truncated spread as the reason the pack is empty.
  */
-export function emptyPackBody(report: AdmissionReport, repeats: number, own: number): string {
+export function emptyPackBody(
+  report: AdmissionReport,
+  repeats: number,
+  own: number,
+  assessment?: AssessmentReport,
+): string {
+  // A judgment rather than a miss: the model was shown what retrieval found and chose none of it.
+  if (assessment?.outcome === 'selected' && assessment.selected === 0 && assessment.shown > 0) {
+    return (
+      `Retrieval found ${plural(assessment.shown, 'candidate memory', 'candidate memories')}; ` +
+      'the assessment judged none of them useful here.'
+    );
+  }
   const opening = emptyOpening(repeats, own);
   if (report.considered === 0) {
     return `${opening} Nothing reached the admission gate.`;

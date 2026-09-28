@@ -185,6 +185,18 @@ export function descriptionFreshnessOperation(): IntrospectionOperation {
             'description freshness disabled by AION_MAINTENANCE_DESCRIPTION_FRESHNESS; no entity examined',
         };
       }
+      // The batch lane is Anthropic's Message Batches API. With background generation routed
+      // elsewhere, sending this work to it would answer on a model the operator did not select.
+      if (ctx.config.generation.reflectProvider !== 'anthropic') {
+        return {
+          status: 'noop',
+          itemsProcessed: 0,
+          itemsAffected: 0,
+          detail:
+            `batched description refresh runs on the Anthropic batch route, and ` +
+            `AION_REFLECT_PROVIDER=${ctx.config.generation.reflectProvider}; no entity examined`,
+        };
+      }
       const substrate = readSubstratePairing(ctx.db);
       if (substrate === undefined) {
         return {

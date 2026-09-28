@@ -15,6 +15,7 @@ import {
 } from '@aion/core';
 import { openCampaignProducer } from '@aion/core/infrastructure/providers/test-support/campaign-guard.js';
 import type { CampaignProducerHandle } from '@aion/core/infrastructure/providers/test-support/campaign-guard.js';
+import { testGenerationConfig } from '@aion/core/infrastructure/providers/test-support/generation-provider.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { REMOTE_JUDGE_ABSENT } from './gate-substrate.fixture.js';
@@ -74,14 +75,13 @@ let router: ProviderRouter;
 let scored: Scored[] = [];
 
 function batteryConfig(): Config {
-  const apiKey = process.env.AION_ANTHROPIC_API_KEY ?? '';
   return {
     ...DEFAULTS,
     ollama: {
       ...DEFAULTS.ollama,
       url: process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434',
     },
-    anthropic: { ...DEFAULTS.anthropic, apiKey },
+    ...testGenerationConfig(DEFAULTS),
     // structural_discovery's standing relevance rises with the orphan share, which takes the
     // orphan readings here at tier 2, and what this battery pins is the advisor rather than the
     // catalog's composition.
