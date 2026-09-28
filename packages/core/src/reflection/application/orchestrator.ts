@@ -332,9 +332,11 @@ export class ReflectionOrchestrator {
           name: stage.name,
           status: stage.status,
           durationMs: stage.durationMs,
+          remainder: hasRemainder(stage),
+          withheldReasons: [...new Set((stage.withheldWork ?? []).map((work) => work.reason))],
         })),
       },
-      applied ? 'reflection enriched' : 'reflection produced nothing; ledger left open',
+      applied ? 'reflection enriched' : 'reflection incomplete; ledger left open',
     );
 
     return { episodeId, status: 'completed', applied, summary };

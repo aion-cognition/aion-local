@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ReflectionRun } from './orchestrator.js';
 import { describeFailedRun } from './worker.js';
+import { buildEvidenceRevision } from '../../infrastructure/publication/preconditions.js';
 
 describe('describeFailedRun', () => {
   function run(
@@ -48,5 +49,37 @@ describe('describeFailedRun', () => {
 
   it('keeps the old message for the run that genuinely enriched nothing', () => {
     expect(describeFailedRun('ep-1', run([]))).toBe('no stage enriched ep-1');
+  });
+
+  it('reports withheld judgments without claiming successful extraction produced nothing', () => {
+    const message = describeFailedRun(
+      'ep-1',
+      run(
+        [
+          { name: 'cognitive', status: 'ok', summary: 'extracted claims', durationMs: 1 },
+          {
+            name: 'supersession',
+            status: 'skipped',
+            summary: 'judgment withheld',
+            durationMs: 1,
+            retryable: true,
+            withheldWork: [
+              {
+                nodeIds: ['claim-a', 'claim-b'],
+                disposition: 'retryable',
+                reason: 'budget_limit',
+                addresses: [],
+                revision: buildEvidenceRevision([]),
+              },
+            ],
+          },
+        ],
+        ['entities'],
+      ),
+    );
+
+    expect(message).toBe(
+      'reflection incomplete for ep-1 (1 stages already applied): supersession: budget_limit',
+    );
   });
 });

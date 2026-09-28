@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import {
   completionBinding,
   completionStages,
@@ -425,7 +427,8 @@ export class ReflectionWorker {
     const disposition = finished ? 'settled' : 'progress';
     const outcome = await this.#deps.publications.publish({
       kind: 'reflection_completion',
-      operationId: `reflection-completion:${job.id}:${String(job.attempts)}:${disposition}`,
+      // Deferrals and requeues reuse failure counts; each run can report different progress.
+      operationId: `reflection-completion:${job.id}:${randomUUID()}:${disposition}`,
       payload: {
         sourceId: episodeId,
         jobId: finished ? job.id : '',

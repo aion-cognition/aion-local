@@ -6,7 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VECTOR_JOB_TYPE } from './intake-queue.js';
 import { INTEGRATE_JOB_TYPE } from './intake.js';
 import type { ReflectionRun, ReflectionRunOptions } from './orchestrator.js';
-import { backoffDelayMs, ReflectionWorker, type ReflectionWorkerOptions } from './worker.js';
+import {
+  backoffDelayMs,
+  ReflectionWorker,
+  type CompletionPublisher,
+  type ReflectionWorkerOptions,
+} from './worker.js';
 import { EvidenceResolver } from '../../evidence/application/resolver.js';
 import { MEMORY_PROPERTIES } from '../../infrastructure/graph/episodes.js';
 import { openLogger, type Logger } from '../../infrastructure/logging/logger.js';
@@ -99,7 +104,11 @@ let provider: StubProvider;
 let logger: Logger;
 let worker: ReflectionWorker | undefined;
 
-function build(runner: StubRunner, options: ReflectionWorkerOptions = {}): ReflectionWorker {
+function build(
+  runner: StubRunner,
+  options: ReflectionWorkerOptions = {},
+  publications: CompletionPublisher = directCompletionPublisher(graph.driver, store.db),
+): ReflectionWorker {
   worker = new ReflectionWorker(
     {
       driver: graph.driver,
@@ -107,7 +116,7 @@ function build(runner: StubRunner, options: ReflectionWorkerOptions = {}): Refle
       provider,
       runner,
       logger,
-      publications: directCompletionPublisher(graph.driver, store.db),
+      publications,
       resolver: new EvidenceResolver({
         driver: graph.driver,
         db: store.db,
@@ -509,6 +518,50 @@ describe('generation with no key', () => {
     expect(held?.claimedBy).toBeNull();
     expect(held?.lastError).toContain('the day is spent');
     expect(started.retrying).toBe(0);
+  });
+
+  it('uses distinct publication identities when uncharged deferrals report new progress', async () => {
+    const runner = new StubRunner();
+    let passes = 0;
+    runner.outcome = (episodeId): ReflectionRun => {
+      passes += 1;
+      return {
+        episodeId,
+        status: 'completed',
+        applied: false,
+        summary: {
+          episodeId,
+          durationMs: 1,
+          stages: [
+            {
+              name: 'entities',
+              status: 'failed',
+              summary: `waiting after pass ${String(passes)}`,
+              durationMs: 1,
+              unavailable: { surface: 'entities', reason: 'the day is spent' },
+            },
+          ],
+          counts: {},
+          skippedStages: [],
+        },
+      };
+    };
+    const publications = directCompletionPublisher(graph.driver, store.db);
+    const publish = vi.spyOn(publications, 'publish');
+    const jobId = enqueue();
+    const first = build(runner, { breakerCooldownMs: 60_000 }, publications);
+    await first.start();
+    await first.whenIdle();
+    await first.stop();
+    expect(getReflectionJob(store.db, jobId)?.attempts).toBe(0);
+    const second = build(runner, { breakerCooldownMs: 60_000 }, publications);
+    await second.start();
+    await second.whenIdle();
+    expect(getReflectionJob(store.db, jobId)?.attempts).toBe(0);
+    expect(publish).toHaveBeenCalledTimes(2);
+    const [earlier, later] = publish.mock.calls.map(([request]) => request);
+    expect(earlier?.payload).not.toEqual(later?.payload);
+    expect(earlier?.operationId).not.toBe(later?.operationId);
   });
 
   it('charges the attempt when something in the same run actually failed', async () => {
