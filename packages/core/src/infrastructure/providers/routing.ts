@@ -129,6 +129,14 @@ export function remoteBannerLines(routing: ProviderRouting): readonly string[] {
         : `remote   nowhere to run, ${unavailableReason(route)}: ${ROLE_CALL_CLASS[route.role]}`,
     );
   }
+  if (routing.roles.reflect.provider !== 'anthropic') {
+    lines.push(
+      routing.keys.anthropic
+        ? '         description refresh stays on the Anthropic batch route (its own lane).'
+        : '         description refresh stays on the Anthropic batch route, which cannot run ' +
+            'without AION_ANTHROPIC_API_KEY.',
+    );
+  }
   if (!routing.keyPresent) {
     lines.push(
       '         capture, embeddings and every graph read still work. Unrouted generation work',
@@ -160,6 +168,12 @@ export function routingWarnings(routing: ProviderRouting): readonly string[] {
           'admits few of them. Add the model to api-pricing.ts to price it.',
       );
     }
+  }
+  if (!routing.keys.anthropic && routing.roles.reflect.available) {
+    warnings.push(
+      'description refresh runs on the Anthropic batch route, and no AION_ANTHROPIC_API_KEY is ' +
+        'set: its work stays queued until one is',
+    );
   }
   return warnings;
 }

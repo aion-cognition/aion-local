@@ -89,21 +89,14 @@ export function batchSettlementOperation(
       };
 
       // Consume first. An answer already in hand is worth more than a request not yet sent, and
-      // a tick the signal cuts short leaves the sending rather than the settling undone. Work
-      // already at the remote is settled whatever the routing says now, since its charge is
-      // committed; nothing new is sent to Anthropic while background generation is routed away.
-      const rerouted = ctx.config.generation.reflectProvider !== 'anthropic';
+      // a tick the signal cuts short leaves the sending rather than the settling undone.
       const consumed = await consumeBatchWork(deps);
-      const submitted =
-        ctx.signal.aborted || rerouted
-          ? { submitted: 0, batchId: undefined }
-          : await submitBatchWork(deps);
+      const submitted = ctx.signal.aborted
+        ? { submitted: 0, batchId: undefined }
+        : await submitBatchWork(deps);
       const counts = batchWorkCounts(ctx.db, substrate.substrateId);
 
       const touched = consumed.applied + consumed.discarded + consumed.returned + consumed.failed;
-      const paused = rerouted
-        ? `; nothing submitted while AION_REFLECT_PROVIDER=${ctx.config.generation.reflectProvider}`
-        : '';
       return {
         status: touched === 0 && submitted.submitted === 0 ? 'noop' : 'applied',
         itemsProcessed: touched + submitted.submitted,
@@ -112,7 +105,7 @@ export function batchSettlementOperation(
           `${String(consumed.applied)} applied, ${String(consumed.discarded)} discarded as stale, ` +
           `${String(consumed.returned)} owed again, ${String(consumed.failed)} failed, ` +
           `${String(consumed.unrecognized)} unrecognized; ${String(submitted.submitted)} submitted; ` +
-          `${String(counts.pending)} pending and ${String(counts.submitted)} outstanding${paused}`,
+          `${String(counts.pending)} pending and ${String(counts.submitted)} outstanding`,
       };
     },
   };

@@ -19,9 +19,10 @@ export const GENERATION_KNOBS = {
   // The recall role: the one generation on the hot path, which assesses what retrieval found (or,
   // in the `cues` recall mode, extracts search cues).
   recallProvider: ['AION_RECALL_PROVIDER', provider, 'anthropic'],
-  // Every background generation: reflection stages and judgments, narratives, and introspection's
-  // model calls. Batched description refresh runs only on the Anthropic batch route, so it pauses
-  // while this is anything else, and says so in its operation detail.
+  // Every synchronous background generation: reflection stages and judgments, narratives, and
+  // introspection's model calls. Batched description refresh is a separate, retained lane: it
+  // stays on the Anthropic Message Batches route, with the Anthropic key and model, whatever this
+  // names, and `aion status` says so when the two differ.
   reflectProvider: ['AION_REFLECT_PROVIDER', provider, 'anthropic'],
 } as const;
 

@@ -147,4 +147,23 @@ describe('what a person reads about the route', () => {
       expect.stringContaining('AION_REFLECT_PROVIDER=openai needs AION_OPENAI_API_KEY'),
     ]);
   });
+
+  it('says description refresh stays on its Anthropic batch lane when reflection is on OpenAI', () => {
+    const mixed = remoteBannerLines(
+      resolveProviderRouting(
+        config({ anthropic: 'sk-ant-test', openai: 'sk-test' }, { reflect: 'openai' }),
+      ),
+    ).join('\n');
+    const noAnthropic = resolveProviderRouting(
+      config({ openai: 'sk-test' }, { recall: 'openai', reflect: 'openai' }),
+    );
+
+    expect(mixed).toContain('description refresh stays on the Anthropic batch route');
+    expect(remoteBannerLines(noAnthropic).join('\n')).toContain(
+      'cannot run without AION_ANTHROPIC_API_KEY',
+    );
+    expect(routingWarnings(noAnthropic)).toEqual([
+      expect.stringContaining('description refresh runs on the Anthropic batch route'),
+    ]);
+  });
 });
