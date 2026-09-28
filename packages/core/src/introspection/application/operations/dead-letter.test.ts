@@ -2,26 +2,35 @@ import type { Driver } from 'neo4j-driver';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { deadLetterOperation } from './dead-letter.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
 import { refusingProvider } from '../../../infrastructure/providers/test-support/refusing-provider.fixture.js';
+import type { Provider } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
-import { countDeadLetterAttention } from '../../../infrastructure/sqlite/dead-letter-queue.js';
+import {
+  countDeadLetterAttention,
+  deadLetterSeenKey,
+  listRetriedExhaustedJobs,
+} from '../../../infrastructure/sqlite/dead-letter-queue.js';
+import { markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
 import {
   enqueueReflectionJob,
   getReflectionJob,
 } from '../../../infrastructure/sqlite/reflection-queue.js';
+import { acceptReferenceBatch } from '../../../infrastructure/sqlite/source-identity.js';
+import type { ReflectionIntakeDeps } from '../../../reflection/application/intake.js';
 import type { OperationContext } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
 
 /**
- * `dead_letter` never touches the graph, only `reflection_queue` and `ops_ledger`. A real
- * driver would just sit unused, so this file skips the Neo4j harness entirely: the stub
- * below satisfies `OperationContext`'s type and nothing in the operation calls it.
+ * `dead_letter` never touches the graph, only `reflection_queue`, `ops_ledger`, and the SQLite
+ * records a retry's conditions are read from. A real driver would just sit unused, so this file
+ * skips the Neo4j harness entirely: the stub below satisfies `OperationContext`'s type and
+ * nothing in the operation calls it.
  */
 const driver = {} as Driver;
 
@@ -52,6 +61,11 @@ afterAll(() => {
 beforeEach(() => {
   db.exec('DELETE FROM reflection_queue');
   db.exec("DELETE FROM ops_ledger WHERE key LIKE 'intro:dead_letter:%'");
+  vi.stubEnv('AION_BUILD_SHA', 'build-a');
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 function ctxFor(overrides: Partial<OperationContext> = {}): OperationContext {
@@ -72,18 +86,34 @@ function exhaust(jobId: string): void {
   db.prepare('UPDATE reflection_queue SET attempts = ? WHERE id = ?').run(MAX_ATTEMPTS, jobId);
 }
 
+function enqueueFor(episodeId: string): string {
+  return enqueueReflectionJob(
+    db,
+    'integrate',
+    { episode_id: episodeId },
+    { lane: 'interactive', episodeId },
+  );
+}
+
+/** A row that had its first retry and exhausted again, the state every case below starts in. */
+async function failedAfterFirstRetry(episodeId: string): Promise<string> {
+  const jobId = enqueueFor(episodeId);
+  exhaust(jobId);
+  await deadLetterOperation().run(ctxFor());
+  exhaust(jobId);
+  return jobId;
+}
+
+function routed(provider: Provider['route']): Provider {
+  return { ...refusingProvider, route: provider };
+}
+
 describe('dead_letter', () => {
-  it('gives an exhausted row one retry: bulk lane, attempts reset', async () => {
-    const jobId = enqueueReflectionJob(
-      db,
-      'integrate',
-      { episode_id: 'ep-1' },
-      { lane: 'interactive' },
-    );
+  it('gives an exhausted row a first retry: bulk lane, attempts reset, conditions recorded', async () => {
+    const jobId = enqueueFor('ep-1');
     exhaust(jobId);
 
-    const operation = deadLetterOperation();
-    const result = await operation.run(ctxFor());
+    const result = await deadLetterOperation().run(ctxFor());
 
     expect(result.status).toBe('applied');
     expect(result.itemsAffected).toBe(1);
@@ -91,45 +121,141 @@ describe('dead_letter', () => {
     expect(job?.lane).toBe('bulk');
     expect(job?.attempts).toBe(0);
     expect(job?.claimedAt).toBeNull();
-    expect(countDeadLetterAttention(db, MAX_ATTEMPTS)).toBe(0);
+    exhaust(jobId);
+    const [retried] = listRetriedExhaustedJobs(db, MAX_ATTEMPTS);
+    expect(retried?.retries).toEqual([
+      {
+        at: NOW.toISOString(),
+        conditions: {
+          build: 'build-a',
+          readinessPolicy: 0,
+          generationRoute: 'unrouted',
+          processingGeneration: 0,
+          referenceVersion: 0,
+        },
+      },
+    ]);
   });
 
-  it('leaves a row alone once it exhausts a second time, and surfaces it instead', async () => {
-    const jobId = enqueueReflectionJob(
-      db,
-      'integrate',
-      { episode_id: 'ep-2' },
-      { lane: 'interactive' },
-    );
-    exhaust(jobId);
-    await deadLetterOperation().run(ctxFor());
+  it('holds a row that fails again under unchanged conditions, run after run, and keeps it counted', async () => {
+    const jobId = await failedAfterFirstRetry('ep-2');
 
-    // The retry failed too: the row is exhausted again.
-    exhaust(jobId);
-    const second = await deadLetterOperation().run(ctxFor());
+    const passes = [
+      await deadLetterOperation().run(ctxFor()),
+      await deadLetterOperation().run(ctxFor()),
+      await deadLetterOperation().run(ctxFor()),
+    ];
 
-    expect(second.status).toBe('noop');
-    expect(second.itemsAffected).toBe(0);
-    expect(second.detail).toContain('1 already retried and still exhausted');
-    // Never dropped: the row is still there, exhausted, waiting on a person.
+    expect(passes.map((pass) => pass.status)).toEqual(['noop', 'noop', 'noop']);
+    expect(passes[0]?.detail).toContain('1 exhausted again under conditions already tried');
+    // Never dropped: the row is still there, exhausted, and visible in the health count.
     const job = getReflectionJob(db, jobId);
     expect(job?.attempts).toBe(MAX_ATTEMPTS);
     expect(countDeadLetterAttention(db, MAX_ATTEMPTS)).toBe(1);
+    expect(listRetriedExhaustedJobs(db, MAX_ATTEMPTS)[0]?.retries).toHaveLength(1);
   });
 
-  it('bounds one run to deadLetterBatchSize rows', async () => {
-    const ids = [
-      enqueueReflectionJob(db, 'integrate', { episode_id: 'ep-3' }),
-      enqueueReflectionJob(db, 'integrate', { episode_id: 'ep-4' }),
-      enqueueReflectionJob(db, 'integrate', { episode_id: 'ep-5' }),
-    ];
-    ids.forEach(exhaust);
+  it('reconsiders a row that failed again once a new build runs, once per build', async () => {
+    const jobId = await failedAfterFirstRetry('ep-3');
+    vi.stubEnv('AION_BUILD_SHA', 'build-b');
+
+    const reconsidered = await deadLetterOperation().run(ctxFor());
+
+    expect(reconsidered.status).toBe('applied');
+    expect(reconsidered.detail).toContain('1 reconsidered under changed conditions');
+    expect(getReflectionJob(db, jobId)?.attempts).toBe(0);
+
+    // The fix did not take: the row fails again under build-b and is held there.
+    exhaust(jobId);
+    expect((await deadLetterOperation().run(ctxFor())).status).toBe('noop');
+    // A rollback to a build it already failed under is not a new reason to try.
+    vi.stubEnv('AION_BUILD_SHA', 'build-a');
+    expect((await deadLetterOperation().run(ctxFor())).status).toBe('noop');
+    const builds = listRetriedExhaustedJobs(db, MAX_ATTEMPTS)[0]?.retries.map(
+      (retry) => retry.conditions?.build,
+    );
+    expect(builds).toEqual(['build-a', 'build-b']);
+  });
+
+  it("reconsiders a row once its source's evidence changes", async () => {
+    const jobId = await failedAfterFirstRetry('ep-4');
+    acceptReferenceBatch(db, {
+      sourceId: 'ep-4',
+      acceptedHash: 'refs-after-the-failure',
+      receivedAt: NOW,
+      operationKey: 'late-references',
+      introduced: ['ref-1'],
+    });
 
     const result = await deadLetterOperation().run(ctxFor());
 
-    expect(result.itemsProcessed).toBe(2);
+    expect(result.itemsAffected).toBe(1);
+    expect(getReflectionJob(db, jobId)?.lane).toBe('bulk');
+    expect(getReflectionJob(db, jobId)?.attempts).toBe(0);
+  });
+
+  it('reconsiders a row once the generation route changes', async () => {
+    const jobId = enqueueFor('ep-5');
+    exhaust(jobId);
+    const haiku = routed({ provider: 'anthropic', model: 'claude-haiku-4-5' });
+    await deadLetterOperation().run(ctxFor({ provider: haiku }));
+    exhaust(jobId);
+    expect((await deadLetterOperation().run(ctxFor({ provider: haiku }))).status).toBe('noop');
+
+    const luna = routed({ provider: 'openai', model: 'gpt-6-luna' });
+    const result = await deadLetterOperation().run(ctxFor({ provider: luna }));
+
+    expect(result.itemsAffected).toBe(1);
+    expect(getReflectionJob(db, jobId)?.attempts).toBe(0);
+  });
+
+  it('gives a row retried before conditions were recorded one recorded cycle, then holds it', async () => {
+    const jobId = enqueueFor('ep-6');
+    exhaust(jobId);
+    markLedgerApplied(db, deadLetterSeenKey(jobId), { jobType: 'integrate' });
+
+    const first = await deadLetterOperation().run(ctxFor());
+    exhaust(jobId);
+    const second = await deadLetterOperation().run(ctxFor());
+
+    expect(first.itemsAffected).toBe(1);
+    expect(second.status).toBe('noop');
+    const retries = listRetriedExhaustedJobs(db, MAX_ATTEMPTS)[0]?.retries ?? [];
+    expect(retries).toHaveLength(2);
+    expect(retries[0]?.conditions).toBeUndefined();
+    expect(retries[1]?.conditions?.build).toBe('build-a');
+  });
+
+  it('wakes the worker for every row it re-lanes', async () => {
+    const woken: string[] = [];
+    const intake = {
+      onJobEnqueued: (jobId: string): void => {
+        woken.push(jobId);
+      },
+    } as ReflectionIntakeDeps;
+    const jobId = enqueueFor('ep-7');
+    exhaust(jobId);
+
+    await deadLetterOperation().run(ctxFor({ intake }));
+
+    expect(woken).toEqual([jobId]);
+  });
+
+  it('bounds one run to deadLetterBatchSize rows, first retries and reconsiderations together', async () => {
+    const waiting = await failedAfterFirstRetry('ep-8');
+    const ids = [enqueueFor('ep-9'), enqueueFor('ep-10')];
+    ids.forEach(exhaust);
+    vi.stubEnv('AION_BUILD_SHA', 'build-b');
+
+    const result = await deadLetterOperation().run(ctxFor());
+
     expect(result.itemsAffected).toBe(2);
-    const relaned = ids.filter((id) => getReflectionJob(db, id)?.lane === 'bulk');
-    expect(relaned).toHaveLength(2);
+    expect(result.detail).toContain('(1 more next run)');
+    expect(getReflectionJob(db, waiting)?.attempts).toBe(MAX_ATTEMPTS);
+    expect(ids.map((id) => getReflectionJob(db, id)?.lane)).toEqual(['bulk', 'bulk']);
+
+    const next = await deadLetterOperation().run(ctxFor());
+    expect(next.itemsAffected).toBe(1);
+    expect(getReflectionJob(db, waiting)?.attempts).toBe(0);
   });
 });

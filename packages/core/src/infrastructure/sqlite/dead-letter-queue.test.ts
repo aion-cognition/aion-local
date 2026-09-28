@@ -8,13 +8,25 @@ import { SqliteStore } from './database.js';
 import {
   countDeadLetterAttention,
   deadLetterSeenKey,
+  hasUntriedConditions,
   listExhaustedJobs,
+  listRetriedExhaustedJobs,
+  recordDeadLetterRetry,
   relaneDeadLetterJob,
+  type RetryConditions,
 } from './dead-letter-queue.js';
 import { markLedgerApplied } from './ops-ledger.js';
 import { enqueueReflectionJob, type ReflectionLane } from './reflection-queue.js';
 
 const MAX_ATTEMPTS = 5;
+
+const CONDITIONS: RetryConditions = {
+  build: 'build-a',
+  readinessPolicy: 1,
+  generationRoute: 'anthropic:claude-haiku-4-5',
+  processingGeneration: 1,
+  referenceVersion: 1,
+};
 
 describe('dead letter queue', () => {
   let dir: string;
@@ -50,6 +62,35 @@ describe('dead letter queue', () => {
 
     expect(listExhaustedJobs(store.db, MAX_ATTEMPTS, 1).map((job) => job.id)).toEqual([fresh]);
     expect(countDeadLetterAttention(store.db, MAX_ATTEMPTS)).toBe(1);
+  });
+
+  it('keeps every retry a row had, and reads an older marker as one retry with no conditions', () => {
+    const legacy = exhaust(enqueue('agent', 'bulk', '2026-08-01T00:00:00.000Z'));
+    const kept = exhaust(enqueue('agent', 'bulk', '2026-08-02T00:00:00.000Z'));
+    markLedgerApplied(store.db, deadLetterSeenKey(legacy), { jobType: 'integrate' });
+    const job = { id: kept, jobType: 'integrate', enqueuedAt: '', sourceId: undefined };
+    recordDeadLetterRetry(store.db, job, CONDITIONS, new Date('2026-08-03T00:00:00.000Z'));
+    const later = { ...CONDITIONS, build: 'build-b' };
+    recordDeadLetterRetry(store.db, job, later, new Date('2026-08-04T00:00:00.000Z'));
+
+    const [first, second] = listRetriedExhaustedJobs(store.db, MAX_ATTEMPTS);
+
+    expect(first?.id).toBe(legacy);
+    expect(first?.retries).toHaveLength(1);
+    expect(first?.retries[0]?.conditions).toBeUndefined();
+    expect(second?.retries).toEqual([
+      { at: '2026-08-03T00:00:00.000Z', conditions: CONDITIONS },
+      { at: '2026-08-04T00:00:00.000Z', conditions: later },
+    ]);
+  });
+
+  it('offers one cycle per distinct set of conditions, and one to a retry nobody recorded', () => {
+    const tried = [{ at: 'a', conditions: CONDITIONS }];
+
+    expect(hasUntriedConditions(tried, CONDITIONS)).toBe(false);
+    expect(hasUntriedConditions(tried, { ...CONDITIONS, referenceVersion: 2 })).toBe(true);
+    expect(hasUntriedConditions([{ at: 'a' }], CONDITIONS)).toBe(true);
+    expect(hasUntriedConditions([{ at: 'a' }, ...tried], CONDITIONS)).toBe(false);
   });
 
   it('claims a relaned row behind the bulk backlog its session already had', () => {
