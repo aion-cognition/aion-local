@@ -258,6 +258,7 @@ function installNarratives(): string {
   ];
   vi.spyOn(fusionModule, 'fuse').mockReturnValue({
     items,
+    refused: [],
     admission: report(items),
     methodStats: {},
   });

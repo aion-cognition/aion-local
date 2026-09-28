@@ -6,6 +6,7 @@ import {
   EvidenceResolver,
   CheckedJudgmentEvidence,
 } from '../../../evidence/application/resolver.js';
+import { JUDGE_ROUTE_ALLOWANCE } from '../../../evidence/domain/budget.js';
 import {
   checkedContext,
   seedSource,
@@ -22,7 +23,9 @@ afterEach(() => {
   bed.close();
 });
 it('keeps a final over-allowance pair owed when another pair receives an ordinary answer', async () => {
-  const name = 'a'.repeat(3500);
+  // Scaled with the envelope from the size the fixture was drawn at (3,500 of 16,384), so the pair
+  // carrying the name on both sides still renders past the allowance and the other stays under it.
+  const name = 'a'.repeat(Math.round((JUDGE_ROUTE_ALLOWANCE.live_supersession * 3500) / 16384));
   const texts = [`${name} new value`, `${name} old value`, 'a separate prior decision'];
   const episodes = ['episode-new', 'episode-big', 'episode-small'];
   const nodes = ['claim-new', 'claim-big', 'claim-small'];

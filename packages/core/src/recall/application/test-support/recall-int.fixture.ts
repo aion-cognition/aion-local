@@ -102,12 +102,22 @@ export const provider: Provider = {
  * Both session subtractions are off throughout. Every test here asks the same question of the
  * same reading session, and what each one measures is what the substrate answers rather than
  * what that session has already been handed or wrote itself.
+ *
+ * The `cues` mode, because the stub above answers as the cue model: what these files pin is the
+ * retrieval legs under known cues. `assessment.int.test.ts` runs the default mode over the same
+ * substrate.
  */
 export function config(): Config {
   return {
     ...DEFAULTS,
     models: { ...DEFAULTS.models, embedDimension: EMBED_DIMENSION },
-    recall: { ...DEFAULTS.recall, vectorLimit: 1, sessionDedup: false, ownSessionFilter: false },
+    recall: {
+      ...DEFAULTS.recall,
+      mode: 'cues',
+      vectorLimit: 1,
+      sessionDedup: false,
+      ownSessionFilter: false,
+    },
     contextResonance: { ...DEFAULTS.contextResonance, seedLimit: 1 },
   };
 }

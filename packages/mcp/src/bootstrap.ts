@@ -43,6 +43,7 @@ import {
   ReflectionWorker,
   runCheckedRecall,
   routingSummary,
+  routingWarnings,
   SessionManager,
   SessionNarrativeCloser,
   SqliteStore,
@@ -236,11 +237,8 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       { routing: router.routing.roles },
       `provider routing: ${routingSummary(router.routing)}`,
     );
-    if (!router.routing.keyPresent) {
-      logger.warn(
-        'no AION_ANTHROPIC_API_KEY is set: capture, embedding and recall run, and every ' +
-          'generation stays queued until a key is set',
-      );
+    for (const warning of routingWarnings(router.routing)) {
+      logger.warn(warning);
     }
     await reconcileModels(config, logger);
     // Deliberately not awaited: binding the port never waits on Ollama, and an early recall

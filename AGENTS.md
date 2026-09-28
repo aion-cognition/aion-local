@@ -183,9 +183,14 @@ npm run build && ./bin/aion-native init --install native
 ```
 
 The sha rides in the job's environment, so a new one rewrites the plist and init reloads the
-job; an unchanged plist against a healthy server is a no-op. `bin/aion-native` stamps HEAD only
-when `packages/*/dist` is at least as new as the tracked sources, so a pull with no build reads
-`unstamped` rather than a sha the running code does not hold.
+job; an unchanged plist against a healthy server is a no-op. `npm run build` records what it
+built (`scripts/build-record.mjs`, run as `prebuild`/`postbuild`): a content digest of the inputs
+the compiler read and its `.tsbuildinfo` state, written only when the build succeeded and the
+source did not move under it. `bin/aion-native` stamps the job only when that record holds the
+source on disk, by content rather than mtime, so an incremental build that left an entry file
+untouched is recognised and a pull with no build reads `unstamped` rather than a sha the running
+code does not hold. Source that differs from HEAD stamps as `<sha>-dirty-<digest>`, never as the
+bare commit, and doctor compares like with like.
 
 ## The re-exercise gate
 
@@ -193,7 +198,7 @@ when `packages/*/dist` is at least as new as the tracked sources, so a pull with
 batteries, listed below. Each battery is a finding from the first full-system exercise round,
 re-run against the shipped pipeline (`bootstrap.ts`'s own stage list, live Ollama, a pooled
 throwaway Neo4j cleared for each file). The other nine files gate one behavior each, four of
-them the mode-setting batteries further down and one of them `judged-pair-liveness`, which is
+them the precision batteries further down and one of them `judged-pair-liveness`, which is
 where a fresh contradicting pair has to reach the judge and the judgment has to complete.
 
 ```
@@ -284,7 +289,10 @@ to do and no collector.
 Integration tests that drive enrichment call `testGenerationProvider(options)`
 (`infrastructure/providers/test-support/generation-provider.ts`) instead of constructing a
 provider directly. With `AION_ANTHROPIC_API_KEY` set, generation runs on Anthropic
-(`claude-haiku-4-5`, override with `AION_ANTHROPIC_MODEL`) and returns in a second or two.
+(`claude-haiku-4-5`, override with `AION_ANTHROPIC_MODEL`) and returns in a second or two. With
+`AION_GENERATION_PROVIDER=openai` exported and `AION_OPENAI_API_KEY` set it runs on OpenAI
+(`gpt-6-luna`, override with `AION_OPENAI_MODEL`) instead, which is how a comparison is run; the
+route is only ever chosen by that export.
 Embedding always stays on Ollama, since the substrate has one embedding space. With no key the
 provider refuses to generate with the same error the service raises: there is no second route to
 fall back to. The precision gates guard themselves with their own `REMOTE_JUDGE_ABSENT` skip; the
@@ -292,23 +300,38 @@ rest of the enrichment files fail on a keyless machine, which is the honest read
 they measure cannot run there.
 
 The key needs no export. The `integration` and `integration-ollama` projects run a setup file
-(`infrastructure/config/test-support/load-env.fixture.ts`) that reads `AION_ANTHROPIC_API_KEY`
-and `AION_ANTHROPIC_MODEL` from the repo `.env`. It sets whichever of the two the shell left
-unset or blank. Setup files run before any test module loads, so a battery reading the key at
-module scope sees the loaded value. An exported value wins over the file. Those two keys are the
-only ones loaded, so a pin sitting in `.env` cannot reroute a run. `npm run quality:extraction`
-loads the same two from the working directory.
+(`infrastructure/config/test-support/load-env.fixture.ts`) that reads `AION_ANTHROPIC_API_KEY`,
+`AION_ANTHROPIC_MODEL`, `AION_OPENAI_API_KEY` and `AION_OPENAI_MODEL` from the repo `.env`. It
+sets whichever of them the shell left unset or blank. Setup files run before any test module
+loads, so a battery reading the key at module scope sees the loaded value. An exported value wins
+over the file. Those are the only ones loaded, so a pin sitting in `.env` cannot reroute a run.
+`npm run quality:extraction` loads `AION_ANTHROPIC_API_KEY` and `AION_ANTHROPIC_MODEL` from the
+working directory and measures the Anthropic route only.
+
+`AION_PROVIDER_CHECK=1` runs `gate/provider-activation.int.test.ts`, and `AION_LIVE_BATCH=1` runs
+`description-freshness-live.int.test.ts`: the one-provider checks (a fresh reflection, an
+assessed recall, an exhausted job recovered by `dead_letter`, and a description-refresh batch
+submitted and settled at the vendor). Only the selected provider's key may reach the run, from
+the shell or the repo `.env`; the first file fails if the other one is set. Both spend money and
+neither runs by default.
 
 A file whose subject is the embedding model itself (`ollama-provider.int.test.ts`) builds its own
 `OllamaProvider` and ignores this switch.
 
-`gate/supersession-precision.int.test.ts` is what sets the shipped `AION_SUPERSEDE_MODE`.
-It scores the single-pass and the two-pass judge over the same 24 pairs. It asserts the
-shipped default matches its own measurement against a bar written before the numbers: at or
-above 0.9 precision and 0.9 recall ships `unanimous`, under either bar ships `propose`. A
-failure there means the judge moved, and the fix is to change the default rather than the
-assertion. It also prints a separate RETRO line scoring the two-pass judge against proposals
-a person already ruled on. That is a hindsight figure, never mixed into the first.
+The four precision batteries below report measurements; none of them chooses a shipped mode.
+Each prints its precision against the bar it was written with and separately asserts a pinned
+default, so a model scoring under 0.9 fails nothing and flips no runtime behavior into `propose`.
+They are optional diagnostics for looking at how a model judges, not a qualification a model
+has to pass before it is used: a provider switch does not require rerunning them, and the
+embedding floors they sit on belong to the Arctic space rather than to the generation model.
+What they do still gate is software correctness: corpus shape, parse and accounting, identity,
+and the few assertions named below.
+
+`gate/supersession-precision.int.test.ts` scores the single-pass and the two-pass judge over the
+same 24 pairs for `AION_SUPERSEDE_MODE`. It prints the result against the 0.9 precision and
+recall bar and asserts the pinned default, `unanimous`, independently of that result. It also
+prints a separate RETRO line scoring the two-pass judge against proposals a person already
+ruled on. That is a hindsight figure, never mixed into the first.
 
 `gate/tier3-advisor-selection.int.test.ts` no longer works that way, and the difference is
 deliberate. It reads the same 24 health snapshots the deterministic tiers leave idle and scores
@@ -322,21 +345,17 @@ second model call this file used to score is deleted; it vetoed 20 of 23 recomme
 including ones the corpus calls correct.
 
 `gate/entity-cascade-precision.int.test.ts` is the same shape for `AION_ENTITY_MERGE_MODE`. It
-runs the 24-pair cascade battery pinned to `unanimous`. It asserts the shipped default against
-a bar written before the numbers: precision at or above 0.9 on the headline, tier 0 included,
-and at or above 0.9 on the judge tier alone ships `unanimous`, under either bar ships
-`propose`. `JUDGED_SAMPLE_FLOOR` (4) is the smallest judged sample the rule trusts, since tier
-0's deterministic merges alone can carry the headline to 1.000 without judging anything. A
-failure there means the cascade moved, and the fix is to change the knob rather than the
-assertion.
+runs the 24-pair cascade battery pinned to `unanimous`, prints precision on the headline (tier 0
+included) and on the judge tier alone against the 0.9 bar, and asserts the pinned default
+independently. It keeps two real assertions: tier 0 makes no wrong deterministic merge, and at
+least `JUDGED_SAMPLE_FLOOR` (4) of the designed pairs reach the judge, which checks the battery's
+wiring. It counts pairs asked, never merges made: a floor on merges would be a quota on the model's
+judgment.
 
 `gate/keyed-close-precision.int.test.ts` is the same shape for `AION_KEYED_CLOSE_MODE`. It tells
-24 designed pairs of sessions to the shipped entity and cognitive stages, pinned to `close`. It
-scores every close the subject key made on its own against truth committed in the fixture.
-The bar written before the numbers is 0.95 rather than 0.9, because a keyed close is the only
-closure path with no second opinion behind it. At or above it ships `close`; under it ships
-`judge`, where the key becomes a candidate generator for the same two-pass unanimous judge.
-`KEYED_CLOSE_SAMPLE_FLOOR` (4) is the smallest number of closes the rule will ship `close` on,
-half the eight cases that can produce one. The test prints recall and gates nothing on it,
-since a key that matched nothing leaves the pair to the judge. A failure there means the
-mechanism or the extractor moved, and the fix is to change the knob rather than the assertion.
+24 designed pairs of sessions to the shipped entity and cognitive stages, pinned to `close`, and
+scores every close the subject key made on its own against truth committed in the fixture. It
+prints that precision against a 0.95 bar (a keyed close is the only closure path with no second
+opinion behind it) and whether `KEYED_CLOSE_SAMPLE_FLOOR` (4) closes were made, and asserts the
+pinned default, `judge`, where the key is a candidate generator for the two-pass unanimous judge.
+It keeps two correctness assertions: the key closes something, and no close crosses cases.

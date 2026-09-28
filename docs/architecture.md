@@ -43,8 +43,8 @@ no notion of episodes, cues, or memory packs beyond those primitives.
   the insert-only usage stream `aion replay usage` puts back, last-pack cache, the served-item
   record, ops ledger, claim locking, and the two proposal
   queues, whose reads share one `proposal-table.ts` because both are an id, the pair the
-  proposal is about, and a `resolved_at` that is null while a person still owes the row a
-  decision), `providers/` (the Ollama and Anthropic clients, the circuit breaker, the
+  proposal is about, and a `resolved_at` that is null while the row is still undecided),
+  `providers/` (the Ollama and Anthropic clients, the circuit breaker, the
   per-role routing layer and the model reconciliation that follows it), `publication/` (the
   coordinator every two-store write goes through: the guard a plan is prepared under, the
   precondition and evidence-revision check, the short SQLite transaction, the graph apply, the
@@ -735,10 +735,11 @@ opinion, a wider scope, and a different attribute of one subject all survive. It
 whether the newer claim is coherent at all, since a garbled extraction can win a same-subject
 comparison while asserting nothing. Only a unanimous pair closes, through the same
 `applySupersessionProposal` path a review takes, stamped `supersession_unanimous_auto`. A veto
-becomes a proposal row carrying the reason. The stage reports six outcomes rather than two.
+becomes a proposal row carrying the reason, which `proposal_resolution` decides again on wider
+evidence. The stage reports six outcomes rather than two.
 `closed`, `vetoed` and `proposed` are the ordinary three. `stale` is a judgment whose losing side
-had already lost currency, so it closed nothing and its row is resolved rather than left asking a
-person to apply a correction that already happened. `withheld` is a judgment whose evidence moved
+had already lost currency, so it closed nothing and its row is resolved rather than left open
+for a correction that already happened. `withheld` is a judgment whose evidence moved
 between the answer and the write, so the pair goes back to being owed. `already_decided` is a
 pair carrying a person's ruling, which no mode may reopen and which writes no counter at all.
 Confidence was the earlier gate and is not one: the judge answers 0.95 to every affirmative it

@@ -9,7 +9,7 @@ import type { IntrospectionOperation, OperationOutcome } from '../../domain/oper
 export const RECONCILE_REENQUEUE_OPERATION = 'reconcile_reenqueue';
 
 /**
- * Wraps `reconcileEnrichment`, the same call `aion doctor`'s `review-queue` check and the
+ * Wraps `reconcileEnrichment`, the same call `aion doctor`'s `enrichment-reconcile` check and the
  * operator's `aion queue reconcile` make, with `reEnqueue: true`. An episode with no
  * orchestrator ledger key and no queue row will never enrich on its own: nothing joins the
  * graph against the queue, so this is the one path that finds it.

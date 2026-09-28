@@ -98,8 +98,8 @@ export function frameText(rendering: FrameRendering): string {
  *
  * Concise for the surfaces that read fixed text and return what is in it: cue extraction, entity
  * and cognitive extraction, restatement, the relationship reader. Full for the surfaces that
- * decide something: the judges, the strategist, the bridge builder, synthesis and preference
- * inference. This is the starting allocation and not a permanent restriction on what the model
+ * decide something: the judges, recall's assessment of what helps, the strategist, the bridge
+ * builder, synthesis and preference inference. This is the starting allocation and not a permanent restriction on what the model
  * may read; F's comparison is what moves it.
  *
  * A surface the table does not name reads concise. That is the conservative default: an
@@ -108,6 +108,7 @@ export function frameText(rendering: FrameRendering): string {
  */
 const RENDERING_BY_SURFACE: Readonly<Record<string, FrameRendering>> = {
   cues: 'concise',
+  recall_assessment: 'full',
   entities: 'concise',
   cognitive: 'concise',
   cognitive_restatement: 'concise',

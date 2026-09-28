@@ -6,8 +6,12 @@ import { NEO4J_DEFAULT_USER, waitForBoltReady } from '../provision.js';
 
 const execFileAsync = promisify(execFile);
 
-/** Kept in lockstep with compose.yaml's neo4j service by hand; nothing generates one from the other. */
-const NEO4J_TEST_IMAGE = 'neo4j:2026.07.1-community';
+/**
+ * Kept in lockstep with compose.yaml's neo4j service by hand; nothing generates one from the other.
+ * `TEST_NEO4J_IMAGE` runs a file against another pairing, which is how a procedure census of a
+ * series the compose file does not pin is taken (`provision.ts`'s `VERIFIED_PAIRINGS`).
+ */
+const NEO4J_TEST_IMAGE = process.env.TEST_NEO4J_IMAGE ?? 'neo4j:2026.07.1-community';
 const NEO4J_TEST_PASSWORD = 'aion-test-harness-password';
 const READY_TIMEOUT_MS = 60_000;
 

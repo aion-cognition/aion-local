@@ -9,6 +9,10 @@
  *
  * The four non-replacement shapes are the ones the measured false positives came in, stated
  * generally rather than as the cases that produced them.
+ *
+ * Rule three tells a record of an occasion from an event that changes the subject. Both describe
+ * something that happened, and a reviewer that stops there keeps the value a move or a handover
+ * replaced.
  */
 const REVIEW = [
   'You decide one question: is the earlier statement, exactly as written, false now?',
@@ -31,7 +35,9 @@ const REVIEW = [
   'environments, or one particular occasion set beside a standing rule. A record of one run,',
   'one measurement, or one meeting stays true after the thing it observed changes. A statement',
   'of how things stand carries no occasion, so a newer statement giving that standing value a',
-  'different value replaces it and this rule does not apply.',
+  'different value replaces it and this rule does not apply. An event that changes how things',
+  'stand, such as moving the subject, replacing a part of it, or handing it over, is not a record',
+  'of one occasion either: it sets the standing value to a new one, and this rule does not apply.',
   'Four. The newer statement restates the earlier one, summarises it, or is merely more precise',
   'about it.',
   'Only where none of the four applies, and you can name one attribute of the subject with an',

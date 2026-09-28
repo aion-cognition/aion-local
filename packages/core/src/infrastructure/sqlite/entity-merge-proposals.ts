@@ -18,9 +18,9 @@ import {
 /**
  * Near-duplicates the dedup stage found but would not merge. Since migration 003 identity keys
  * on `name_norm` alone, so a pair reaching here has two genuinely different names and joining
- * them means deciding they are one referent. That decision is a person's; detection lands here,
- * and the operator apply reached from `aion proposals` is the one reader that applies these
- * rows. Nothing in the pipeline reads them back on its own.
+ * them means deciding they are one referent. Detection lands here and `proposal_resolution`
+ * decides each row on its own, through the same apply `aion proposals` offers a person who wants
+ * to decide one first. The reflection pipeline never reads these rows back.
  */
 
 /**
@@ -42,7 +42,7 @@ export type EntityMergeProposal = {
   similaritySource: EntityMergeSimilaritySource;
   episodeId: string;
   createdAt: string;
-  /** Null while the proposal is still open; a timestamp once a person has dealt with it. */
+  /** Null while the proposal is still open; a timestamp once it has been decided. */
   resolvedAt: string | null;
   /**
    * How many lifecycle transitions this row has been through, advanced by the writer that makes
@@ -111,7 +111,7 @@ const PROPOSALS: ProposalTableSpec<EntityMergeProposalRow, EntityMergeProposal> 
  * Idempotent on the id-sorted pair: the same two entities detected again from either side
  * refresh the row rather than adding one, so a stage re-run after a crash before the ledger
  * mark leaves the queue exactly as long as it was. `created_at` and `resolved_at` survive the
- * refresh: a proposal a person already resolved stays resolved.
+ * refresh: a proposal already resolved stays resolved.
  */
 export function recordEntityMergeProposal(
   db: SqliteHandle,

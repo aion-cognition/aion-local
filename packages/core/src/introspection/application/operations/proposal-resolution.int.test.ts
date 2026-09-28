@@ -19,7 +19,10 @@ import {
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { unsupersedeNode } from '../../../infrastructure/graph/unsupersede.js';
 import { openLogger } from '../../../infrastructure/logging/logger.js';
-import { testGenerationProvider } from '../../../infrastructure/providers/test-support/generation-provider.js';
+import {
+  testGenerationKey,
+  testGenerationProvider,
+} from '../../../infrastructure/providers/test-support/generation-provider.js';
 import type { Provider } from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { getLedgerEntry } from '../../../infrastructure/sqlite/ops-ledger.js';
@@ -44,13 +47,10 @@ import { healthFixture } from '../../domain/test-support/health.fixture.js';
  * operation reads them, both judge passes answer, and the row is terminal by the end of the
  * run whichever way they answer.
  *
- * The judges run remotely here, so the file skips without a key rather than measuring the local
- * model against a queue the shipped profile decides on Haiku.
- *
- * Written out rather than imported: this is the read the gate batteries make, and `core` does
- * not import from `mcp`, where that constant lives.
+ * The judges run remotely here on the provider `AION_GENERATION_PROVIDER` selects, so the file
+ * skips without that provider's key rather than measuring something the service would not run.
  */
-const REMOTE_JUDGE_ABSENT = (process.env.AION_ANTHROPIC_API_KEY ?? '').trim() === '';
+const REMOTE_JUDGE_ABSENT = testGenerationKey() === '';
 
 const PRIOR_TEXT = 'The Zephyr ingest worker polls its queue every 45 seconds.';
 const NEXT_TEXT = 'The Zephyr ingest worker polls its queue every 5 seconds now.';
@@ -200,7 +200,9 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('proposal_resolution against a live graph',
     expect(summary.grounds).toContain('second pass');
     // Which way the live pair went, since both are correct outcomes and only the record says
     // which one this run made. Printed under `--reporter=verbose`.
-    console.log(`RESOLUTION ${summary.verdict}: ${summary.grounds}`);
+    console.log(
+      `RESOLUTION on ${live.route?.provider ?? 'unrouted'} ${summary.verdict}: ${summary.grounds}`,
+    );
 
     if (summary.verdict === 'dismissed') {
       // A dismissal writes nothing to the graph, so the claim the correction named still stands.

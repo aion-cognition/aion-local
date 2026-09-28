@@ -164,7 +164,25 @@ describe('renderStatus', () => {
       `routing  cue=anthropic:${DEFAULTS.anthropic.model} reflect=anthropic:${DEFAULTS.anthropic.model}`,
     );
     expect(text).toContain(`resident   ${DEFAULTS.models.embed}`);
-    expect(text).toContain('Anthropic API');
+    expect(text).toContain(
+      `generation leaves this machine for anthropic (${DEFAULTS.anthropic.model})`,
+    );
+  });
+
+  it('names the model generation runs on when OpenAI is the selected provider', () => {
+    const { lines, write } = collector();
+    const openai: Config = {
+      ...DEFAULTS,
+      openai: { ...DEFAULTS.openai, apiKey: 'sk-test-openai' },
+      generation: { provider: 'openai' },
+    };
+
+    renderStatus(healthy, openai, write);
+
+    const text = lines.join('\n');
+    expect(text).toContain(`generation=${DEFAULTS.openai.model}`);
+    expect(text).toContain(`routing  cue=openai:${DEFAULTS.openai.model}`);
+    expect(text).not.toContain('sk-test-openai');
   });
 
   it('says nothing is loaded rather than leaving the resident line blank', () => {
@@ -186,8 +204,11 @@ describe('renderStatus', () => {
 
     const text = lines.join('\n');
     expect(text).toContain(`routing  cue=anthropic:${DEFAULTS.anthropic.model}`);
-    expect(text).toContain('generation leaves this machine for the Anthropic API');
-    expect(text).toContain('recall cue extraction');
+    expect(text).toContain(
+      `generation leaves this machine for anthropic (${DEFAULTS.anthropic.model})`,
+    );
+    expect(text).toContain('recall (candidate assessment');
+    expect(text).toContain('reflection extraction and session narratives');
     expect(text).toContain('embeddings and every graph read stay local');
     // The key itself is never rendered.
     expect(text).not.toContain('sk-ant-test');
@@ -199,8 +220,9 @@ describe('renderStatus', () => {
     renderStatus(healthy, DEFAULTS, write);
 
     const text = lines.join('\n');
-    expect(text).toContain('routing  cue=queued reflect=queued');
-    expect(text).toContain('Generation work queues');
+    expect(text).toContain('routing  cue=queued(anthropic) reflect=queued(anthropic)');
+    expect(text).toContain('needs AION_ANTHROPIC_API_KEY');
+    expect(text).toContain('until the key is set');
   });
 
   it('reports the edge-weight distribution per type, and n=0 for a type with no live edge', () => {

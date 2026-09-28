@@ -18,7 +18,9 @@ COPY packages/cli/package.json ./packages/cli/
 RUN npm install -g npm@11 && npm ci
 
 COPY packages ./packages
-RUN npm run build && npm prune --omit=dev
+# The image stamps its build from AION_BUILD_SHA below, so the native profile's build record
+# (`prebuild`/`postbuild`, which reads git) is skipped here: the image has no .git to read.
+RUN npm run build --ignore-scripts && npm prune --omit=dev
 
 
 FROM node:22-bookworm-slim AS runtime

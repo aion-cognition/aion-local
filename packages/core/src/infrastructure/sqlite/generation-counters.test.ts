@@ -20,6 +20,7 @@ import { GENERATION_ROLES } from '../providers/routing.js';
  */
 const ROUTABLE: Readonly<Record<GenerationEvent['provider'], GenerationCounterProvider>> = {
   anthropic: 'anthropic',
+  openai: 'openai',
 };
 
 describe('generation counters', () => {

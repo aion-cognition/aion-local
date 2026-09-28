@@ -156,7 +156,13 @@ beforeAll(async () => {
     // question in the same session was already handed.
     config: {
       ...DEFAULTS,
-      recall: { ...DEFAULTS.recall, sessionDedup: false, ownSessionFilter: false },
+      recall: {
+        ...DEFAULTS.recall,
+        // The stub provider answers as the cue model, so this file runs the `cues` recall mode.
+        mode: 'cues',
+        sessionDedup: false,
+        ownSessionFilter: false,
+      },
     },
     cueCache: new CueCache(),
     logger,

@@ -86,7 +86,9 @@ describe('the Ollama round-trip check', () => {
 
     expect(result.ok).toBe(true);
     expect(result.detail).toContain(`${String(DEFAULTS.models.embedDimension)} dimensions`);
-    expect(result.detail).toContain(`generation on anthropic (${DEFAULTS.anthropic.model})`);
+    expect(result.detail).toContain(
+      `generation cue=anthropic:${DEFAULTS.anthropic.model} reflect=anthropic:${DEFAULTS.anthropic.model}`,
+    );
     expect(paths).not.toContain('/api/chat');
   });
 
@@ -94,7 +96,9 @@ describe('the Ollama round-trip check', () => {
     const { result, paths } = await runOllamaCheck(DEFAULTS);
 
     expect(result.ok).toBe(true);
-    expect(result.detail).toContain('generation queued: no AION_ANTHROPIC_API_KEY set');
+    expect(result.detail).toContain(
+      'generation queued (AION_GENERATION_PROVIDER=anthropic needs AION_ANTHROPIC_API_KEY)',
+    );
     expect(paths).not.toContain('/api/chat');
   });
 });
@@ -136,7 +140,7 @@ describe('the hooks-route check', () => {
 
     expect(result).toEqual({
       ok: true,
-      detail: `hooks installed; capture digests on ${DEFAULTS.anthropic.model}`,
+      detail: `hooks installed; capture digests on anthropic:${DEFAULTS.anthropic.model}`,
     });
   });
 

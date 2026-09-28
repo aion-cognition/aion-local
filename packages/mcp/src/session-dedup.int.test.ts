@@ -98,7 +98,8 @@ function config(overrides: Partial<Config['recall']> = {}): Config {
   return {
     ...DEFAULTS,
     models: { ...DEFAULTS.models, embedDimension: EMBED_DIMENSION },
-    recall: { ...DEFAULTS.recall, ...overrides },
+    // The stub provider answers as the cue model, so this file runs the `cues` recall mode.
+    recall: { ...DEFAULTS.recall, mode: 'cues', ...overrides },
   };
 }
 

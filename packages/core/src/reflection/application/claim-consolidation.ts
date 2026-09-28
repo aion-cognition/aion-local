@@ -138,7 +138,7 @@ type ConsolidationSettings = {
 /** Sized off the route the same way every other synthesis source is. */
 function settingsOf(options: ConsolidationOptions, provider: Provider): ConsolidationSettings {
   const scale = narrativeScale(
-    provider.route?.provider === 'anthropic',
+    provider.route !== undefined,
     options.reflection ?? DEFAULTS.reflection,
   );
   return {

@@ -9,7 +9,7 @@ import { assembleJudgmentEvidence, type JudgmentPair } from './judgment.js';
 import { EvidenceResolver } from './resolver.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import type { ReflectionContent } from '../../reflection/domain/content.js';
-import { EVIDENCE_LIMITS, RequestBudget } from '../domain/budget.js';
+import { JUDGE_ROUTE_ALLOWANCE, EVIDENCE_LIMITS, RequestBudget } from '../domain/budget.js';
 import { durableRoleScope } from '../domain/scopes.js';
 import {
   checkedContext,
@@ -207,12 +207,47 @@ describe('judgment evidence assembly', () => {
   });
 
   it('refuses a pair that does not fit the route allowance the caller reserved', async () => {
-    const assembly = await assembleJudgmentEvidence(deps, pair(16380), checkedContext());
+    const assembly = await assembleJudgmentEvidence(
+      deps,
+      pair(JUDGE_ROUTE_ALLOWANCE.live_supersession - 4),
+      checkedContext(),
+    );
 
     expect(assembly.status).toBe('incomplete');
     expect(
       assembly.status === 'incomplete' ? assembly.reasons.map((reason) => reason.reason) : [],
     ).toEqual(['budget_limit', 'budget_limit']);
+  });
+
+  it('admits a pair whose required source is the size the live queue was withheld on', async () => {
+    // One side of a pair the live substrate withheld as budget_limit needed 72,581 units of
+    // source before any prompt was added.
+    seedSource(store.db, {
+      sourceId: 'episode-long',
+      sessionId: 'session-1',
+      identity: 'agent-1',
+      content: content('x'.repeat(72_581)),
+      turnIds: ['episode-long-turn'],
+      now: NOW,
+    });
+    commitIncidence(store.db, {
+      sourceId: 'episode-long',
+      nodeId: 'claim-long',
+      role: 'extraction',
+      operationId: 'extract:claim-long',
+      at: NOW,
+    });
+    establishScope(store.db, 'claim-long', durableRoleScope('extraction', 'out'), NOW);
+    establishScope(store.db, 'claim-long', durableRoleScope('stated_correction', 'in'), NOW);
+    establishNodeState(store.db, 'claim-long', { revision: 1, at: NOW });
+    const long: JudgmentPair = {
+      ...pair(),
+      sides: [{ nodeId: 'claim-long', statement: 'the long session said so' }, pair().sides[1]],
+    };
+
+    const assembly = await assembleJudgmentEvidence(deps, long, checkedContext());
+
+    expect(assembly.status).toBe('assembled');
   });
 
   it('keeps the extraction membership dependency in the assembled revision', async () => {

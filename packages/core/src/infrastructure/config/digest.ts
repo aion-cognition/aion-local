@@ -12,7 +12,11 @@ import type { Config } from './schema.js';
  */
 
 /** Config leaves that hold a secret. Their values never reach a digest, a report, or a log. */
-export const SECRET_CONFIG_PATHS: readonly string[] = ['neo4j.password', 'anthropic.apiKey'];
+export const SECRET_CONFIG_PATHS: readonly string[] = [
+  'neo4j.password',
+  'anthropic.apiKey',
+  'openai.apiKey',
+];
 
 export function redactedConfig(config: Config): Record<string, unknown> {
   const flat: Record<string, unknown> = {};

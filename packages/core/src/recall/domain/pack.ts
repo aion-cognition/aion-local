@@ -1,5 +1,6 @@
 import {
   MemoryPackSchema,
+  type AssessmentReport,
   type Cue,
   type Degradation,
   type MemoryPack,
@@ -21,8 +22,9 @@ import {
 } from './pack-buckets.js';
 import type { PackDecisionObserver, PackDecisionReason } from './pack-decisions.js';
 import {
-  renderBucket,
+  PACK_HEADING,
   renderItem,
+  renderPack,
   toPackItem,
   STANDING_LEGEND,
   type ItemAnnotations,
@@ -57,7 +59,7 @@ function episodeKey(item: FusedItem): string {
  */
 export const CHARS_PER_TOKEN = 4;
 
-export const PACK_HEADING = '# Memory';
+export { PACK_HEADING };
 
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN);
@@ -148,6 +150,15 @@ export type AssemblePackInput = {
    * membership.
    */
   readonly foldable?: ReadonlyMap<string, ReadonlySet<string>>;
+  /**
+   * The recall model's selection, most useful first, across all three populations. Present, it
+   * replaces arrival order and the superseded deferral: the model was shown each memory's standing
+   * and currency, so the order it chose is the one the budget is spent in. The caps, the budget,
+   * the fold and the subtractions still apply. Absent on the ranking path.
+   */
+  readonly order?: readonly string[];
+  /** What the recall model was shown and what became of its answer. */
+  readonly assessment?: AssessmentReport;
   /**
    * A reader of the decision assembly is making, called where the decision is made and in the
    * order the rules run. Absent everywhere but a comparison run, and it decides nothing: a
@@ -391,39 +402,35 @@ function select(input: AssemblePackInput, note: string | undefined): Assembled {
     }
   }
 
-  sweep((item) => !deferred(item));
-  sweep(deferred);
+  /** The assessment's order: each selected memory placed as the population it came from. */
+  function placeInOrder(order: readonly string[]): void {
+    const found = new Map(input.items.map((item) => [item.id, item]));
+    const beside = new Map<string, [FusedItem, PackBucket]>();
+    for (const item of input.resonant ?? []) {
+      beside.set(item.id, [item, 'resonant']);
+    }
+    for (const item of input.intentions ?? []) {
+      beside.set(item.id, [item, 'intentions']);
+    }
+    for (const id of order) {
+      const item = found.get(id);
+      const other = beside.get(id);
+      if (item !== undefined) {
+        placeRanked(item);
+      } else if (other !== undefined) {
+        placeBeside(...other);
+      }
+    }
+  }
+
+  if (input.order === undefined) {
+    sweep((item) => !deferred(item));
+    sweep(deferred);
+  } else {
+    placeInOrder(input.order);
+  }
 
   return { selection, folded };
-}
-
-function render(
-  selection: Selection,
-  note: string | undefined,
-  admission: AdmissionReport,
-  repeats: number,
-  own: number,
-): string {
-  const sections: string[] = [];
-  if (note !== undefined) {
-    sections.push(note);
-  }
-  const buckets: string[] = [];
-  for (const bucket of PACK_BUCKETS) {
-    const entries = selection.get(bucket);
-    if (entries === undefined || entries.length === 0) {
-      continue;
-    }
-    buckets.push(renderBucket(bucket, entries));
-  }
-  if (buckets.length === 0) {
-    sections.push(emptyPackBody(admission, repeats, own));
-  } else {
-    // The legend explains a word every item below carries, so it goes above them and only when
-    // there are items to explain. An empty pack has nothing to key.
-    sections.push(STANDING_LEGEND, ...buckets);
-  }
-  return `${PACK_HEADING}\n\n${sections.join('\n\n')}`;
 }
 
 /**
@@ -446,6 +453,7 @@ export function assemblePack(input: AssemblePackInput): MemoryPack {
       : { obligationCensusGap: input.obligationCensusGap }),
     repeats,
     own,
+    ...(input.assessment?.note === undefined ? {} : { assessorNote: input.assessment.note }),
   };
   // The fold's count cannot be known before assembly, and assembly cannot start without knowing
   // what its note costs. So the budget is charged against the largest fold this pack could make,
@@ -455,7 +463,9 @@ export function assemblePack(input: AssemblePackInput): MemoryPack {
   const assembled = select(input, charged);
   const duplicates = assembled.folded;
   const note = honestyNote({ ...signals, duplicates });
-  const renderedText = render(assembled.selection, note, input.admission, repeats, own);
+  const renderedText = renderPack(assembled.selection, note, () =>
+    emptyPackBody(input.admission, repeats, own, input.assessment),
+  );
 
   const buckets: Record<string, readonly MemoryPackItem[]> = {};
   for (const bucket of PACK_BUCKETS) {
@@ -483,6 +493,7 @@ export function assemblePack(input: AssemblePackInput): MemoryPack {
       ...(repeats === 0 ? {} : { suppressed_repeats: repeats }),
       ...(own === 0 ? {} : { suppressed_own: own }),
       ...(duplicates === 0 ? {} : { suppressed_duplicates: duplicates }),
+      ...(input.assessment === undefined ? {} : { assessment: input.assessment }),
     },
   });
 }

@@ -149,7 +149,12 @@ function config(): Config {
   return {
     ...DEFAULTS,
     models: { ...DEFAULTS.models, embedDimension: EMBED_DIMENSION },
-    recall: { ...DEFAULTS.recall, vectorLimit: 1 },
+    recall: {
+      ...DEFAULTS.recall,
+      // The stub provider answers as the cue model, so this file runs the `cues` recall mode.
+      mode: 'cues',
+      vectorLimit: 1,
+    },
     contextResonance: { ...DEFAULTS.contextResonance, seedLimit: 1 },
   };
 }

@@ -209,6 +209,7 @@ function installCandidates(owner: string, count = 1): void {
   establishScope(store.db, 'source', 'sqlite:stated_derivation:out', ACTIVATED_AT);
   vi.spyOn(fusionModule, 'fuse').mockReturnValue({
     items,
+    refused: [],
     admission: report(items),
     methodStats: {},
   });

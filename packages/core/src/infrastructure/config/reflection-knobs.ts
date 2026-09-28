@@ -63,10 +63,10 @@ export const REFLECTION_KNOBS = {
   // merges it; `propose` queues it and merges nothing, which makes it the kill switch. Tier 0
   // reads neither value: a squash-equality merge asks no model, so there is no judgment for a
   // mode over judgments to gate.
-  // Set by measurement rather than by hand, on the pre-registered rule the battery prints:
-  // auto-merge precision at or above 0.9 over the 24-pair cascade battery ships `unanimous`,
-  // anything less ships `propose`, and `entity-cascade-precision.int.test.ts` asserts the
-  // shipped value still matches what it measures, in both directions.
+  // Chosen on the rule the battery prints (auto-merge precision at or above 0.9 over the 24-pair
+  // cascade battery for `unanimous`), and now a pinned default: the cascade battery prints the
+  // measurement and asserts this value separately, so a new model's score changes nothing here
+  // on its own.
   // Measured 2026-09-01 against claude-haiku-4-5 with snowflake-arctic-embed2 embeddings,
   // 24 pairs built into a real graph: TP 8, FP 0, FN 4, TN 12, precision 1.000, recall 0.667.
   // Three merges came from tier 0, five from the judge, and four pairs went to the residue
@@ -97,10 +97,10 @@ export const REFLECTION_KNOBS = {
   // affirm. `auto` is the confidence gate both predate, still valid and superseded by
   // `unanimous`: the judge answers 0.95 to every affirmative, so its threshold is a
   // pass-through or a wall and never a discriminator.
-  // The default is set by measurement rather than by hand. The rule was pre-registered:
-  // two-pass precision at or above 0.9 and recall at or above 0.9 on the 24-case battery
-  // ships `unanimous`, anything less ships `propose`, and `supersession-precision.int.test.ts`
-  // asserts the shipped value still matches what it measures, in both directions.
+  // Chosen on a pre-registered rule (two-pass precision and recall at or above 0.9 on the
+  // 24-case battery for `unanimous`), and now a pinned default: the supersession battery prints
+  // the measurement and asserts this value separately, so a new model's score changes nothing
+  // here on its own.
   // Measured 2026-08-30 against claude-haiku-4-5, 24 pairs: two-pass TP 12, FP 0, FN 0,
   // TN 12, precision 1.000, recall 1.000. The second pass saw 14 affirmatives and vetoed 2,
   // both on survival, both the false positives the single pass emitted (precision 0.857 on
@@ -113,12 +113,11 @@ export const REFLECTION_KNOBS = {
   // switch and skips the keyed lookup entirely. `judge` routes a keyed candidate into the
   // same two-pass unanimous supersession judge `supersedeMode` uses, which closes it
   // autonomously. `close` is the mechanical keyed close, made in the writing transaction.
-  // The default is set by measurement rather than by hand, on a rule pre-registered before
-  // the numbers: precision at or above 0.95 over the 24-case keyed-close battery, made on at
-  // least four mechanical closes, ships `close`; short of either it ships `judge`, and
-  // `keyed-close-precision.int.test.ts` asserts the shipped value against what it measures,
-  // in both directions. The bar is above the 0.9 the two judge batteries carry because this
-  // is the one closure path with no second opinion behind it.
+  // Chosen on a rule pre-registered before the numbers (precision at or above 0.95 over the
+  // 24-case keyed-close battery, on at least four mechanical closes, for `close`; `judge`
+  // short of either), and now a pinned default: `keyed-close-precision.int.test.ts` prints
+  // the measurement and asserts this value separately. The bar is above the 0.9 the two judge
+  // batteries carry because this is the one closure path with no second opinion behind it.
   // Measured 2026-09-01 against claude-haiku-4-5 with snowflake-arctic-embed2 embeddings, 24
   // pairs of sessions run through the shipped extraction stages: 2 closes, TP 2, FP 0, FN 6,
   // precision 1.000, recall 0.250. Both trap classes held, 6 of 6 and 6 of 6, and all four
@@ -171,13 +170,13 @@ export const REFLECTION_KNOBS = {
   maxNarrativeEpisodes: ['AION_REFLECTION_MAX_NARRATIVE_EPISODES', positiveInt, 40],
   maxNarrativeEpisodeChars: ['AION_REFLECTION_MAX_NARRATIVE_EPISODE_CHARS', positiveInt, 2_000],
   // The three above are what qwen3:8b was measured on, and these three are what the same
-  // synthesis reads and writes when generation routes to Haiku. Inert on the local route:
-  // `narrativeScale` reads one set or the other off the resolved route, so a substrate with no
-  // key never sees these values whatever they are set to. Three times the episodes and twice
-  // the sentences, sized to the model rather than measured: Haiku takes a 120-episode session
-  // in one call and answers at twelve sentences without strain, where the local model starts
-  // repeating itself. The character cap doubles with them, because a wider window that clips
-  // each episode harder trades one loss for another.
+  // synthesis reads and writes when generation routes to a hosted model. Inert on the local
+  // route: `narrativeScale` reads one set or the other off the resolved route, so a substrate
+  // with no key never sees these values whatever they are set to. Three times the episodes and
+  // twice the sentences, sized to Haiku rather than measured (GPT-6 Luna's window is larger
+  // still): Haiku takes a 120-episode session in one call and answers at twelve sentences without
+  // strain, where the local model starts repeating itself. The character cap doubles with them,
+  // because a wider window that clips each episode harder trades one loss for another.
   keyedNarrativeEpisodes: ['AION_KEYED_NARRATIVE_EPISODES', positiveInt, 120],
   keyedNarrativeSentences: ['AION_KEYED_NARRATIVE_SENTENCES', positiveInt, 12],
   keyedNarrativeEpisodeChars: ['AION_KEYED_NARRATIVE_EPISODE_CHARS', positiveInt, 4_000],

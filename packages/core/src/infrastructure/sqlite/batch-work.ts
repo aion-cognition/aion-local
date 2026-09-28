@@ -1,4 +1,5 @@
 import type { SqliteHandle } from './database.js';
+import type { GenerationProvider } from '../providers/types.js';
 
 /**
  * The durable record of batched generation: what is owed, what a remote job is holding, and what
@@ -20,6 +21,8 @@ export type BatchWorkItem = {
   readonly request: unknown;
   /** The shared frame version the request was assembled under, where the producer recorded one. */
   readonly frameVersion: string | undefined;
+  /** Whose batch API the request is encoded for, and whose key reads its answer back. */
+  readonly provider: GenerationProvider;
   readonly state: BatchWorkState;
   readonly batchId: string | undefined;
   /** The day's spending hold the submission took, so the answers can reconcile it. */
@@ -39,6 +42,7 @@ type Row = {
   revalidation_json: string;
   request_json: string;
   frame_version: string | null;
+  provider: string;
   state: string;
   batch_id: string | null;
   reservation_id: string | null;
@@ -58,6 +62,7 @@ function toItem(row: Row): BatchWorkItem {
     revalidation: JSON.parse(row.revalidation_json) as unknown,
     request: JSON.parse(row.request_json) as unknown,
     frameVersion: row.frame_version ?? undefined,
+    provider: row.provider as GenerationProvider,
     state: row.state as BatchWorkState,
     batchId: row.batch_id ?? undefined,
     reservationId: row.reservation_id ?? undefined,
@@ -89,6 +94,11 @@ export type EnqueueBatchWork = {
    * the version as a column so a reader can say which one that was without parsing the body.
    */
   readonly frameVersion?: string;
+  /**
+   * The provider the request is encoded for. Absent reads as Anthropic, the lane's one provider
+   * before OpenAI had a transport.
+   */
+  readonly provider?: GenerationProvider;
   readonly now: Date;
 };
 
@@ -104,8 +114,8 @@ export function enqueueBatchWork(db: SqliteHandle, work: EnqueueBatchWork): bool
     .prepare(
       `INSERT INTO batch_work
          (work_key, durable_key, substrate_id, surface, revalidation_json, request_json,
-          frame_version, state, enqueued_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+          frame_version, provider, state, enqueued_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
        ON CONFLICT(work_key) DO NOTHING`,
     )
     .run(
@@ -116,7 +126,45 @@ export function enqueueBatchWork(db: SqliteHandle, work: EnqueueBatchWork): bool
       JSON.stringify(work.revalidation),
       JSON.stringify(work.request),
       work.frameVersion ?? null,
+      work.provider ?? 'anthropic',
       work.now.toISOString(),
+    );
+  return result.changes > 0;
+}
+
+export type ReencodeBatchWork = {
+  readonly workKey: string;
+  readonly substrateId: string;
+  /** The provider selected now, which the row is re-encoded for. */
+  readonly provider: GenerationProvider;
+  readonly request: unknown;
+  readonly frameVersion?: string;
+};
+
+/**
+ * Re-encodes owed work that was written for the other provider, keeping its identity.
+ *
+ * A row the installation's previous provider never received is still only a question, so the
+ * producer that nominated it again rewrites its body for the provider selected now. Everything
+ * that names the question stays: the work key, the durable key, the revalidation, the attempts and
+ * when it was first owed. A submitted row is never touched: the other provider holds it, and its
+ * answer settles there. Nothing but a pending row of this substrate owned by another provider
+ * changes.
+ */
+export function reencodePendingBatchWork(db: SqliteHandle, work: ReencodeBatchWork): boolean {
+  const result = db
+    .prepare(
+      `UPDATE batch_work
+       SET provider = ?, request_json = ?, frame_version = ?
+       WHERE work_key = ? AND substrate_id = ? AND state = 'pending' AND provider <> ?`,
+    )
+    .run(
+      work.provider,
+      JSON.stringify(work.request),
+      work.frameVersion ?? null,
+      work.workKey,
+      work.substrateId,
+      work.provider,
     );
   return result.changes > 0;
 }
@@ -127,11 +175,15 @@ export function readBatchWork(db: SqliteHandle, workKey: string): BatchWorkItem 
   return row === undefined ? undefined : toItem(row);
 }
 
-/** Work owed by this substrate, oldest first, bounded by what one submission may carry. */
+/**
+ * Work owed by this substrate, oldest first, bounded by what one submission may carry. A provider
+ * narrows it to the rows encoded for that provider; absent reads every provider's.
+ */
 export function pendingBatchWork(
   db: SqliteHandle,
   substrateId: string,
   limit: number,
+  provider?: GenerationProvider,
 ): readonly BatchWorkItem[] {
   if (limit <= 0) {
     return [];
@@ -139,23 +191,31 @@ export function pendingBatchWork(
   const rows = db
     .prepare(
       `SELECT * FROM batch_work
-       WHERE substrate_id = ? AND state = 'pending'
+       WHERE substrate_id = ? AND state = 'pending' AND (? IS NULL OR provider = ?)
        ORDER BY enqueued_at, work_key
        LIMIT ?`,
     )
-    .all(substrateId, limit) as Row[];
+    .all(substrateId, provider ?? null, provider ?? null, limit) as Row[];
   return rows.map(toItem);
 }
 
-/** The remote jobs this substrate is still waiting on, each named once. */
-export function outstandingBatchIds(db: SqliteHandle, substrateId: string): readonly string[] {
+/**
+ * The remote jobs this substrate is still waiting on, each named once. A provider narrows it to
+ * the jobs that provider holds, which are the only ones its key can read.
+ */
+export function outstandingBatchIds(
+  db: SqliteHandle,
+  substrateId: string,
+  provider?: GenerationProvider,
+): readonly string[] {
   const rows = db
     .prepare(
       `SELECT DISTINCT batch_id FROM batch_work
        WHERE substrate_id = ? AND state = 'submitted' AND batch_id IS NOT NULL
+         AND (? IS NULL OR provider = ?)
        ORDER BY batch_id`,
     )
-    .all(substrateId) as { batch_id: string }[];
+    .all(substrateId, provider ?? null, provider ?? null) as { batch_id: string }[];
   return rows.map((row) => row.batch_id);
 }
 
@@ -201,16 +261,27 @@ export function markBatchSubmitted(
   batchId: string,
   now: Date,
   reservationId?: string,
+  provider?: GenerationProvider,
 ): void {
+  // The provider the batch went to, where the caller names it. A row its producer re-encoded for
+  // another provider while this submission was at the wire is not claimed by a batch that carried
+  // its old body; the answer that comes back for it belongs to no current work.
   const statement = db.prepare(
     `UPDATE batch_work
      SET state = 'submitted', batch_id = ?, reservation_id = ?, submitted_at = ?,
          attempts = attempts + 1
-     WHERE work_key = ? AND state = 'pending'`,
+     WHERE work_key = ? AND state = 'pending' AND (? IS NULL OR provider = ?)`,
   );
   db.transaction(() => {
     for (const key of workKeys) {
-      statement.run(batchId, reservationId ?? null, now.toISOString(), key);
+      statement.run(
+        batchId,
+        reservationId ?? null,
+        now.toISOString(),
+        key,
+        provider ?? null,
+        provider ?? null,
+      );
     }
   }).immediate();
 }
@@ -245,7 +316,8 @@ export function returnBatchWork(
  * caller has just read it. Only a discarded row reopens, and only for the substrate that owns it.
  * An applied one is answered, and a failed one names a reason that reading the graph again does
  * not change. The reason it was discarded stays on the row: it is the history of the question,
- * not a verdict on it.
+ * not a verdict on it. Its attempts start again, since the ones it had were asked of a premise
+ * that has since moved and come back.
  */
 export function reopenDiscardedBatchWork(
   db: SqliteHandle,
@@ -257,11 +329,37 @@ export function reopenDiscardedBatchWork(
     .prepare(
       `UPDATE batch_work
        SET state = 'pending', batch_id = NULL, reservation_id = NULL, submitted_at = NULL,
-           enqueued_at = ?, settled_at = NULL
+           enqueued_at = ?, settled_at = NULL, attempts = 0
        WHERE work_key = ? AND substrate_id = ? AND state = 'discarded'`,
     )
     .run(now.toISOString(), workKey, substrateId);
   return result.changes > 0;
+}
+
+/**
+ * Discards the owed work encoded for a provider the installation no longer selects, and says how
+ * many rows that was.
+ *
+ * Nothing will send such a row: submission takes only the selected provider's rows. Left pending,
+ * it would wait on a producer to nominate the same question again, and a question whose inputs
+ * moved in the meantime is never nominated under that key again. Discarded, it is settled as the
+ * stale question it is, and a producer that does ask it again reopens it and re-encodes it for
+ * the provider selected then. Submitted rows are not touched: the other provider holds them.
+ */
+export function discardPendingBatchWorkOf(
+  db: SqliteHandle,
+  substrateId: string,
+  provider: GenerationProvider,
+  reason: string,
+  now: Date,
+): number {
+  const result = db
+    .prepare(
+      `UPDATE batch_work SET state = 'discarded', last_error = ?, settled_at = ?
+       WHERE substrate_id = ? AND state = 'pending' AND provider = ?`,
+    )
+    .run(reason, now.toISOString(), substrateId, provider);
+  return result.changes;
 }
 
 /** A terminal outcome: applied, discarded as stale, or failed for good. */
@@ -287,13 +385,22 @@ const ZERO_COUNTS: BatchWorkCounts = {
   failed: 0,
 };
 
-/** What this substrate has outstanding and what it has settled, for `aion costs` and doctor. */
-export function batchWorkCounts(db: SqliteHandle, substrateId: string): BatchWorkCounts {
+/**
+ * What this substrate has outstanding and what it has settled, for `aion costs` and doctor. A
+ * provider narrows it to the rows encoded for that provider.
+ */
+export function batchWorkCounts(
+  db: SqliteHandle,
+  substrateId: string,
+  provider?: GenerationProvider,
+): BatchWorkCounts {
   const rows = db
     .prepare(
-      'SELECT state, COUNT(*) AS count FROM batch_work WHERE substrate_id = ? GROUP BY state',
+      `SELECT state, COUNT(*) AS count FROM batch_work
+       WHERE substrate_id = ? AND (? IS NULL OR provider = ?)
+       GROUP BY state`,
     )
-    .all(substrateId) as { state: string; count: number }[];
+    .all(substrateId, provider ?? null, provider ?? null) as { state: string; count: number }[];
   const counts: Record<string, number> = { ...ZERO_COUNTS };
   for (const row of rows) {
     counts[row.state] = row.count;

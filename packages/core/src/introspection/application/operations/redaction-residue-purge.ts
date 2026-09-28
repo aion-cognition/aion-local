@@ -4,7 +4,9 @@ import {
   writeRedactedProperties,
   type RedactedPropertyUpdate,
 } from '../../../infrastructure/graph/redaction-residue-writes.js';
-import { isLedgerApplied, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
+import { runningBuild } from '../../../infrastructure/running-build.js';
+import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import { getLedgerEntry, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
 import { FINGERPRINT_PATTERN, withoutFingerprints } from '../../../redaction/fingerprint.js';
 import { redact } from '../../../redaction/redact.js';
 import { DEFAULT_RESIDUE_SCAN_LIMIT } from '../../../redaction/residue.js';
@@ -53,11 +55,45 @@ export const REDACTION_RESIDUE_MIN_RELEVANCE = 0.5;
  * properties, or only across a fingerprint boundary, has no single property to rewrite. Without
  * a mark such a node sits at the head of the flagged list forever and takes a slot in every
  * batch, which is a leak nobody is told about starving the ones that can still be fixed.
+ *
+ * The mark records the build and the entropy threshold it was made under, since those are what
+ * decide what the rewriter can do with the node. A later build or a retuned threshold examines
+ * the node once more on its own; the same ones never do, so the mark cannot loop either.
  */
 export const REDACTION_UNRESOLVED_PREFIX = 'redaction_unresolved:';
 
 export function redactionUnresolvedKey(nodeId: string): string {
   return `${REDACTION_UNRESOLVED_PREFIX}${nodeId}`;
+}
+
+/** What a mark was made under. A mark written before it recorded these matches nothing. */
+export type RedactionRewriter = {
+  readonly build: string;
+  readonly entropyThreshold: number;
+};
+
+/**
+ * Every rewriter a node's mark was made under. A mark from before the history was kept carries at
+ * most one, at its top level, so two processes stamped differently (the service and a CLI run)
+ * do not re-examine the node each time they take turns.
+ */
+function examinedUnder(db: SqliteHandle, nodeId: string): readonly RedactionRewriter[] {
+  const summary = getLedgerEntry(db, redactionUnresolvedKey(nodeId))?.summary as
+    (Partial<RedactionRewriter> & { examined?: unknown }) | undefined;
+  const listed = Array.isArray(summary?.examined)
+    ? (summary.examined as Partial<RedactionRewriter>[])
+    : [summary ?? {}];
+  return listed.filter(
+    (entry): entry is RedactionRewriter =>
+      typeof entry.build === 'string' && typeof entry.entropyThreshold === 'number',
+  );
+}
+
+function markedUnder(db: SqliteHandle, nodeId: string, rewriter: RedactionRewriter): boolean {
+  return examinedUnder(db, nodeId).some(
+    (entry) =>
+      entry.build === rewriter.build && entry.entropyThreshold === rewriter.entropyThreshold,
+  );
 }
 
 export function redactionResiduePurgeRelevance(health: HealthSnapshot): number {
@@ -126,14 +162,13 @@ export function redactionResiduePurgeOperation(): IntrospectionOperation {
     improves: 'lower',
     run: async (ctx: OperationContext): Promise<OperationOutcome> => {
       const threshold = ctx.config.redaction.entropyThreshold;
+      const rewriter: RedactionRewriter = { build: runningBuild(), entropyThreshold: threshold };
       const scanned = await readStoredText(ctx.driver, DEFAULT_RESIDUE_SCAN_LIMIT);
 
       const leakingIds = scanned
         .filter((row) => stillLeaking(row.text, threshold))
         .map((row) => row.id);
-      const fixable = leakingIds.filter(
-        (id) => !isLedgerApplied(ctx.db, redactionUnresolvedKey(id)),
-      );
+      const fixable = leakingIds.filter((id) => !markedUnder(ctx.db, id, rewriter));
       const batchIds = fixable.slice(0, ctx.config.maintenance.redactionPurgeBatchSize);
 
       if (batchIds.length === 0 || ctx.signal.aborted) {
@@ -156,11 +191,14 @@ export function redactionResiduePurgeOperation(): IntrospectionOperation {
         }
         markLedgerApplied(ctx.db, redactionUnresolvedKey(node.id), {
           reason: 'flagged by the node scan, with no single property this rewriter can redact',
+          ...rewriter,
+          examined: [...examinedUnder(ctx.db, node.id), rewriter],
         });
         unresolved += 1;
         ctx.logger.warn(
-          { nodeId: node.id },
-          'redaction residue purge cannot fix a flagged node; it needs a person',
+          { nodeId: node.id, build: rewriter.build },
+          'redaction residue purge cannot fix a flagged node under this build; ' +
+            'it stays flagged and is examined again under a later build or threshold',
         );
       }
 
@@ -171,7 +209,8 @@ export function redactionResiduePurgeOperation(): IntrospectionOperation {
         itemsAffected: written.length,
         detail:
           `${String(written.length)} of ${String(batchIds.length)} inspected nodes rewritten, ` +
-          `${String(leakingIds.length)} flagged this scan, ${String(unresolved)} left for a person`,
+          `${String(leakingIds.length)} flagged this scan, ` +
+          `${String(unresolved)} left flagged until a later build or threshold`,
       };
     },
   };

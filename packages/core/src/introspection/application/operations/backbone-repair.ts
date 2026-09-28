@@ -44,8 +44,8 @@ async function runBackboneRepair(ctx: OperationContext): Promise<OperationOutcom
   );
   if (targets.length === 0) {
     // The count is above zero and nothing in the batch is repairable, which means every break
-    // in scope names a session the graph no longer holds. Saying so is the honest answer;
-    // deciding what such an episode belongs to is a person's call.
+    // in scope names a session the graph no longer holds. Saying so is the honest answer, and
+    // the break stays counted as missing evidence rather than guessed at.
     return {
       status: 'noop',
       itemsProcessed: 0,

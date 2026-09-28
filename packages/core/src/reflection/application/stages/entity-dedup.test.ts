@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DedupFakeGraph } from './entity-dedup.fixture.js';
 import { EntityDedupStage } from './entity-dedup.js';
 import type { JudgmentEvidence } from '../../../evidence/application/judgment.js';
+import { JUDGE_ROUTE_ALLOWANCE } from '../../../evidence/domain/budget.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { ACCESS_COUNT_PROPERTY } from '../../../infrastructure/graph/access-tracking.js';
 import { BITEMPORAL_PROPERTIES } from '../../../infrastructure/graph/bitemporal.js';
@@ -300,7 +301,9 @@ describe('tier 3 with an evidence seam', () => {
 
   it('retains entity work when final rendered admission prevents the judge call', async () => {
     seedNearDuplicatePair();
-    graph.nodes.get('strong')!.properties[MEMORY_PROPERTIES.text] = 'x'.repeat(20000);
+    graph.nodes.get('strong')!.properties[MEMORY_PROPERTIES.text] = 'x'.repeat(
+      JUDGE_ROUTE_ALLOWANCE.entity_merge + 4000,
+    );
     const judge = scriptedJudge();
 
     const outcome = await new EntityDedupStage().run({ ...context(judge), evidence: assembled() });

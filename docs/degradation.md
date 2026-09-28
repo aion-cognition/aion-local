@@ -515,6 +515,16 @@ it rolls over. That is the deliberate trade: maintenance that skips a window cos
 cadence, and maintenance that reruns over a partial first pass costs whatever the operation
 was halfway through.
 
+**A job keeps failing.** No row is abandoned and none waits on a person. A reflection job that
+spends its attempts stays queued with its last error, and `dead_letter` gives it one more cycle
+in the bulk lane and wakes the worker for it. After that the row gets a cycle only when
+something that could change its outcome has changed: the running build (`AION_BUILD_SHA`), the
+readiness policy, the generation route, or its source's evidence (a new processing generation or
+a newly accepted reference batch). Each cycle records the conditions it ran under in the ops
+ledger. A failure that repeats under conditions already tried is held rather than retried in a
+loop, and it stays visible as `deadLetterAttentionCount` in the health snapshot. Stage results
+an earlier cycle applied stay applied.
+
 **Diagnose.** `aion stats` has a `maintenance` section: the cycle count, and per operation
 the runs, how many improved the metric they declared, how many changed nothing, how many
 failed, how many no metric scored, what a run typically costs, and the last window's outcome.

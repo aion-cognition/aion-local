@@ -11,7 +11,9 @@
     "packages/*"
   ],
   "scripts": {
+    "prebuild": "node scripts/build-record.mjs begin",
     "build": "tsc -b",
+    "postbuild": "node scripts/build-record.mjs finish",
     "build:watch": "tsc -b --watch",
     "clean": "tsc -b --clean",
     "typecheck:all": "tsc -p tsconfig.tests.json",

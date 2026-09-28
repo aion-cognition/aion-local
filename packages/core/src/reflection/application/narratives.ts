@@ -99,7 +99,7 @@ export type NarrativeSettings = {
 function settingsOf(options: NarrativeOptions, provider: Provider): NarrativeSettings {
   const now = options.now ?? new Date();
   const scale = narrativeScale(
-    provider.route?.provider === 'anthropic',
+    provider.route !== undefined,
     options.reflection ?? DEFAULTS.reflection,
   );
   return {

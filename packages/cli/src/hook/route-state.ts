@@ -11,24 +11,28 @@ import { dirname, join } from 'node:path';
  * the substrate is local-first, the key is optional spend, and local reflection measured 18.5s a
  * call. Hooks are route-agnostic now.
  *
- * There is no configuration in which no route exists, and that is the routing rule rather than an
- * assumption made here: a role pinned to Anthropic with no key resolves to the local model, which
- * `aion status` and `aion doctor` both report. So this answers which route a fire feeds and never
- * refuses on it. What a fire still fails open on is the service not answering, which is a fact
- * about a running process rather than about configuration.
+ * A capture feeds reflection, so the answer is about the provider `AION_GENERATION_PROVIDER` names
+ * and the key that provider reads. With no key there, reflection has nowhere to run and its work
+ * queues, which `aion status` and `aion doctor` both report; `local` is that answer. Either way
+ * this never refuses a fire: what a fire still fails open on is the service not answering, which
+ * is a fact about a running process rather than about configuration.
  *
- * `unknown` stays a real answer: a `.env` this cannot read says nothing, and the local route is
- * the safe reading of nothing.
+ * `unknown` stays a real answer: a `.env` this cannot read says nothing.
  */
 
-const ANTHROPIC_KEY_ENV_VAR = 'AION_ANTHROPIC_API_KEY';
+/** The key each remote provider reads, and the knob that routes the background role to one. */
+const KEY_ENV_VARS = {
+  anthropic: 'AION_ANTHROPIC_API_KEY',
+  openai: 'AION_OPENAI_API_KEY',
+} as const;
+const PROVIDER_ENV_VAR = 'AION_GENERATION_PROVIDER';
 
 const ENV_FILE_NAME = '.env';
 
 /** `<repo>/packages/cli/dist/hook-main.js` is where the harness invokes this from. */
 const SCRIPT_DEPTH = 4;
 
-/** `keyed` routes generation to Anthropic per the routing knobs; `local` is the Ollama route. */
+/** `keyed` routes generation to a remote provider per the routing knobs; `local` is the Ollama route. */
 export type GenerationRoute = 'keyed' | 'local' | 'unknown';
 
 /** One pair of matching quotes wraps a value. Anything else, mismatched ends included, is literal. */
@@ -78,13 +82,23 @@ export function generationRoute(
   env: NodeJS.ProcessEnv,
   scriptPath: string | undefined,
 ): GenerationRoute {
-  if ((env[ANTHROPIC_KEY_ENV_VAR] ?? '').trim() !== '') {
+  const envFile =
+    scriptPath === undefined || scriptPath === ''
+      ? undefined
+      : join(repoRootOf(scriptPath), ENV_FILE_NAME);
+  // What a capture feeds is reflection, so the answer is about the key its provider reads: a key
+  // for the other provider leaves reflection with nowhere to run.
+  const named =
+    env[PROVIDER_ENV_VAR] ??
+    (envFile === undefined ? undefined : envFileValue(envFile, PROVIDER_ENV_VAR));
+  const keyVar = KEY_ENV_VARS[named?.trim() === 'openai' ? 'openai' : 'anthropic'];
+  if ((env[keyVar] ?? '').trim() !== '') {
     return 'keyed';
   }
-  if (scriptPath === undefined || scriptPath === '') {
+  if (envFile === undefined) {
     return 'unknown';
   }
-  const recorded = envFileValue(join(repoRootOf(scriptPath), ENV_FILE_NAME), ANTHROPIC_KEY_ENV_VAR);
+  const recorded = envFileValue(envFile, keyVar);
   if (recorded === undefined) {
     return 'unknown';
   }

@@ -50,8 +50,8 @@ export type QueueLagSnapshot = {
    */
   readonly cueDegradedRate: number | undefined;
   /**
-   * Judged contradictions and duplicate entities waiting on a person. With auto-apply off
-   * these tables are the whole review queue, and an uncounted queue is a queue nobody works.
+   * Judged contradictions and duplicate entities still open. `proposal_resolution` decides them
+   * on its own; the count is how a backlog it has not reached yet stays visible.
    */
   readonly supersessionProposalsOpen: number;
   readonly entityMergeProposalsOpen: number;

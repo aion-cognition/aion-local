@@ -6,6 +6,7 @@ import {
 } from '../../../evidence/application/judgment.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import type { EntityMergeJudgeVerdicts } from '../../../infrastructure/sqlite/entity-merge-decisions.js';
 import {
   listOldestOpenEntityMergeProposals,
   resolveEntityMergeProposal,
@@ -24,7 +25,10 @@ import {
   type EntityMergePair,
   type OverAllowance,
 } from '../../../reflection/application/entity-merge-judge.js';
-import { applyEntityMergeProposal } from '../../../reflection/application/entity-merge-review.js';
+import {
+  applyEntityMergeProposal,
+  MERGE_RESOLUTION,
+} from '../../../reflection/application/entity-merge-review.js';
 import {
   applySupersessionProposal,
   INTROSPECTOR_RESOLUTION,
@@ -53,12 +57,12 @@ import {
 } from '../proposal-resolution-evidence.js';
 
 /**
- * Decides the open proposal queues on their merits, instead of leaving both to a person and to
- * the hygiene horizon behind them. A row reaches a terminal state in the run that reads it: two
+ * Decides the open proposal queues on their merits, so no row waits on a person or on the
+ * hygiene horizon behind it. A row reaches a terminal state in the run that reads it: two
  * agreeing judge passes apply it through the same applier and the same blade
- * `aion proposals apply` uses, anything else dismisses it, and the grounds go to the ops ledger
- * either way. A model call that throws or comes back unusable decides nothing and leaves the row
- * open for the next run.
+ * `aion proposals apply` uses, stamped as this loop's decision, anything else dismisses it, and
+ * the grounds go to the ops ledger either way. A model call that throws or comes back unusable
+ * decides nothing and leaves the row open for the next run.
  *
  * Both passes read wider evidence than the pass that filed the row was given
  * (`proposal-resolution-evidence.ts`), which is the only way a call at temperature 0 reaches an
@@ -67,7 +71,7 @@ import {
  * Nothing here is one-way. A supersession it applies is reopened by `aion unsupersede`, a merge
  * by `aion unmerge`, and a dismissal by `aion proposals reopen`, exactly as each reverses a
  * person's own decision. `AION_PROPOSAL_RESOLUTION=false` stops the operation entirely and
- * leaves both queues waiting for a person.
+ * leaves both queues to `aion proposals` and the hygiene horizon.
  */
 
 export const PROPOSAL_RESOLUTION_OPERATION = 'proposal_resolution';
@@ -117,7 +121,11 @@ function loadCandidates(db: SqliteHandle, batch: number): readonly ResolutionCan
  * technical failure rather than a reading: the row keeps its place in the queue.
  */
 type Verdict =
-  | { readonly decision: 'apply'; readonly grounds: string }
+  | {
+      readonly decision: 'apply';
+      readonly grounds: string;
+      readonly judge?: EntityMergeJudgeVerdicts;
+    }
   | { readonly decision: 'dismiss'; readonly grounds: string }
   | { readonly decision: 'unanswered'; readonly detail: string };
 
@@ -192,8 +200,9 @@ async function decideMerge(ctx: OperationContext, pair: EntityMergePair): Promis
     `(${first.judgment.rationale}); ` +
     `second pass: ${second.review.same ? 'nothing separates them' : 'two referents'} ` +
     `(${second.review.rationale})`;
-  const holds = first.judgment.same && second.review.same;
-  return { decision: holds ? 'apply' : 'dismiss', grounds };
+  const judge = { detect: first.judgment, review: second.review };
+  const holds = judge.detect.same && judge.review.same;
+  return holds ? { decision: 'apply', grounds, judge } : { decision: 'dismiss', grounds };
 }
 
 type Dismiss = (
@@ -400,7 +409,11 @@ async function resolveMerge(
   try {
     const applied = await applyEntityMergeProposal(
       { driver: ctx.driver, db: ctx.db, logger: ctx.logger },
-      { id: proposal.id, now: ctx.now },
+      {
+        id: proposal.id,
+        now: ctx.now,
+        attribution: { ...MERGE_RESOLUTION, reasons: [verdict.grounds], judge: verdict.judge },
+      },
     );
     markLedgerApplied(ctx.db, resolutionLedgerKey('entity_merge', proposal.id), {
       verdict: 'applied',

@@ -12,6 +12,7 @@ import {
   type FrameOverride,
   type SystemBlock,
 } from './request-blocks.js';
+import { backoff, MAX_ATTEMPTS, retryWaitMs, throttled } from './request-retry.js';
 import { boundedTokens, type SpendingGuard } from './spending.js';
 import type {
   ApiCall,
@@ -23,11 +24,7 @@ import type {
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
-const DEFAULT_MAX_TOKENS = 4096;
-
-/** Three tries at a throttled or overloaded response, then the real error reaches the caller. */
-const MAX_ATTEMPTS = 3;
-const MAX_BACKOFF_MS = 30_000;
+export const DEFAULT_MAX_TOKENS = 4096;
 
 /** The model every generation role routes to when the key is set. */
 export const DEFAULT_ANTHROPIC_MODEL = 'claude-haiku-4-5';
@@ -52,15 +49,15 @@ export type SchemaDelivery = 'output_config' | 'system_prompt';
 /** Stated once, so the service and the test-support client cannot drift onto different routes. */
 export const DEFAULT_SCHEMA_DELIVERY: SchemaDelivery = 'system_prompt';
 
-type AnthropicMessage = { role: 'user' | 'assistant'; content: string };
+type ConversationMessage = { role: 'user' | 'assistant'; content: string };
 
-/** Anthropic takes system instructions outside the conversation messages. */
-function splitSystem(messages: readonly ChatMessage[]): {
+/** Both remote APIs take system instructions outside the conversation messages. */
+export function splitSystem(messages: readonly ChatMessage[]): {
   system: string | undefined;
-  rest: AnthropicMessage[];
+  rest: ConversationMessage[];
 } {
   const systemParts: string[] = [];
-  const rest: AnthropicMessage[] = [];
+  const rest: ConversationMessage[] = [];
   for (const message of messages) {
     if (message.role === 'system') {
       systemParts.push(message.content);
@@ -156,33 +153,6 @@ export type AnthropicRequestOptions = {
   readonly spending?: SpendingGuard;
   readonly now?: () => number;
 };
-
-function throttled(status: number): boolean {
-  return status === 429 || status >= 500;
-}
-
-/**
- * The backoff wait, cut short by the caller's own signal. A stage deadline or a shutdown must
- * not sit out a 30s retry-after with nothing in flight, which is what `deadline-signal.ts`
- * promises. The timer is unreferenced so a pending wait never holds the process open.
- */
-function backoff(waitMs: number, signal: AbortSignal | undefined): Promise<void> {
-  if (abortRequested(signal)) {
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort);
-      resolve();
-    }, waitMs);
-    timer.unref();
-    function onAbort(): void {
-      clearTimeout(timer);
-      resolve();
-    }
-    signal?.addEventListener('abort', onAbort, { once: true });
-  });
-}
 
 /**
  * One call, one schema-delivery mode, parsed. A 429, an overload, or a 5xx is a normal event
@@ -284,11 +254,8 @@ async function askAnthropic(
       if (!throttled(response.status) || attempts >= MAX_ATTEMPTS || abortRequested(req.signal)) {
         break;
       }
-      const retryAfter = Number(response.headers.get('retry-after'));
-      const waitMs =
-        Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : attempts * 2000;
       await response.text().catch(() => undefined);
-      await backoff(Math.min(waitMs, MAX_BACKOFF_MS), req.signal);
+      await backoff(retryWaitMs(response, attempts), req.signal);
       if (abortRequested(req.signal)) {
         break;
       }
@@ -318,7 +285,7 @@ async function askAnthropic(
     // What it cost replaces what was held for it. A response whose usage would not parse settles
     // as unknown, which keeps the maximum: a charge nobody can size is not a charge of nothing.
     hold?.settle(
-      call.usageError === undefined ? estimateApiCost(call) : undefined,
+      call.usageError === undefined ? estimateApiCost(call, { singleRequest: true }) : undefined,
       new Date(now()),
     );
     // A thinking answer leads with its reasoning blocks and puts the JSON in a text block after

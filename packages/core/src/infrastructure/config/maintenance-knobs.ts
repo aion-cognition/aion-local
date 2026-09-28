@@ -90,7 +90,7 @@ export const MAINTENANCE_KNOBS = {
   // quarter of the size, since every row here can cost a full pipeline run rather than one
   // enqueue, and the page is also the abort granularity: a smaller page loses less work.
   replayBatchSize: ['AION_MAINTENANCE_REPLAY_BATCH_SIZE', positiveInt, 50],
-  /** `dead_letter`'s bound: attempts-exhausted rows given their one retry cycle in one run. */
+  /** `dead_letter`'s bound: attempts-exhausted rows given a retry cycle in one run. */
   deadLetterBatchSize: ['AION_MAINTENANCE_DEAD_LETTER_BATCH_SIZE', positiveInt, 50],
   // `redaction_residue_purge`'s bound: nodes rewritten in one run. Small, since every hit is a
   // live property write and a wrong redaction destroys content permanently (nothing here hard-deletes).
@@ -168,7 +168,7 @@ export const MAINTENANCE_KNOBS = {
   // `proposal_hygiene`'s kill switch. On by default: the op only ever resolves a row past
   // its age horizon, and every dismissal is ledgered with the pair's identity, so a wrong
   // one is retro-judged from a real record rather than guessed at. Off leaves every
-  // proposal queued for a person, same as before this op existed.
+  // proposal to `proposal_resolution` alone, with no age horizon behind it.
   proposalHygiene: ['AION_MAINTENANCE_PROPOSAL_HYGIENE', z.boolean(), true],
   // The fast horizon: how long a proposal detected from a pure tool-exhaust episode (no
   // turns, only tool calls) sits open before hygiene dismisses it. A day is enough for a

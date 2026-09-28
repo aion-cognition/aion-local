@@ -7,6 +7,7 @@ import {
   readOllamaVersion,
   resolveProviderRouting,
   scanHorizonIntegrity,
+  unavailableReason,
   type Config,
   type CoverageStateReport,
   type HorizonIntegrity,
@@ -209,7 +210,7 @@ export function queueLagCheck(
       : `p95 enrichment lag ${String(Math.round(snapshot.p95EnrichmentLagMs / 1000))}s`,
     snapshot.cueDegradedRate === undefined
       ? 'no recalls measured yet'
-      : `${(snapshot.cueDegradedRate * 100).toFixed(1)}% of recent recalls degraded on cues`,
+      : `${(snapshot.cueDegradedRate * 100).toFixed(1)}% of recent recalls degraded on the recall model call`,
   ].join(', ');
 
   const stale = oldest !== undefined && oldest > config.operational.lagOldestUnclaimedWarnMs;
@@ -310,16 +311,15 @@ export function hooksRouteCheck(config: Config, env: NodeJS.ProcessEnv): CheckRe
   if (installed !== 'true') {
     return { ok: true, detail: 'no hooks installed' };
   }
-  const routing = resolveProviderRouting(config);
-  if (routing.keyPresent) {
+  const { reflect } = resolveProviderRouting(config).roles;
+  if (reflect.available) {
     return {
       ok: true,
-      detail: `hooks installed; capture digests on ${routing.roles.reflect.model}`,
+      detail: `hooks installed; capture digests on ${reflect.provider}:${reflect.model}`,
     };
   }
   return {
     ok: true,
-    detail:
-      'hooks installed; captures are stored and queued. Enrichment waits for AION_ANTHROPIC_API_KEY.',
+    detail: `hooks installed; captures are stored and queued. Enrichment waits: ${unavailableReason(reflect)}.`,
   };
 }

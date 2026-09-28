@@ -2,7 +2,11 @@ import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { BATCH_INDEX_STATEMENTS, BATCH_SCHEMA_STATEMENTS } from './batch-schema.js';
+import {
+  BATCH_COLUMN_ADDITIONS,
+  BATCH_INDEX_STATEMENTS,
+  BATCH_SCHEMA_STATEMENTS,
+} from './batch-schema.js';
 import { IDENTITY_INDEX_STATEMENTS, IDENTITY_SCHEMA_STATEMENTS } from './identity-schema.js';
 import { NARRATIVE_INDEX_STATEMENTS, NARRATIVE_SCHEMA_STATEMENTS } from './narrative-schema.js';
 import { PUBLICATION_SCHEMA_STATEMENTS } from './publication-schema.js';
@@ -144,10 +148,10 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     burst_id TEXT
   )`,
   /**
-   * Every affirmative contradiction judgment from reflection's supersession stage. `aion why`
-   * surfaces the open rows and a person applies them, and the stage applies them itself under
-   * `AION_SUPERSEDE_MODE=unanimous`. `UNIQUE (old_id, new_id)` is what makes a re-judged pair
-   * one row rather than a growing pile.
+   * Every affirmative contradiction judgment from reflection's supersession stage. The stage
+   * applies them itself under `AION_SUPERSEDE_MODE=unanimous`, `proposal_resolution` decides the
+   * open rows, and `aion why` surfaces them. `UNIQUE (old_id, new_id)` is what makes a re-judged
+   * pair one row rather than a growing pile.
    */
   `CREATE TABLE IF NOT EXISTS supersession_proposals (
     id TEXT PRIMARY KEY,
@@ -191,10 +195,10 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     PRIMARY KEY (session_id, item_id)
   )`,
   /**
-   * The cascade's residue: pairs the two judge passes split on, which is the one case left for
-   * a person. Its own table rather than a `kind` column on `supersession_proposals` because the
-   * columns do not overlap: no contradiction judgment, no model confidence, and a pair of names
-   * and types the reviewer has to see to decide. The pair is stored id-sorted, so discovery
+   * The cascade's residue: pairs the two judge passes split on, which `proposal_resolution`
+   * decides again. Its own table rather than a `kind` column on `supersession_proposals` because
+   * the columns do not overlap: no contradiction judgment, no model confidence, and a pair of
+   * names and types whoever decides has to see. The pair is stored id-sorted, so discovery
    * from either side is one row.
    *
    * `similarity` needs `similarity_source` beside it to mean anything. A vector nomination
@@ -364,6 +368,31 @@ function ensureDirectoryExists(filePath: string): void {
   mkdirSync(dirname(filePath), { recursive: true });
 }
 
+function missingBatchColumns(db: SqliteHandle): typeof BATCH_COLUMN_ADDITIONS {
+  const present = new Set(
+    (db.pragma('table_info(batch_work)') as { name: string }[]).map((row) => row.name),
+  );
+  return BATCH_COLUMN_ADDITIONS.filter((addition) => !present.has(addition.column));
+}
+
+/**
+ * Adds the `batch_work` columns a table created by an earlier build lacks. SQLite has no `ADD
+ * COLUMN IF NOT EXISTS`, and a second ALTER of the same column fails the whole open, so the ALTER
+ * runs in a write transaction that reads the columns again first: a second process opening at the
+ * same moment waits, then finds the column there. An open that finds nothing missing takes no
+ * write lock.
+ */
+function addBatchColumns(db: SqliteHandle): void {
+  if (missingBatchColumns(db).length === 0) {
+    return;
+  }
+  db.transaction(() => {
+    for (const addition of missingBatchColumns(db)) {
+      db.exec(`ALTER TABLE batch_work ADD COLUMN ${addition.column} ${addition.definition}`);
+    }
+  }).immediate();
+}
+
 function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
@@ -393,6 +422,7 @@ export function openSqliteHandle(target: SqliteTarget): SqliteHandle {
       for (const statement of SCHEMA_STATEMENTS) {
         db.exec(statement);
       }
+      addBatchColumns(db);
       for (const statement of INDEX_STATEMENTS) {
         db.exec(statement);
       }

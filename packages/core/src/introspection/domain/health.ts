@@ -61,7 +61,11 @@ export type QueueHealth = {
    */
   readonly indexDepth: number;
   readonly p95EnrichmentLagMs: number | undefined;
-  /** Exhausted jobs `dead_letter` already gave their one retry, which failed again: needs a person. */
+  /**
+   * Exhausted jobs that already had a `dead_letter` retry and failed again. `dead_letter` retries
+   * one again on its own once its build, policy, route or evidence changes; until then it stays
+   * queued and counted here, a repeating failure made visible rather than a queue to clear.
+   */
   readonly deadLetterAttentionCount: number;
   /**
    * Share of recent recalls that answered without the cue model. `undefined` until the first

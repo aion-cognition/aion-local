@@ -228,9 +228,19 @@ deferred and is not a supported setting. Neither should be set before its implem
 
 ### Batched generation
 
-Background work that tolerates minutes to hours goes through the Message Batches API at half the
-ordinary rate. Cues and anything a caller is waiting on stay on ordinary Messages calls: a batch
-takes up to 24 hours, which is not a latency budget.
+Background work that tolerates minutes to hours goes through the selected provider's batch API at
+half the ordinary rate: Anthropic's Message Batches API, or OpenAI's Batch API over the Responses
+endpoint. Cues and anything a caller is waiting on stay on ordinary calls: a batch takes up to 24
+hours, which is not a latency budget.
+
+Each `batch_work` row records the provider its request is encoded for (`provider`; rows from
+before the column read as `anthropic`). Submission sends only rows encoded for the provider
+`AION_GENERATION_PROVIDER` selects, with that provider's key. Settlement reads each job through the
+provider that took it, with that provider's key, whatever is selected now. After a switch, a row
+nothing has sent yet is re-encoded for the new provider when its producer nominates it again, and
+keeps its identity. A job already sent settles with its original provider. If that provider's key
+is gone, the job stays outstanding and `batch_settlement` names it in its detail: it is not called
+complete and not sent again as new work. Settle outstanding work before removing the old key.
 
 The adapter is `packages/core/src/infrastructure/providers/batch-adapter.ts`, and what is owed
 lives in the `batch_work` table. Four rules hold it:
@@ -406,7 +416,7 @@ here and nothing closes on its own.
 
 ```
 AION_PROPOSAL_RESOLUTION=true    # the default: the loop decides open proposals on their merits
-AION_PROPOSAL_RESOLUTION=false   # the kill switch: both queues wait for a person
+AION_PROPOSAL_RESOLUTION=false   # the kill switch: both queues wait for aion proposals and hygiene
 AION_RESOLUTION_BATCH=10         # open rows one run decides, oldest first across both queues
 ```
 
@@ -421,7 +431,9 @@ answer. The wider reading is what lets a second look reach a different one.
 
 The same two passes then decide. Both affirm and the row is applied through the path
 `aion proposals apply` takes, at the same default blade and the same relatedness floor, stamped
-`supersession_introspector_resolution` so lineage never reads as though a person decided.
+`supersession_introspector_resolution` so lineage never reads as though a person decided. A
+merge is stamped `merge_proposal_introspector_resolution`, and its decision record names tier 3
+with both passes' verdicts, for the same reason.
 Anything else dismisses the row. Either way the verdict and both passes' reasons go to the ops
 ledger under `introspection:resolution:<table>:<id>`. A model call that throws or comes back
 unusable decides nothing, and the row waits for the next run.

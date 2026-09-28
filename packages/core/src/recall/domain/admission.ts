@@ -176,7 +176,8 @@ export type AdmissionEvidence = {
   readonly qualifying: readonly string[];
 };
 
-function describe(measurement: Measurement): string {
+/** One measurement as a pack prints it: `vector 0.56`, `bm25 exact`. */
+export function describeMeasurement(measurement: Measurement): string {
   if (measurement.exact === true) {
     return `${measurement.method} exact`;
   }
@@ -305,23 +306,23 @@ export function admissionEvidence(
     return {
       rule: 'vector_floor',
       score: absoluteRelevance(cleared),
-      qualifying: cleared.map(describe),
+      qualifying: cleared.map(describeMeasurement),
     };
   }
   if (literal.length > 0) {
-    return { rule: 'exact_match', score: 0, qualifying: literal.map(describe) };
+    return { rule: 'exact_match', score: 0, qualifying: literal.map(describeMeasurement) };
   }
   if (corroborating.size >= 2) {
     const qualifying = [...corroborating.values()];
     return {
       rule: 'corroborated',
       score: absoluteRelevance(qualifying),
-      qualifying: qualifying.map(describe),
+      qualifying: qualifying.map(describeMeasurement),
     };
   }
   // The escape hatch: a plain lexical hit admits alone only where the operator asked for it.
   if (bm25Alone !== undefined) {
-    return { rule: 'bm25_any', score: 0, qualifying: [describe(bm25Alone)] };
+    return { rule: 'bm25_any', score: 0, qualifying: [describeMeasurement(bm25Alone)] };
   }
 
   // The narrow fourth door. It runs last and only for an arrival carrying typed evidence: the
@@ -349,7 +350,7 @@ export function admissionEvidence(
       return {
         rule: 'typed_admission',
         score: strongestCosine.relevance,
-        qualifying: [`typed-edge: ${typedEvidence.edgeType}`, describe(strongestCosine)],
+        qualifying: [`typed-edge: ${typedEvidence.edgeType}`, describeMeasurement(strongestCosine)],
       };
     }
   }

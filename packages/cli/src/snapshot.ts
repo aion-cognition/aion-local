@@ -225,7 +225,8 @@ export function renderSnapshot(
 
   write('');
   const routing = resolveProviderRouting(config);
-  write(`models   embed=${config.models.embed} generation=${config.anthropic.model}`);
+  const generation = [...new Set(Object.values(routing.roles).map((route) => route.model))];
+  write(`models   embed=${config.models.embed} generation=${generation.join(', ')}`);
   write(`routing  ${routingSummary(routing)} (embeddings always ${config.models.embed}, local)`);
   if (snapshot.ollama.models.length > 0) {
     write(`installed  ${snapshot.ollama.models.join(', ')}`);
@@ -256,7 +257,7 @@ export function renderSnapshot(
   const degraded =
     queue.cueDegradedRate === undefined
       ? 'no recalls yet'
-      : `${(queue.cueDegradedRate * 100).toFixed(1)}% of recent recalls degraded on cues`;
+      : `${(queue.cueDegradedRate * 100).toFixed(1)}% of recent recalls degraded on the recall model call`;
   // `source-index`, the same name `aion doctor` and `/health` give this population. It said
   // `index` while this file sat one line under the 500-line cap, and an operator comparing two
   // surfaces had to guess the two numbers were the same thing.
@@ -268,9 +269,13 @@ export function renderSnapshot(
     `lag      p95 intake-to-enriched ${p95}, ${String(queue.reinforcementDropped)} reinforcement rows dropped`,
   );
   write(`recall   ${degraded}`);
+  // Open proposals are decided by the loop, not waiting on whoever reads this line.
+  const decider = config.maintenance.proposalResolution
+    ? 'proposal_resolution decides them'
+    : 'proposal_resolution is off';
   write(
-    `review   ${String(queue.supersessionProposalsOpen)} supersession, ` +
-      `${String(queue.entityMergeProposalsOpen)} entity-merge proposals open... aion proposals ls`,
+    `proposal ${String(queue.supersessionProposalsOpen)} supersession, ` +
+      `${String(queue.entityMergeProposalsOpen)} entity-merge open, ${decider}... aion proposals ls`,
   );
 
   renderLanes(config, write);

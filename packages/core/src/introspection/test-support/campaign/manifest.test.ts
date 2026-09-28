@@ -58,6 +58,13 @@ describe('the config digest', () => {
     expect(configDigest(two)).toBe(configDigest(one));
   });
 
+  it('keeps the OpenAI key out of the digest the same way', () => {
+    const one: Config = { ...DEFAULTS, openai: { ...DEFAULTS.openai, apiKey: 'sk-one-not-real' } };
+    const two: Config = { ...DEFAULTS, openai: { ...DEFAULTS.openai, apiKey: 'sk-two-not-real' } };
+    expect(configDigest(two)).toBe(configDigest(one));
+    expect(configDigest(one)).not.toBe(configDigest(DEFAULTS));
+  });
+
   it('still separates a secret that is set from one that is not', () => {
     expect(configDigest(withSecrets(DEFAULTS))).not.toBe(configDigest(DEFAULTS));
   });

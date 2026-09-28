@@ -1,4 +1,5 @@
 import { isAbortError } from '../errors.js';
+import { isGenerationUnavailable } from './errors.js';
 
 export type CircuitBreakerOptions = {
   failureThreshold?: number;
@@ -54,7 +55,11 @@ export class CircuitBreaker {
       this.halfOpen = false;
       return result;
     } catch (err) {
-      if (isAbortError(err)) {
+      // Neither is the remote failing: an abort is the caller's own deadline, and an unavailable
+      // answer (no key, or the day's ceiling) was refused before anything was sent. Counting a
+      // ceiling refusal opened the breaker, and its CircuitOpenError then read to the worker as a
+      // failure to charge an attempt for rather than as work to defer.
+      if (isAbortError(err) || isGenerationUnavailable(err)) {
         throw err;
       }
       if (this.halfOpen) {

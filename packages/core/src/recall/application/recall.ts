@@ -6,13 +6,19 @@ import {
 } from '@aion/protocol';
 import type { Driver } from 'neo4j-driver';
 
+import { assessedFor, assessmentReach, runAssessment, withoutAssessment } from './assessment.js';
 import { arrivalIds, buildRankedLists, firstPassIds, toActivationSeed } from './candidates.js';
 import type { CheckedRead } from './coverage-checker.js';
-import { extractCues, type CueCache, type CueExtractionResult } from './cues.js';
+import { recallCues, type CueCache, type CueExtractionResult } from './cues.js';
 import { discloseFamilyGaps, revalidateFamilyPolicy } from './family-serving-policy.js';
 import { triggeredIntentions } from './intentions.js';
 import { readModeFor } from './read-mode.js';
-import { emitRecallTrace, notifyRecalled, type RecallListener } from './recall-observers.js';
+import {
+  emitRecallTrace,
+  logServed,
+  notifyRecalled,
+  type RecallListener,
+} from './recall-observers.js';
 import { activationBudget, admissionFor, capsFor, truncationFor } from './recall-policy.js';
 import { readEvidence, resolvedView } from './resolved-view.js';
 import { resonate, type ResonanceResult } from './resonance.js';
@@ -21,6 +27,7 @@ import { serveFrom, type ServedAnswer, type ServingAssembly } from './serving-as
 import {
   boundaryIssues,
   commitServingEffects,
+  servedReading,
   servingEffects,
   withCoverage,
   type RecallCommit,
@@ -55,10 +62,12 @@ import { uncertifiedThroughout, type ResolvedEvidenceView } from '../domain/reso
 import { emittedPackIds } from '../domain/session-dedup.js';
 
 /**
- * The recall pipeline, in the order its stages run. Cue extraction spends the one generation
- * call recall is allowed, every cue is embedded in a single batch, the five seed strategies
- * run, activation spreads from what they found, fusion ranks the union, context resonance
- * makes its second pass over what activation reached, and the pack is assembled and persisted.
+ * The recall pipeline, in the order its stages run. The caller's query (or, in the `cues` mode,
+ * the cues a model extracted from it) is embedded in a single batch, the five seed strategies
+ * run, activation spreads from what they found, fusion ranks the union, context resonance makes
+ * its second pass over what activation reached, and the evidence is read. In the `assess` mode
+ * the recall model then chooses what helps from what was found; that is the one generation call
+ * recall is allowed. The pack is assembled and persisted.
  *
  * `as_of` / `knew_at` bind one read mode for the whole run: currency is judged from a single
  * vantage point, so seeds, traversal, and hydration cannot disagree about what was true when.
@@ -163,18 +172,7 @@ export async function handleRecall(
     deps.config.redaction.entropyThreshold,
   );
 
-  const cues = await timed<CueExtractionResult>(() =>
-    extractCues(
-      {
-        provider: deps.provider,
-        model: deps.config.anthropic.model,
-        budgetMs: deps.config.recall.cueBudgetMs,
-        cache: deps.cueCache,
-        logger: deps.logger,
-      },
-      cueInput,
-    ),
-  );
+  const cues = await timed<CueExtractionResult>(() => recallCues(deps, cueInput));
 
   const embedded = await timed(() => embedCues(deps, cues.value.cues));
 
@@ -289,16 +287,20 @@ export async function handleRecall(
   // answer, so they cost one round trip rather than three.
   const ranked = [...candidates.values()];
   const ids = [...candidates.keys()];
+  // What the floors refused, read under the same evidence as the rest so the assessment can be
+  // shown it; bounded by the pack's own slots, since no more than that could be shown.
+  const reach = assessmentReach(deps.config, fusion.value.refused, candidates);
+  const readIds = [...ids, ...reach.items.map((item) => item.id)];
   const [claims, reading, restated] = await Promise.all([
-    relatedClaims(deps, ranked, mode),
+    relatedClaims(deps, [...ranked, ...reach.items], mode),
     readEvidence(deps, {
-      ids,
+      ids: readIds,
       sessionId,
       mode,
       attribute: ownFilter,
       ...(options.checked === undefined ? {} : { context: options.checked.context }),
     }),
-    restatedClaimPairs(deps, ids, mode),
+    restatedClaimPairs(deps, readIds, mode),
   ]);
   // One view per attempt. Suppression, the fold, rendering and the holdings record all read it,
   // so nothing below can decide from a reading a later stage contradicts.
@@ -307,6 +309,20 @@ export async function handleRecall(
     ranked,
   );
 
+  // A staged reset computes against an empty served set: the durable rows are still there, and
+  // this call has to answer as though the session had been served nothing.
+  const served =
+    dedup && !resetDelivery ? readServedItems(deps.db, sessionId) : new Map<string, string>();
+  const assessment = await runAssessment(deps, {
+    query: cueInput,
+    found: [...fusion.value.items, ...reach.items],
+    unreached: reach.beyond,
+    associated: resonance.value.items,
+    reminders: intentions.items,
+    serving: { served, dedup },
+    view,
+  });
+
   const timings: StageTimingsMs = {
     cues: cues.ms,
     embed: embedded.ms,
@@ -314,6 +330,7 @@ export async function handleRecall(
     activation: activation.ms,
     fusion: fusion.ms,
     resonance: resonance.ms,
+    ...(assessment === undefined ? {} : { assessment: assessment.ms }),
   };
 
   // The serving subtractions and the assembly that reads them, applied once the candidate set is
@@ -323,10 +340,7 @@ export async function handleRecall(
   const truncated = truncationFor(activation.value.termination);
   const assembly: ServingAssembly = {
     ranked,
-    // A staged reset computes against an empty served set: the durable rows are still there, and
-    // this call has to answer as though the session had been served nothing.
-    served:
-      dedup && !resetDelivery ? readServedItems(deps.db, sessionId) : new Map<string, string>(),
+    served,
     dedup,
     restated,
     assembly: {
@@ -353,24 +367,30 @@ export async function handleRecall(
   // Recorded where assembly decides, and only when somebody is watching: a fold, a bucket cap
   // and the token budget are three different answers, and only this call site knows which.
   const assemblyDecisions: PackDecision[] = [];
-  const answerFrom = (seen: ResolvedEvidenceView): ServedAnswer => {
+  const answerFrom = (seen: ResolvedEvidenceView, from: ServingAssembly): ServedAnswer => {
     assemblyDecisions.length = 0;
     return serveFrom(
-      assembly,
+      from,
       seen,
       deps.onTrace === undefined
         ? undefined
         : (decision: PackDecision) => assemblyDecisions.push(decision),
     );
   };
+  const assessed = assessedFor(assessment?.run, {
+    ranking: assembly,
+    candidates,
+    route: deps.provider.route,
+  });
   let evidence = view;
-  let serving = answerFrom(evidence);
+  let serving = answerFrom(evidence, assessed?.assembly ?? assembly);
 
   // What the answer covers, attached to the pack the caller receives rather than to the one
   // assembly measured: coverage moves no bucket and costs no token budget.
   const { checked } = options;
+  const covered = servedReading(view, reach.items, assessed?.chosen ?? []);
   const stated =
-    checked === undefined ? serving.pack : withCoverage(serving.pack, checked.coverage, view);
+    checked === undefined ? serving.pack : withCoverage(serving.pack, checked.coverage, covered);
 
   // Every successful-read write in one place, reset first, shaped for the boundary that checks
   // the coverage contract in the same transaction it commits them.
@@ -384,15 +404,16 @@ export async function handleRecall(
       ...(payload.knew_at === undefined ? {} : { knewAt: payload.knew_at }),
     },
     admission: { policy: admissionPolicy, items: fusion.value.items },
-    candidates,
+    candidates: assessed?.candidates ?? candidates,
     view,
     suppressed: serving.suppressed,
     dedup,
-    cueDegraded: cues.value.degradation !== undefined,
+    cueDegraded: cues.value.degradation !== undefined || assessed?.degradation !== undefined,
     methodStats: fusion.value.methodStats,
     resonantCount: resonance.value.items.length,
     empty:
       fusion.value.items.length === 0 &&
+      reach.items.length === 0 &&
       resonance.value.items.length === 0 &&
       intentions.items.length === 0,
     resetDelivery,
@@ -401,7 +422,8 @@ export async function handleRecall(
   // A position the substrate would not honour leaves every subtraction resting on a reading
   // nobody stood behind, so the answer is rebuilt from the same candidates under a reading that
   // admits it: what was withheld on that evidence comes back, and the statement says why. No
-  // stage above is re-run, so nothing is re-ranked and no provider is called twice.
+  // stage above is re-run, so nothing is re-ranked and no provider is called twice. A selection
+  // the model made on that reading is dropped with it, and the ranking serves in its place.
   let answer = stated;
   if (disposition.kind === 'declined' && checked !== undefined) {
     evidence = revalidateFamilyPolicy(
@@ -410,55 +432,33 @@ export async function handleRecall(
       checked.context,
       ranked,
     );
-    serving = answerFrom(evidence);
+    serving = answerFrom(evidence, withoutAssessment(assembly, assessed));
     answer = withCoverage(
       serving.pack,
       checked.coverage,
-      evidence,
+      servedReading(evidence, reach.items, []),
       boundaryIssues(disposition.reason, resetDelivery),
     );
   }
   const emitted = emittedPackIds(serving.pack);
 
-  deps.logger.info(
-    {
-      sessionId,
-      cues: cues.value.cues.length,
-      degraded: degradations.length > 0,
-      degradations,
-      seeds: seeds.length,
-      activated: activation.value.activated.length,
-      termination: activation.value.termination,
-      items: fusion.value.items.length,
-      resonant: resonance.value.items.length,
-      // What the substrate volunteered, and why it volunteered nothing when it did not.
-      intentions: intentions.items.length,
-      intentionsSkipped: intentions.skipped,
-      // What the wire dropped that cognition still counted, so a pack that shrank mid-session
-      // reads as the subtraction rather than as retrieval going quiet.
-      suppressedRepeats: serving.suppressed.size,
-      // The other half of the same reading: how much of the answer was this session quoting
-      // itself, which is a number worth watching as the conversation gets long.
-      suppressedOwn: serving.suppressedOwn.size,
-      // And the third: one assertion the substrate holds twice, printed once. Read off the
-      // pack, because eligibility is decided here and the withholding is decided by assembly.
-      suppressedDuplicates: serving.pack.metadata.suppressed_duplicates ?? 0,
-      // What the caller was handed, which is the number every exposure write is charged
-      // against. Beside the candidate count it reads as how much of retrieval reached the wire.
-      emitted: emitted.size,
-      // Why the second pass was quiet: a setting, a query nothing anchored, or a substrate
-      // whose enrichment has not written the context vectors yet. Absent when it searched.
-      resonanceSkipped: resonance.value.skipped,
-      // What the floor rejected and the floor it used, so a thin pack is readable from the
-      // log without re-running the query.
-      admission: fusion.value.admission,
-      tokenEstimate: serving.pack.metadata.token_estimate,
-      timings,
-    },
-    disposition.kind === 'withheld' ? 'recall withheld' : 'recall served',
-  );
+  logServed(deps.logger, disposition.kind === 'withheld', {
+    sessionId,
+    cues: cues.value.cues,
+    degradations,
+    seeds,
+    activation: activation.value,
+    fusion: fusion.value,
+    resonance: resonance.value,
+    intentions,
+    serving,
+    emitted,
+    timings,
+    assessment: assessed?.report,
+  });
 
-  const retrieved = [...candidates.keys()];
+  // Every candidate assembly was offered, the assessment's pool included where it ran.
+  const retrieved = [...new Set([...candidates.keys(), ...(assessed?.shown ?? [])])];
   emitRecallTrace(deps.onTrace, deps.logger, deps.config, {
     sessionId,
     query: payload.query,

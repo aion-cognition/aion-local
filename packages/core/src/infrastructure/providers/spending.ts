@@ -1,6 +1,6 @@
 import { boundApiCost } from './api-pricing.js';
 import { GenerationCeilingReachedError } from './errors.js';
-import type { ApiPricingTier } from './types.js';
+import type { ApiPricingTier, GenerationProvider } from './types.js';
 import type { SqliteHandle } from '../sqlite/database.js';
 import {
   readSpendDay,
@@ -61,6 +61,8 @@ export type SpendHoldRequest = {
   readonly cacheWrite?: boolean;
   /** Which write rate a marked prefix bills at. Absent reads as the five-minute default. */
   readonly cacheWriteTtl?: '5m' | '1h';
+  /** Whose card an unlisted model is bounded at; see `boundApiCost`. */
+  readonly provider?: GenerationProvider;
   readonly now: Date;
 };
 
@@ -122,6 +124,7 @@ export class GenerationSpendGuard implements SpendingGuard {
       pricingTier: tierFor(request.route),
       cacheWrite: request.cacheWrite === true,
       ...(request.cacheWriteTtl === undefined ? {} : { cacheWriteTtl: request.cacheWriteTtl }),
+      ...(request.provider === undefined ? {} : { provider: request.provider }),
     });
     const outcome = reserveGenerationSpend(this.#db, {
       surface: request.surface,

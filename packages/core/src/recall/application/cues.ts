@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
+import type { Config } from '../../infrastructure/config/schema.js';
 import { isAbortError } from '../../infrastructure/errors.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import { isGenerationUnavailable } from '../../infrastructure/providers/errors.js';
@@ -225,16 +226,26 @@ function degradedResult(
   input: CueExtractionInput,
   reason: Degradation['reason'],
 ): CueExtractionResult {
+  return {
+    degraded: true,
+    cues: queryCues(input).cues,
+    degradation: { stage: 'cues', reason },
+  };
+}
+
+/**
+ * The caller's own query, and its summary at the damped weight, with no model in between. The
+ * degraded rung above serves these, and so do the `assess` and `raw` recall modes on purpose:
+ * there the query is the primary retrieval input, and the model's judgment comes after retrieval
+ * rather than before it.
+ */
+export function queryCues(input: CueExtractionInput): CueExtractionResult {
   const cues: Cue[] = [{ text: input.query.trim(), source: 'raw_query', weight: 3 }];
   const summary = input.summary?.trim();
   if (summary !== undefined && summary.length > 0) {
     cues.push({ text: summary, source: 'raw_summary', weight: SUMMARY_CUE_WEIGHT });
   }
-  return {
-    degraded: true,
-    cues,
-    degradation: { stage: 'cues', reason },
-  };
+  return { degraded: false, cues };
 }
 
 /**
@@ -333,4 +344,30 @@ export async function extractCues(
   };
   deps.cache.set(key, result);
   return result;
+}
+
+/**
+ * The cues one recall searches with, by mode: the `cues` mode spends the recall role's model call
+ * extracting them, and the other two search on the caller's own query and summary.
+ */
+export function recallCues(
+  deps: Pick<CueExtractionDeps, 'provider' | 'logger'> & {
+    readonly config: Config;
+    readonly cueCache: CueCache;
+  },
+  input: CueExtractionInput,
+): Promise<CueExtractionResult> {
+  if (deps.config.recall.mode !== 'cues') {
+    return Promise.resolve(queryCues(input));
+  }
+  return extractCues(
+    {
+      provider: deps.provider,
+      model: deps.config.anthropic.model,
+      budgetMs: deps.config.recall.cueBudgetMs,
+      cache: deps.cueCache,
+      logger: deps.logger,
+    },
+    input,
+  );
 }

@@ -52,11 +52,20 @@ export type ServedAnswer = {
  * because an item the other two already cut, or one the budget turns away, is not a copy anybody
  * read and so cannot stand in for another.
  */
-export function serveFrom(
-  input: ServingAssembly,
+/**
+ * What of a ranked set this session may be served, under one reading: the narrative
+ * representation the family established, less what the session's own turns produced and what it
+ * already holds unchanged. Serving takes it here, and the recall assessment takes it before the
+ * model is asked, so the model is never shown a memory the pack would then withhold.
+ */
+export function servable(
+  input: Pick<ServingAssembly, 'ranked' | 'served' | 'dedup'>,
   view: ResolvedEvidenceView,
-  onDecision?: (decision: PackDecision) => void,
-): ServedAnswer {
+): {
+  readonly selected: readonly FusedItem[];
+  readonly suppressedOwn: ReadonlySet<string>;
+  readonly suppressed: ReadonlySet<string>;
+} {
   const selected = input.ranked.filter((item) => {
     if (!item.labels.includes('Narrative') || view.narrativeFamilies === undefined) {
       return true;
@@ -64,6 +73,23 @@ export function serveFrom(
     const representation = view.narrativeFamilies.values.get(item.id);
     return representation?.selection === 'selected' && representation.publication === 'established';
   });
+  const suppressedOwn = suppressedOwnSession({ items: selected, view });
+  const suppressed = input.dedup
+    ? suppressedRepeats(
+        selected.filter((item) => !suppressedOwn.has(item.id)),
+        input.served,
+        view,
+      )
+    : new Set<string>();
+  return { selected, suppressedOwn, suppressed };
+}
+
+export function serveFrom(
+  input: ServingAssembly,
+  view: ResolvedEvidenceView,
+  onDecision?: (decision: PackDecision) => void,
+): ServedAnswer {
+  const { selected, suppressedOwn, suppressed } = servable(input, view);
   const selectedIds = new Set(selected.map((item) => item.id));
   for (const item of input.ranked) {
     if (!selectedIds.has(item.id)) {
@@ -83,14 +109,6 @@ export function serveFrom(
       });
     }
   }
-  const suppressedOwn = suppressedOwnSession({ items: selected, view });
-  const suppressed = input.dedup
-    ? suppressedRepeats(
-        selected.filter((item) => !suppressedOwn.has(item.id)),
-        input.served,
-        view,
-      )
-    : new Set<string>();
   const foldable = foldableClaims({ items: selected, pairs: input.restated, view });
   const pack = assemblePack({
     ...input.assembly,
