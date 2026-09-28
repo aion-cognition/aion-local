@@ -304,8 +304,16 @@ The key needs no export. The `integration` and `integration-ollama` projects run
 `AION_ANTHROPIC_MODEL`, `AION_OPENAI_API_KEY` and `AION_OPENAI_MODEL` from the repo `.env`. It
 sets whichever of them the shell left unset or blank. Setup files run before any test module
 loads, so a battery reading the key at module scope sees the loaded value. An exported value wins
-over the file. Those are the only ones loaded, so a pin sitting in `.env` cannot reroute a run. `npm run quality:extraction`
-loads the same two from the working directory.
+over the file. Those are the only ones loaded, so a pin sitting in `.env` cannot reroute a run.
+`npm run quality:extraction` loads `AION_ANTHROPIC_API_KEY` and `AION_ANTHROPIC_MODEL` from the
+working directory and measures the Anthropic route only.
+
+`AION_PROVIDER_CHECK=1` runs `gate/provider-activation.int.test.ts`, and `AION_LIVE_BATCH=1` runs
+`description-freshness-live.int.test.ts`: the one-provider checks (a fresh reflection, an
+assessed recall, an exhausted job recovered by `dead_letter`, and a description-refresh batch
+submitted and settled at the vendor). Only the selected provider's key may reach the run, from
+the shell or the repo `.env`; the first file fails if the other one is set. Both spend money and
+neither runs by default.
 
 A file whose subject is the embedding model itself (`ollama-provider.int.test.ts`) builds its own
 `OllamaProvider` and ignores this switch.

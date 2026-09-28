@@ -30,6 +30,8 @@ import {
 } from '@aion/core/reflection/domain/vector-input.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { REVIEW_PROMPT as ENTITY_REVIEW_PROMPT } from '@aion/core/prompts/entity-merge-judge.js';
+
 import { CASCADE_BATTERY, type CascadeCase } from './entity-cascade-precision.fixture.js';
 import { GateSubstrate, REMOTE_JUDGE_ABSENT } from './gate-substrate.fixture.js';
 import { PRECISION_BATTERY } from './supersession-precision.fixture.js';
@@ -387,4 +389,159 @@ describe.skipIf(!ENABLED || REMOTE_JUDGE_ABSENT)('second-pass review transcripts
 
     expect(entity.length).toBeGreaterThan(0);
   });
+});
+
+/**
+ * The entity reviewer on every battery pair, true separations included, under each candidate
+ * wording of its prompt.
+ *
+ * In the stage the reviewer sees only pairs the first pass called one referent, and the first
+ * pass declines every non-duplicate in the battery, so the battery cannot say whether the review
+ * would still catch a first-pass mistake after its prompt changes. Here each pair's first-pass
+ * request is resent as a review under each wording, which is exactly the request
+ * `reviewEntityMerge` sends: same surface, same pair text, the review schema. A veto on a
+ * duplicate is an error the review adds; a veto on a non-duplicate is the catch it exists for.
+ *
+ * `AION_REVIEW_SWEEP=1` opts in, separately from the transcripts above.
+ */
+const SWEEP_ENABLED = process.env.AION_REVIEW_SWEEP === '1';
+
+const REVIEW_SCHEMA: StructuredRequest['schema'] = {
+  type: 'object',
+  properties: { reason: { type: 'string' }, different_referent: { type: 'boolean' } },
+  required: ['reason', 'different_referent'],
+};
+
+const ROLE = 'argue the other side.';
+
+/** The first pass's own definition of one referent, stated as the review's standard too. */
+const SAME_DEFINITION =
+  ' Use the definition of one referent the claim was made under: a nickname, an abbreviation, a ' +
+  'fuller form of the same name, and a product named after the company that makes it are one ' +
+  'referent, so none of those is a separation.';
+
+const STATED_SEPARATION =
+  ' A separation is something the records state or show; that they never say the two are one ' +
+  'is not a separation.';
+
+function reviewVariants(): readonly { readonly name: string; readonly prompt: string }[] {
+  if (!ENTITY_REVIEW_PROMPT.includes(ROLE)) {
+    throw new Error('the review prompt no longer states its role the way the sweep edits it');
+  }
+  const defined = ENTITY_REVIEW_PROMPT.replace(ROLE, `${ROLE}${SAME_DEFINITION}`);
+  return [
+    { name: 'shipped', prompt: ENTITY_REVIEW_PROMPT },
+    { name: 'same-definition', prompt: defined },
+    { name: 'same-definition+stated', prompt: `${defined}${STATED_SEPARATION}` },
+  ];
+}
+
+function asReview(request: StructuredRequest, prompt: string): StructuredRequest {
+  const { signal: _signal, ...rest } = request;
+  return {
+    ...rest,
+    messages: request.messages.map((message) =>
+      message.role === 'system' ? { ...message, content: prompt } : message,
+    ),
+    schema: REVIEW_SCHEMA,
+  };
+}
+
+describe.skipIf(!SWEEP_ENABLED || REMOTE_JUDGE_ABSENT)('entity review sweep', () => {
+  let substrate: GateSubstrate | undefined;
+
+  beforeAll(async () => {
+    substrate = new GateSubstrate('review-sweep');
+    await substrate.open();
+  }, DEADLINE_MS);
+
+  afterAll(async () => {
+    await substrate?.close();
+  });
+
+  it(
+    'prints each wording against every pair the first pass saw',
+    async () => {
+      const open = substrate!;
+      const recorder = new RecordingProvider(open.provider);
+      const cases = CASCADE_BATTERY.filter((row) => row.caseClass !== 'separator');
+      for (const entry of cases) {
+        const episodeId = await seedCase(open, entry);
+        recorder.caseKey = entry.key;
+        open.beginCase(entry.key);
+        const stage = new EntityDedupStage({
+          model: DEFAULTS.anthropic.model,
+          timeoutMs: DEFAULTS.reflection.stageTimeoutMs,
+          similarityThreshold: DEFAULTS.reflection.entityDedupThreshold,
+          sharedEpisodeJaccardFloor: DEFAULTS.reflection.entityNominationJaccardFloor,
+          mode: 'propose',
+        });
+        await stage.run({
+          driver: open.driver,
+          db: open.db,
+          provider: recorder,
+          episodeId,
+          episode: { id: episodeId, sessionId: SESSION_ID, text: '', turns: [] },
+          logger: open.logger,
+          now: NOW,
+          occurredAt: NOW,
+          pipelineVersion: PIPELINE_VERSION,
+        });
+      }
+
+      const truth = new Map(cases.map((entry) => [entry.key, entry.duplicate]));
+      const detects = recorder.requests.filter(
+        ({ request }) => passOf(request) === 'entity detect',
+      );
+      const lines = [`entity review sweep, route ${JSON.stringify(recorder.route)}`];
+      for (const variant of reviewVariants()) {
+        let dupVetoes = 0;
+        let dupAsked = 0;
+        let distinctVetoes = 0;
+        let distinctAsked = 0;
+        for (const { caseKey, request } of detects) {
+          const duplicate = truth.get(caseKey) === true;
+          const verdicts: string[] = [];
+          for (let attempt = 0; attempt < REPEATS; attempt += 1) {
+            recorder.caseKey = `${caseKey}/${variant.name}`;
+            let answer: { different_referent?: unknown; reason?: unknown } = {};
+            try {
+              answer = (await recorder.generate(
+                asReview(request, variant.prompt),
+              )) as typeof answer;
+            } catch {
+              verdicts.push('error');
+              continue;
+            }
+            const veto = answer.different_referent === true;
+            verdicts.push(veto ? 'veto' : 'pass');
+            if (duplicate) {
+              dupAsked += 1;
+              dupVetoes += veto ? 1 : 0;
+            } else {
+              distinctAsked += 1;
+              distinctVetoes += veto ? 1 : 0;
+            }
+            if (veto === duplicate) {
+              lines.push(
+                `  ${variant.name} ${caseKey} (${duplicate ? 'duplicate' : 'distinct'}) ` +
+                  `${veto ? 'VETO' : 'PASS'}: ${String(answer.reason)}`,
+              );
+            }
+          }
+          lines.push(
+            `${variant.name} ${caseKey} duplicate=${String(duplicate)} ${verdicts.join(',')}`,
+          );
+        }
+        lines.push(
+          `SUMMARY ${variant.name}: vetoed ${String(dupVetoes)}/${String(dupAsked)} duplicates ` +
+            `(errors added), ${String(distinctVetoes)}/${String(distinctAsked)} distinct pairs ` +
+            '(catches)',
+        );
+      }
+      console.log(lines.join('\n'));
+      expect(detects.length).toBeGreaterThan(0);
+    },
+    DEADLINE_MS,
+  );
 });
