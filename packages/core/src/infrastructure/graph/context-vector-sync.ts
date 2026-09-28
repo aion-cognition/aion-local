@@ -207,9 +207,8 @@ function neighborhoodStatement(nodeIds: readonly string[], reference: Date): Gra
     `MATCH (n:${BASE_NODE_LABEL} { id: nodeId })-[r]-(m:${BASE_NODE_LABEL})`,
     'WHERE m.id <> nodeId',
     `  AND r.${BITEMPORAL_PROPERTIES.validUntil} IS NULL AND ${fragment.where}`,
-    'RETURN nodeId, m.id AS neighborId,',
-    '       coalesce(r.strength, 1.0) AS strength,',
-    `       m.${MEMORY_PROPERTIES.contentVector} AS vector`,
+    'WITH m, collect({ nodeId: nodeId, strength: coalesce(r.strength, 1.0) }) AS memberships',
+    `RETURN m.id AS neighborId, m.${MEMORY_PROPERTIES.contentVector} AS vector, memberships`,
   ].join('\n');
 
   return { cypher, parameters: { nodeIds, ...fragment.parameters } };
@@ -225,11 +224,18 @@ export async function readNeighborhood(
     return [];
   }
   const statement = neighborhoodStatement(unique, reference);
-  return tx.run(statement.cypher, statement.parameters, (row: Row) => ({
-    nodeId: row.nodeId as string,
-    neighborId: row.neighborId as string,
-    strength: row.strength as number,
-    stored: row.vector !== null && row.vector !== undefined,
-    vector: fromGraphVector(row.vector),
-  }));
+  // A shared neighbor's vector crosses the wire once; each edge still contributes its own weight.
+  const groups = await tx.run(statement.cypher, statement.parameters, (row: Row) => {
+    const vector = fromGraphVector(row.vector);
+    const stored = row.vector !== null && row.vector !== undefined;
+    const memberships = row.memberships as readonly Row[];
+    return memberships.map((member): NeighborhoodRow => ({
+      nodeId: member.nodeId as string,
+      neighborId: row.neighborId as string,
+      strength: member.strength as number,
+      stored,
+      vector,
+    }));
+  });
+  return groups.flat();
 }

@@ -1,5 +1,6 @@
 import type { ReflectionRun } from './orchestrator.js';
 import type { ReflectionJob } from '../../infrastructure/sqlite/reflection-queue.js';
+import { hasRemainder } from '../domain/stage.js';
 
 /**
  * What the worker says about a job, in the two places a reader looks: the queue row's error
@@ -15,12 +16,21 @@ import type { ReflectionJob } from '../../infrastructure/sqlite/reflection-queue
  */
 export function describeFailedRun(episodeId: string, run: ReflectionRun): string {
   const failed = run.summary.stages.filter((stage) => stage.status === 'failed');
-  if (failed.length === 0) {
-    return `no stage enriched ${episodeId}`;
-  }
-  const named = failed.map((stage) => `${stage.name}: ${stage.error ?? stage.summary}`).join('; ');
   const skipped = run.summary.skippedStages;
   const context = skipped.length === 0 ? '' : ` (${String(skipped.length)} stages already applied)`;
+  if (failed.length === 0) {
+    if (run.summary.stages.length === 0) {
+      return `no stage enriched ${episodeId}`;
+    }
+    const remaining = run.summary.stages.filter(hasRemainder).map((stage) => {
+      const reasons = [...new Set((stage.withheldWork ?? []).map((work) => work.reason))];
+      return `${stage.name}: ${reasons.length > 0 ? reasons.join('; ') : stage.summary}`;
+    });
+    const detail =
+      remaining.length > 0 ? remaining.join('; ') : 'stage settlement remains unverified';
+    return `reflection incomplete for ${episodeId}${context}: ${detail}`;
+  }
+  const named = failed.map((stage) => `${stage.name}: ${stage.error ?? stage.summary}`).join('; ');
   return `${String(failed.length)} stage(s) failed for ${episodeId}${context}: ${named}`;
 }
 
