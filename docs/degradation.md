@@ -154,8 +154,10 @@ enrichment was attempted.
 
 ### No API key set
 
-**Trigger.** `AION_ANTHROPIC_API_KEY` is empty or unset. There is no second route: generation
-runs on the Anthropic model or it waits.
+**Trigger.** The provider `AION_GENERATION_PROVIDER` selects has no key in `.env`:
+`AION_ANTHROPIC_API_KEY` under `anthropic`, the default, or `AION_OPENAI_API_KEY` under `openai`.
+There is no second route: the other provider's key does not stand in, and generation runs on the
+selected provider or it waits.
 
 **What happens.** Capture, embedding, the graph and the archive are untouched. Every `generate`
 raises `GenerationUnavailableError` before it reaches the network
@@ -173,13 +175,16 @@ everything it captures.
 **What the caller sees.** Ordinary answers with thinner ranking, and a queue that is not
 draining. Nothing fails, and nothing runs on a smaller model instead.
 
-**Diagnose.** One warn line at boot. `aion status` prints `routing cue=queued reflect=queued`
-and a banner saying what still works. `aion doctor` says `generation queued: no
-AION_ANTHROPIC_API_KEY set` under `ollama-round-trip`, and `hooks-route` says captures are
-stored and queued. `aion queue ls` shows the depth.
+**Diagnose.** One warn line at boot. `aion status` prints
+`routing cue=queued(<provider>) reflect=queued(<provider>)` and a banner saying what still works.
+`aion doctor` says `generation queued (AION_GENERATION_PROVIDER=<provider> needs <variable>)`
+under `ollama-round-trip`, and `hooks-route` says captures are stored and queued. `aion queue ls`
+shows the depth.
 
-**Recovers.** Not automatically; nothing is broken. Put the key in `.env` and restart the
-service: routing is resolved once, at boot, and the queued work drains.
+**Recovers.** Not automatically; nothing is broken. Put the key in `.env` and rerun `aion init`,
+which restarts the service with it: routing is resolved once, at boot, and the queued work drains.
+On a native install a key exported only in the shell does not count, because the launchd job
+carries what `.env` records and nothing else.
 
 ### Neo4j down: recall
 

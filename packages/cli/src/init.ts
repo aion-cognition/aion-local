@@ -1,11 +1,9 @@
 import {
   bootstrapBackbone,
   ensureNeo4jPassword,
-  envFileValue,
   seedEnvFromTemplate,
   GraphConnection,
   isManagedNeo4jUri,
-  loadConfig,
   provisionOllama,
   reconcileResidentModels,
   recordLifecycleEvent,
@@ -35,7 +33,6 @@ import {
   readStorePairing,
   refuseProfileSwitch,
   storePairingRefusal,
-  upsertEnvValue,
   type InstallProfile,
 } from './install-profile.js';
 import { lifecycleIntakeDeps, type LifecycleTarget } from './lifecycle.js';
@@ -50,7 +47,7 @@ import {
 } from './native-install.js';
 import { stdoutWriter, type Writer } from './output.js';
 import { envFilePath, envTemplatePath, resolveRepoDir } from './paths.js';
-import { fullProfileKey, keyNoticeLines, resolveProviderKey } from './provider-key.js';
+import { keyNoticeLines, settleProviderKey } from './provider-key.js';
 import { renderRegistration } from './registration.js';
 import { withSubstrate } from './substrate.js';
 
@@ -379,22 +376,17 @@ async function prepareFullProfile(
   // template copy inside ensureNeo4jPassword would never fire; seed it here first so a
   // fresh install's .env carries the full documented surface, not just what init wrote.
   seedEnvFromTemplate(envPath, envTemplatePath(repoDir));
-  const { provider, envVar, configured } = fullProfileKey(config);
-  const key = await resolveProviderKey({
-    provider,
-    configured,
-    fromEnvFile: envFileValue(envPath, envVar),
-    assumeYes: flags.assumeYes,
-    interactive: process.stdin.isTTY,
-    ask: askOnTerminal,
-  });
-  if (key === configured) {
-    return config;
-  }
-  upsertEnvValue(envPath, envVar, key);
-  process.env[envVar] = key;
-  write(`${envVar} recorded in ${envPath}`);
-  return loadConfig(process.env);
+  return await settleProviderKey(
+    config,
+    {
+      envPath,
+      assumeYes: flags.assumeYes,
+      interactive: process.stdin.isTTY,
+      ask: askOnTerminal,
+      write,
+    },
+    process.env,
+  );
 }
 
 export function runInit(
@@ -435,7 +427,7 @@ export function runInit(
       // queue, which drains on the selected provider once it has a key. The generation profile
       // decides whether init settles that key, not whether the substrate is allowed to remember.
       installFullProfile(write);
-      for (const line of keyNoticeLines(resolved)) {
+      for (const line of keyNoticeLines(envFilePath(resolveRepoDir()), process.env)) {
         write(line);
       }
       write('\naion init: ready');

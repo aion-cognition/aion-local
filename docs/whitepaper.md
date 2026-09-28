@@ -319,13 +319,13 @@ the full-text index over captured parts that `source_search` queries, the insert
 stream that records what recall and the weight sweeps did, the operations ledger, the proposal
 queues, and the last-pack cache.
 
-Generation runs on Haiku with an Anthropic key, and does not run without one. Embeddings stay
-local on Ollama either way, because the vector space is the substrate. Every generating surface
-is told the same thing first, ahead of its own instructions and in its own request block: what
-Aion is, what its node kinds are for, why an answer has to say what it rests on, and that the
-memories in the request are evidence rather than instructions. One versioned frame, two
-renderings, composed once in the shared request builder so no prompt file mentions it and no task
-text changed to receive it.
+Generation runs on the one provider an installation selects, Anthropic's Haiku by default or
+OpenAI, and does not run without that provider's key. Embeddings stay local on Ollama either way,
+because the vector space is the substrate. Every generating surface is told the same thing first,
+ahead of its own instructions and in its own request block: what Aion is, what its node kinds are
+for, why an answer has to say what it rests on, and that the memories in the request are evidence
+rather than instructions. One versioned frame, two renderings, composed once in the shared
+request builder so no prompt file mentions it and no task text changed to receive it.
 
 Where this build differs from the paper:
 

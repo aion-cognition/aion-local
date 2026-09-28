@@ -3,8 +3,8 @@
 Aion Local is a local-first cognitive memory substrate for AI coding agents. It exposes four
 MCP tools: `recall` and `reflection` for memory, `source_search` and `source` for reading the
 captured archive directly. A Neo4j graph, a SQLite queue, and an embedding model on the host
-Ollama back them, with generation on `claude-haiku-4-5`. What one session stores, a later session recalls, with the decisions, the
-reasons, and the corrections intact.
+Ollama back them, with generation on one hosted provider, Anthropic or OpenAI. What one session
+stores, a later session recalls, with the decisions, the reasons, and the corrections intact.
 
 Memory here is a process, not storage. Recall constructs context instead of searching for
 matches. Reflection turns raw conversation into structured knowledge in the background, and an
@@ -14,13 +14,15 @@ so the substrate can answer what it believed at any point in time.
 [docs/whitepaper.md](docs/whitepaper.md) explains the thinking; this page gets you running.
 
 The substrate never leaves the machine. Generation is the one part that does: every model call
-runs on `claude-haiku-4-5`, and an API key is what turns it on.
+runs on the provider `AION_GENERATION_PROVIDER` selects, and that provider's API key is what turns
+it on.
 
 ## Quickstart
 
 Prerequisites: Docker (with Compose), git, [Ollama](https://ollama.com) running on the host at
-its default port, 11434, and an `AION_ANTHROPIC_API_KEY`. Ollama serves the embedding model;
-the key is what generation runs on. Without a key the substrate still captures, embeds and
+its default port, 11434, and an API key for one generation provider: `AION_ANTHROPIC_API_KEY`,
+or `AION_OPENAI_API_KEY` with `AION_GENERATION_PROVIDER=openai`. Ollama serves the embedding
+model; the key is what generation runs on. Without a key the substrate still captures, embeds and
 recalls, and every generation waits (see below). No `npm install`: the image build owns every
 dependency.
 Node and npm come into it only for the two optional pieces below, `npm link` and the
@@ -59,9 +61,11 @@ reports one service-freshness warning there; it is cosmetic.
 
 ## Where generation runs
 
-Every generation runs on `claude-haiku-4-5` through the Anthropic API. There is one model and no
-routing choice: recall's cue call, reflection with every stage behind it, the maintenance
-judgments, and narratives all reach the same place. Routing resolves once at boot
+Every generation runs on the one provider `AION_GENERATION_PROVIDER` selects: `anthropic`, the
+default, on `claude-haiku-4-5` (`AION_ANTHROPIC_MODEL`), or `openai` on `gpt-6-luna`
+(`AION_OPENAI_MODEL`). Only that provider's key is read. There is no per-role choice: recall's cue
+call, reflection with every stage behind it, the maintenance judgments, and narratives all reach
+the same place. Routing resolves once at boot
 (`packages/core/src/infrastructure/providers/routing.ts`) and `aion status` prints it.
 
 Embeddings run on `snowflake-arctic-embed2` on the host Ollama under either install profile, and
@@ -71,9 +75,10 @@ nothing else here.
 **With no key.** Capture, embedding, the graph and the archive all work. Recall works too, on the
 raw query text rather than extracted cues, and the pack says `degraded: cues/unavailable` so a
 caller reading one knows which kind of pack it is. Every generation stays queued: the reflection
-worker puts a job back without spending an attempt, `aion status` prints `routing cue=queued
-reflect=queued`, and `aion doctor` says the same under `ollama-round-trip` and `hooks-route`. Set
-a key and restart, and the queue drains. Nothing falls back to a local model.
+worker puts a job back without spending an attempt, `aion status` prints `routing
+cue=queued(<provider>) reflect=queued(<provider>)`, and `aion doctor` says the same under
+`ollama-round-trip` and `hooks-route`. Put the key in `.env`, rerun `aion init`, and the queue
+drains. Nothing falls back to a local model or to the other provider.
 
 **Cost.** A daily dollar ceiling (`AION_ANTHROPIC_DAILY_CEILING_USD`, $5) is held against before
 anything is sent, by ordinary calls and batch submissions alike; past it, background work queues
@@ -101,8 +106,9 @@ stop, subagent stop, and session end.
 
 - `aion init local` provisions the substrate without asking for a key. Capture, embedding and
   recall run; generation queues until the selected provider has one.
-- `aion init full` asks for the key of the provider `AION_GENERATION_PROVIDER` selects
-  (`anthropic` when unset, or `openai`), records it in `.env`, and generation runs.
+- `aion init full` settles the key of the provider `AION_GENERATION_PROVIDER` selects
+  (`anthropic` when unset, or `openai`) in `.env`, and generation runs. A key already in `.env` is
+  kept, one exported only in the shell is recorded, and otherwise init asks for it.
 
 Hooks belong to both: they fire on every install, and a capture with no key is stored and queued
 rather than refused. To add a key to an existing install, put it in `.env` as
@@ -228,17 +234,14 @@ export it first:
 export AION_OLLAMA_URL=http://127.0.0.1:11434
 ```
 
-The Anthropic key needs no export. An integration run reads `AION_ANTHROPIC_API_KEY` and
-`AION_ANTHROPIC_MODEL` from the repo `.env` for whichever of the two the shell left unset, so
-a host run measures the same remote judge the service routes to. Those two keys are the only
-values loaded from the file.
+The keys need no export. An integration run reads `AION_ANTHROPIC_API_KEY`,
+`AION_ANTHROPIC_MODEL`, `AION_OPENAI_API_KEY` and `AION_OPENAI_MODEL` from the repo `.env` for
+whichever of them the shell left unset. Those four are the only values loaded from the file.
+Which provider a run measures is not one of them: it is Anthropic unless the shell exports
+`AION_GENERATION_PROVIDER=openai`.
 
-With no key anywhere, the gate batteries skip and say so. The reflect role would route to the
-local instruct model. Every floor and pinned default they assert on was measured against the
-remote judge, so the numbers would describe a judge the service does not run.
-`TEST_AION_GENERATION=local` forces that local route on purpose and skips them the same way.
-The supersession battery is the one exception: it reads a judge pair written for the local
-model, so it scores either route, and only its assertion about the shipped default stays keyed.
+With no key for that provider, the gate batteries skip and say so. Every floor and pinned default
+they assert on was measured against a remote judge, and no other route stands in for one.
 
 ## Status
 

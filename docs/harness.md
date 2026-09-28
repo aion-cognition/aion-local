@@ -19,11 +19,12 @@ substrate: the hooks are a client that speaks the same MCP wire an agent does.
 settles a key. Generation runs on the one provider `AION_GENERATION_PROVIDER` selects either way:
 `anthropic` when it is unset, or `openai`.
 
-`aion init local` provisions the substrate without asking for a key. `aion init full` asks for
-the selected provider's key (`AION_ANTHROPIC_API_KEY` or `AION_OPENAI_API_KEY`) and records it in
-`.env`. The other provider's key is never asked for. The shims push a lot of small capture work,
-and capture is small-model work: read a turn, shape it, store it. Embeddings stay local either
-way, because the vector space is the substrate.
+`aion init local` provisions the substrate without asking for a key. `aion init full` makes sure
+`.env` holds the selected provider's key (`AION_ANTHROPIC_API_KEY` or `AION_OPENAI_API_KEY`),
+because the service reads it from there and nowhere else. A key exported only in the shell is
+recorded, and with none anywhere init asks. The other provider's key is never asked for. The shims
+push a lot of small capture work, and capture is small-model work: read a turn, shape it, store
+it. Embeddings stay local either way, because the vector space is the substrate.
 
 Hooks install and fire on every profile. Capture never depends on generation: a hook hands the
 turn to intake, intake stores it and queues the work, and the enrichment runs when there is a
@@ -33,8 +34,8 @@ came from a build that had a local model to protect from the cadence. There is n
 now, and the queue is what absorbs a key that is missing.
 
 `aion doctor` reports what digests a capture as `hooks-route`; with no key it says the captures
-are stored and queued. `aion init` ends by naming the variable the selection needs when that key
-is missing, and says nothing about keys when it is set. To decide whether hooks are
+are stored and queued. `aion init` ends by naming the variable the selection needs when `.env`
+lacks that key, and says nothing about keys when it is set. To decide whether hooks are
 installed, `bin/aion` looks in both `~/.claude/settings.json` and `$CODEX_HOME/hooks.json`.
 `aion hooks install` does the hook half on its own, on any install.
 
