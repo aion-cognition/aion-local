@@ -2,7 +2,11 @@ import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { BATCH_INDEX_STATEMENTS, BATCH_SCHEMA_STATEMENTS } from './batch-schema.js';
+import {
+  BATCH_COLUMN_ADDITIONS,
+  BATCH_INDEX_STATEMENTS,
+  BATCH_SCHEMA_STATEMENTS,
+} from './batch-schema.js';
 import { IDENTITY_INDEX_STATEMENTS, IDENTITY_SCHEMA_STATEMENTS } from './identity-schema.js';
 import { NARRATIVE_INDEX_STATEMENTS, NARRATIVE_SCHEMA_STATEMENTS } from './narrative-schema.js';
 import { PUBLICATION_SCHEMA_STATEMENTS } from './publication-schema.js';
@@ -364,6 +368,31 @@ function ensureDirectoryExists(filePath: string): void {
   mkdirSync(dirname(filePath), { recursive: true });
 }
 
+function missingBatchColumns(db: SqliteHandle): typeof BATCH_COLUMN_ADDITIONS {
+  const present = new Set(
+    (db.pragma('table_info(batch_work)') as { name: string }[]).map((row) => row.name),
+  );
+  return BATCH_COLUMN_ADDITIONS.filter((addition) => !present.has(addition.column));
+}
+
+/**
+ * Adds the `batch_work` columns a table created by an earlier build lacks. SQLite has no `ADD
+ * COLUMN IF NOT EXISTS`, and a second ALTER of the same column fails the whole open, so the ALTER
+ * runs in a write transaction that reads the columns again first: a second process opening at the
+ * same moment waits, then finds the column there. An open that finds nothing missing takes no
+ * write lock.
+ */
+function addBatchColumns(db: SqliteHandle): void {
+  if (missingBatchColumns(db).length === 0) {
+    return;
+  }
+  db.transaction(() => {
+    for (const addition of missingBatchColumns(db)) {
+      db.exec(`ALTER TABLE batch_work ADD COLUMN ${addition.column} ${addition.definition}`);
+    }
+  }).immediate();
+}
+
 function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
@@ -393,6 +422,7 @@ export function openSqliteHandle(target: SqliteTarget): SqliteHandle {
       for (const statement of SCHEMA_STATEMENTS) {
         db.exec(statement);
       }
+      addBatchColumns(db);
       for (const statement of INDEX_STATEMENTS) {
         db.exec(statement);
       }

@@ -15,8 +15,8 @@ import type { Config } from '../../../infrastructure/config/schema.js';
 import { mentionSourceDigest } from '../../../infrastructure/graph/entity-description-queries.js';
 import type { Logger } from '../../../infrastructure/logging/logger.js';
 import { legalCustomId } from '../../../infrastructure/providers/anthropic-batches.js';
-import type { Provider } from '../../../infrastructure/providers/types.js';
-import { readBatchWork } from '../../../infrastructure/sqlite/batch-work.js';
+import type { GenerationProvider, Provider } from '../../../infrastructure/providers/types.js';
+import { readBatchWork, type BatchWorkItem } from '../../../infrastructure/sqlite/batch-work.js';
 import { SqliteStore, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import { beginSubstratePairing } from '../../../infrastructure/sqlite/publication-control.js';
 import { FRESHNESS_PROMPT, MAX_TOKENS } from '../../../prompts/description-freshness.js';
@@ -115,6 +115,29 @@ type EnqueuedRequest = {
   readonly system: readonly { readonly type: string; readonly text: string }[];
   readonly messages: { readonly role: string; readonly content: string }[];
 };
+
+type ResponsesRequest = {
+  readonly model: string;
+  readonly instructions: string;
+  readonly max_output_tokens: number;
+  readonly temperature?: number;
+  readonly reasoning: unknown;
+  readonly store: boolean;
+};
+
+/** A run on the given provider, with nothing else about the context changed. */
+function runOn(provider: GenerationProvider): OperationContext {
+  return {
+    ...contextFor(unusedProvider(), new AbortController().signal),
+    config: { ...CONFIG, generation: { ...CONFIG.generation, provider } },
+  };
+}
+
+function onlyRow(): BatchWorkItem | undefined {
+  const rows = db.prepare('SELECT work_key FROM batch_work').all() as { work_key: string }[];
+  expect(rows).toHaveLength(1);
+  return readBatchWork(db, rows[0]?.work_key ?? '');
+}
 
 /** The surface's own block: the second one, after the shared frame the builder puts first. */
 function taskText(request: EnqueuedRequest | undefined): string {
@@ -259,17 +282,30 @@ describe('what the nomination writes down', () => {
     expect(db.prepare('SELECT count(*) AS rows FROM batch_work').get()).toEqual({ rows: 1 });
   });
 
-  it('keeps its own Anthropic batch lane when synchronous reflection is routed to OpenAI', async () => {
-    const outcome = await descriptionFreshnessOperation().run({
-      ...contextFor(unusedProvider(), new AbortController().signal),
-      config: { ...CONFIG, generation: { ...CONFIG.generation, provider: 'openai' } },
-    });
+  it('asks in the OpenAI Responses shape at the OpenAI model when OpenAI is selected', async () => {
+    const outcome = await descriptionFreshnessOperation().run(runOn('openai'));
 
     expect(outcome.itemsAffected).toBe(1);
-    const rows = db.prepare('SELECT work_key FROM batch_work').all() as { work_key: string }[];
-    const request = readBatchWork(db, rows[0]?.work_key ?? '')?.request as
-      EnqueuedRequest | undefined;
-    expect(request?.model).toBe(CONFIG.anthropic.model);
+    const row = onlyRow();
+    expect(row?.provider).toBe('openai');
+    const request = row?.request as ResponsesRequest | undefined;
+    expect(request?.model).toBe(CONFIG.openai.model);
+    expect(request?.instructions).toContain(FRESHNESS_PROMPT);
+    expect(request?.max_output_tokens).toBe(MAX_TOKENS);
+    expect(request?.temperature).toBe(0);
+    expect(request?.reasoning).toEqual({ effort: 'none' });
+    expect(request?.store).toBe(false);
+    // Nothing of the Messages shape rides along: the OpenAI batch API would refuse the line.
+    expect(request).not.toHaveProperty('system');
+    expect(request).not.toHaveProperty('max_tokens');
+  });
+
+  it('asks in the Messages shape at the Anthropic model when Anthropic is selected', async () => {
+    await descriptionFreshnessOperation().run(runOn('anthropic'));
+
+    const row = onlyRow();
+    expect(row?.provider).toBe('anthropic');
+    expect((row?.request as EnqueuedRequest | undefined)?.model).toBe(CONFIG.anthropic.model);
   });
 
   it('enqueues nothing for a store with no substrate identity', async () => {
@@ -281,6 +317,39 @@ describe('what the nomination writes down', () => {
 
     expect(outcome.status).toBe('noop');
     expect(db.prepare('SELECT count(*) AS rows FROM batch_work').get()).toEqual({ rows: 0 });
+  });
+});
+
+describe('work owed from before a provider switch', () => {
+  it('re-encodes a question nothing sent for the provider selected now, keeping its identity', async () => {
+    await descriptionFreshnessOperation().run(runOn('anthropic'));
+    const before = onlyRow();
+
+    const outcome = await descriptionFreshnessOperation().run(runOn('openai'));
+
+    const after = onlyRow();
+    expect(outcome.itemsAffected).toBe(1);
+    expect(outcome.detail).toContain('1 still owed under the other provider re-encoded for openai');
+    expect(after).toMatchObject({
+      workKey: before?.workKey,
+      durableKey: before?.durableKey,
+      revalidation: before?.revalidation,
+      enqueuedAt: before?.enqueuedAt,
+      state: 'pending',
+      provider: 'openai',
+    });
+    expect((after?.request as ResponsesRequest | undefined)?.model).toBe(CONFIG.openai.model);
+  });
+
+  it('leaves a question the other provider already holds with that provider', async () => {
+    await descriptionFreshnessOperation().run(runOn('anthropic'));
+    db.prepare(`UPDATE batch_work SET state = 'submitted', batch_id = 'msgbatch_held'`).run();
+    const before = onlyRow();
+
+    const outcome = await descriptionFreshnessOperation().run(runOn('openai'));
+
+    expect(outcome.itemsAffected).toBe(0);
+    expect(onlyRow()).toEqual(before);
   });
 });
 

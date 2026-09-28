@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import type { Config } from '../../../infrastructure/config/schema.js';
 import {
   findEntityMentionContexts,
   findStaleDescriptionEntities,
@@ -12,9 +13,17 @@ import {
 } from '../../../infrastructure/graph/entity-description-queries.js';
 import { batchMessagesBody } from '../../../infrastructure/providers/anthropic-provider.js';
 import type { BatchWorkHandler } from '../../../infrastructure/providers/batch-adapter.js';
-import type { ChatMessage, JsonSchema } from '../../../infrastructure/providers/types.js';
+import { responsesRequestBody } from '../../../infrastructure/providers/openai-provider.js';
+import { modelOn } from '../../../infrastructure/providers/routing.js';
+import type {
+  ChatMessage,
+  GenerationProvider,
+  JsonSchema,
+  StructuredRequest,
+} from '../../../infrastructure/providers/types.js';
 import {
   enqueueBatchWork,
+  reencodePendingBatchWork,
   reopenDiscardedBatchWork,
   type BatchWorkItem,
 } from '../../../infrastructure/sqlite/batch-work.js';
@@ -118,6 +127,28 @@ function buildMessages(
   ];
 }
 
+/**
+ * The body one question is sent as, in the selected provider's own shape at that provider's model:
+ * a Messages request for Anthropic's batch API, a Responses request for OpenAI's. Each is the
+ * synchronous route's own builder, so the batch lane asks what an inline call would.
+ */
+function requestFor(
+  config: Config,
+  provider: GenerationProvider,
+  messages: readonly ChatMessage[],
+): Record<string, unknown> {
+  const req: StructuredRequest = {
+    surface: DESCRIPTION_FRESHNESS_SURFACE,
+    model: modelOn(config, provider),
+    messages,
+    schema: DESCRIPTION_JSON_SCHEMA,
+    maxTokens: MAX_TOKENS,
+    temperature: DESCRIPTION_TEMPERATURE,
+    think: false,
+  };
+  return provider === 'openai' ? responsesRequestBody(req) : batchMessagesBody(req);
+}
+
 /** How much of the question's digest the remote id carries. Collision-free at this population. */
 const WORK_KEY_DIGEST_CHARS = 32;
 
@@ -200,8 +231,10 @@ export function descriptionFreshnessOperation(): IntrospectionOperation {
         growthThreshold: ctx.config.maintenance.descriptionRefreshMentionGrowth,
         limit: batch,
       });
+      const { provider } = ctx.config.generation;
 
       let enqueued = 0;
+      let reencoded = 0;
       let held = 0;
 
       for (const entity of candidates) {
@@ -232,25 +265,23 @@ export function descriptionFreshnessOperation(): IntrospectionOperation {
         };
         const durableKey = descriptionFreshnessDurableKey(entity, sourceDigest);
         const workKey = descriptionFreshnessWorkKey(durableKey);
+        const request = requestFor(
+          ctx.config,
+          provider,
+          buildMessages(entity, contexts, FRESHNESS_PROMPT),
+        );
         const wrote = enqueueBatchWork(ctx.db, {
           workKey,
           durableKey,
           substrateId: substrate.substrateId,
           surface: DESCRIPTION_FRESHNESS_SURFACE,
           revalidation,
-          request: batchMessagesBody({
-            surface: DESCRIPTION_FRESHNESS_SURFACE,
-            model: ctx.config.anthropic.model,
-            messages: buildMessages(entity, contexts, FRESHNESS_PROMPT),
-            schema: DESCRIPTION_JSON_SCHEMA,
-            maxTokens: MAX_TOKENS,
-            temperature: DESCRIPTION_TEMPERATURE,
-            think: false,
-          }),
+          request,
           // Recorded beside the body rather than derived from it. The body is replayed verbatim,
           // so a bump to the frame does not reach a request already outstanding, and this is what
           // says which frame that request was written under.
           frameVersion: FRAME_VERSION,
+          provider,
           now: ctx.now,
         });
         // A discarded row carries the same key only when every input this nomination just read is
@@ -258,19 +289,41 @@ export function descriptionFreshnessOperation(): IntrospectionOperation {
         // answer was thrown away because something moved while it was at the remote, and this
         // read is the proof that it moved back, so the question is owed again rather than closed
         // by a row nobody can clear.
-        if (wrote || reopenDiscardedBatchWork(ctx.db, workKey, substrate.substrateId, ctx.now)) {
+        const reopened =
+          !wrote && reopenDiscardedBatchWork(ctx.db, workKey, substrate.substrateId, ctx.now);
+        // A row still owed under the provider the installation used before is the same question
+        // in the other vendor's shape. Nothing sent it, so it is rewritten for the provider chosen
+        // now and keeps its identity. One the other vendor already holds settles there.
+        const switched =
+          !wrote &&
+          reencodePendingBatchWork(ctx.db, {
+            workKey,
+            substrateId: substrate.substrateId,
+            provider,
+            request,
+            frameVersion: FRAME_VERSION,
+          });
+        if (wrote || reopened) {
           enqueued += 1;
+        } else if (switched) {
+          reencoded += 1;
         }
       }
 
+      const affected = enqueued + reencoded;
+      const reencodedDetail =
+        reencoded === 0
+          ? ''
+          : `, ${String(reencoded)} still owed under the other provider re-encoded for ${provider}`;
       return {
-        status: enqueued === 0 ? 'noop' : 'applied',
+        status: affected === 0 ? 'noop' : 'applied',
         itemsProcessed: candidates.length,
-        itemsAffected: enqueued,
+        itemsAffected: affected,
         detail:
           `${String(enqueued)} of ${String(candidates.length)} stale description(s) enqueued for ` +
-          `batched re-synthesis, ${String(held)} held for want of readable mentions; ` +
-          'a description is refreshed when its answer lands, not when it is asked for',
+          `batched re-synthesis on ${provider}${reencodedDetail}, ${String(held)} held for want of ` +
+          'readable mentions; a description is refreshed when its answer lands, not when it is ' +
+          'asked for',
       };
     },
   };

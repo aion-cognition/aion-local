@@ -15,6 +15,15 @@
  * applied without checking it against the substrate at apply time: hours passed, and the pair
  * the judgment is about may have merged, been superseded, or been forgotten.
  */
+
+/**
+ * The vendor a row's request is encoded for. Its batch API is the one that submits the row, and
+ * its key is the one that reads the answer back, whatever the installation selects by then. The
+ * default is what every row written before the column existed was.
+ */
+const PROVIDER_DEFINITION =
+  "TEXT NOT NULL DEFAULT 'anthropic' CHECK (provider IN ('anthropic', 'openai'))";
+
 export const BATCH_SCHEMA_STATEMENTS: readonly string[] = [
   `CREATE TABLE IF NOT EXISTS batch_work (
     work_key TEXT PRIMARY KEY,
@@ -34,6 +43,9 @@ export const BATCH_SCHEMA_STATEMENTS: readonly string[] = [
     -- outstanding answer was written against without parsing the request back out. Null on a row
     -- enqueued before the frame existed.
     frame_version TEXT,
+    -- Whose batch API the request above is encoded for. A pending row a provider switch left
+    -- behind is re-encoded by its producer; a submitted one settles with this provider.
+    provider ${PROVIDER_DEFINITION},
     -- pending: owed, not submitted. submitted: the remote holds it. applied/discarded/failed
     -- are terminal, and each says which of them happened and why.
     state TEXT NOT NULL CHECK (state IN ('pending', 'submitted', 'applied', 'discarded', 'failed')),
@@ -50,6 +62,15 @@ export const BATCH_SCHEMA_STATEMENTS: readonly string[] = [
     settled_at TEXT
   )`,
 ];
+
+/**
+ * Columns `batch_work` gained after substrates already held the table. `CREATE TABLE IF NOT
+ * EXISTS` leaves an existing table as it was, so the open adds each column the table lacks.
+ */
+export const BATCH_COLUMN_ADDITIONS: readonly {
+  readonly column: string;
+  readonly definition: string;
+}[] = [{ column: 'provider', definition: PROVIDER_DEFINITION }];
 
 export const BATCH_INDEX_STATEMENTS: readonly string[] = [
   'CREATE INDEX IF NOT EXISTS batch_work_state_idx ON batch_work(substrate_id, state)',

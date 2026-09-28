@@ -20,7 +20,8 @@ type TokenPrices = TokenRates & {
 
 /**
  * What a batched request costs against the ordinary rate for the same tokens. Verified 2026-09-06
- * on the same pricing page as the table below: the Message Batches API bills at half.
+ * on the same pricing page as the table below: the Message Batches API bills at half. OpenAI's
+ * batch guide states the same 50% discount, read 2026-09-28.
  *
  * It is a multiplier on the price rather than on the counts. The tokens are what the model read
  * and wrote, and every reading that is not about money wants those unchanged.
@@ -197,7 +198,7 @@ export type ApiCostBound = {
    * an hour-long write past a ceiling it cannot actually afford.
    */
   readonly cacheWriteTtl?: '5m' | '1h';
-  /** Whose card an unlisted model is bounded at. Absent reads as Anthropic's, the batch lane's. */
+  /** Whose card an unlisted model is bounded at. Absent reads as Anthropic's. */
   readonly provider?: GenerationProvider;
 };
 
