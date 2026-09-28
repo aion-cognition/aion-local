@@ -98,7 +98,12 @@ function config(): Config {
     models: { ...DEFAULTS.models, embedDimension: EMBED_DIMENSION },
     // The origin subtraction is the subject, so the delivery record stays out of the way: both
     // sessions ask the same question more than once here.
-    recall: { ...DEFAULTS.recall, sessionDedup: false },
+    recall: {
+      ...DEFAULTS.recall,
+      // The stub provider answers as the cue model, so this file runs the `cues` recall mode.
+      mode: 'cues',
+      sessionDedup: false,
+    },
   };
 }
 

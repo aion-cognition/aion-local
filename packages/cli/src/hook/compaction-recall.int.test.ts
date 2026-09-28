@@ -104,7 +104,12 @@ const provider: Provider = {
 };
 
 function config(): Config {
-  return { ...DEFAULTS, models: { ...DEFAULTS.models, embedDimension: EMBED_DIMENSION } };
+  return {
+    ...DEFAULTS,
+    models: { ...DEFAULTS.models, embedDimension: EMBED_DIMENSION },
+    // The stub provider answers as the cue model, so this file runs the `cues` recall mode.
+    recall: { ...DEFAULTS.recall, mode: 'cues' },
+  };
 }
 
 let harness: Neo4jHarness;

@@ -183,9 +183,14 @@ npm run build && ./bin/aion-native init --install native
 ```
 
 The sha rides in the job's environment, so a new one rewrites the plist and init reloads the
-job; an unchanged plist against a healthy server is a no-op. `bin/aion-native` stamps HEAD only
-when `packages/*/dist` is at least as new as the tracked sources, so a pull with no build reads
-`unstamped` rather than a sha the running code does not hold.
+job; an unchanged plist against a healthy server is a no-op. `npm run build` records what it
+built (`scripts/build-record.mjs`, run as `prebuild`/`postbuild`): a content digest of the inputs
+the compiler read and its `.tsbuildinfo` state, written only when the build succeeded and the
+source did not move under it. `bin/aion-native` stamps the job only when that record holds the
+source on disk, by content rather than mtime, so an incremental build that left an entry file
+untouched is recognised and a pull with no build reads `unstamped` rather than a sha the running
+code does not hold. Source that differs from HEAD stamps as `<sha>-dirty-<digest>`, never as the
+bare commit, and doctor compares like with like.
 
 ## The re-exercise gate
 

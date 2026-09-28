@@ -39,6 +39,37 @@ export const PINNED_NEO4J_SERIES = '2026.07';
 export const PINNED_GDS_SERIES = '2026.07';
 export const VERIFIED_GDS_VERSION = '2026.07.0';
 
+/**
+ * Every pairing a procedure census has run on: the substrate's own gds calls (projection, label
+ * propagation, node similarity, KNN, and dropping each projection) exercised by the graph
+ * integration files on a disposable server of that pairing. A series is verified by that run and
+ * nothing else; matching versions alone only say the plugin was built for the kernel.
+ */
+export const VERIFIED_PAIRINGS: readonly {
+  readonly series: string;
+  readonly gdsVersion: string;
+  readonly evidence: string;
+}[] = [
+  {
+    series: PINNED_NEO4J_SERIES,
+    gdsVersion: VERIFIED_GDS_VERSION,
+    evidence: 'the compose image every integration run uses',
+  },
+  {
+    series: '2026.08',
+    gdsVersion: '2026.08.1',
+    evidence:
+      'census of 2026-09-27 on neo4j:2026.08.1-community with its graph-data-science plugin, ' +
+      "the pairing Homebrew's formula installs",
+  },
+];
+
+function verifiedPairingFor(serverSeries: string, gdsSeries: string) {
+  return serverSeries === gdsSeries
+    ? VERIFIED_PAIRINGS.find((pairing) => pairing.series === serverSeries)
+    : undefined;
+}
+
 export type Neo4jPairing = {
   readonly serverVersion: string;
   readonly gdsVersion: string;
@@ -145,11 +176,15 @@ export async function readNeo4jPairing(driver: Driver, uri: string): Promise<Neo
     serverVersion,
     gdsVersion,
     matched: series === versionSeries(gdsVersion),
-    verified: series === PINNED_NEO4J_SERIES && versionSeries(gdsVersion) === PINNED_GDS_SERIES,
+    verified: verifiedPairingFor(series, versionSeries(gdsVersion)) !== undefined,
   };
 }
 
-const VERIFIED_PAIRING = `${PINNED_NEO4J_SERIES} with graph-data-science ${VERIFIED_GDS_VERSION}`;
+function describeVerified(): string {
+  return VERIFIED_PAIRINGS.map(
+    (pairing) => `${pairing.series} with graph-data-science ${pairing.gdsVersion}`,
+  ).join(', ');
+}
 
 /** One line for a report: what is running, and how far it is from the pairing that was measured. */
 export function describePairing(pairing: Neo4jPairing): string {
@@ -158,11 +193,15 @@ export function describePairing(pairing: Neo4jPairing): string {
 }
 
 function verdictFor(pairing: Neo4jPairing): string {
-  if (pairing.verified) {
-    return `the verified pairing (${VERIFIED_PAIRING})`;
+  const verified = verifiedPairingFor(
+    versionSeries(pairing.serverVersion),
+    versionSeries(pairing.gdsVersion),
+  );
+  if (verified !== undefined) {
+    return `a verified pairing (${verified.series} with graph-data-science ${verified.gdsVersion}: ${verified.evidence})`;
   }
   if (pairing.matched) {
-    return `matched, and past the verified pairing (${VERIFIED_PAIRING}): nobody has run the procedure census on this one`;
+    return `matched, and outside the verified pairings (${describeVerified()}): nobody has run the procedure census on this one`;
   }
   return 'MISMATCHED: the plugin is compiled against another kernel series';
 }

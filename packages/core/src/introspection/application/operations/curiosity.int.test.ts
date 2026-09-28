@@ -122,6 +122,8 @@ function config(overrides: Partial<Config['maintenance']> = {}): Config {
     ...DEFAULTS,
     models: { ...DEFAULTS.models, embedDimension: EMBED_DIMENSION },
     maintenance: { ...DEFAULTS.maintenance, ...overrides },
+    // The stub provider answers as the cue model, so this file runs the `cues` recall mode.
+    recall: { ...DEFAULTS.recall, mode: 'cues' },
   };
 }
 

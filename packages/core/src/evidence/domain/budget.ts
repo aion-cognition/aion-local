@@ -140,12 +140,18 @@ export type JudgeRoute = (typeof JUDGE_ROUTES)[number];
  * What one route may render into a judge's input, in UTF-16 code units. Each pass subtracts its
  * own fixed prompt and output reserve from this, so the number here is the whole envelope rather
  * than the room left inside it.
+ *
+ * Sized to the hosted models the judges run on, about 33K tokens of a window of 200K (Haiku 4.5)
+ * or more (GPT-6 Luna), and kept under the request's own 256 KiB decode budget above, which still
+ * binds first on a source larger than that. It was 16,384, a round figure nothing measured: on the
+ * live substrate it withheld every entity-merge pair whose required sources ran longer, one side
+ * of one measured at 72,581 units before any prompt, so those judgments could never be asked.
  */
 export const JUDGE_ROUTE_ALLOWANCE: Readonly<Record<JudgeRoute, number>> = {
-  live_supersession: 16384,
-  proposal_resolution: 16384,
-  claim_dedup: 16384,
-  entity_merge: 16384,
+  live_supersession: 131_072,
+  proposal_resolution: 131_072,
+  claim_dedup: 131_072,
+  entity_merge: 131_072,
 };
 
 /**

@@ -62,19 +62,33 @@ describe('the neo4j pairing check', () => {
 
     expect(result).toMatchObject({ ok: true });
     expect(result.warn).toBeUndefined();
-    expect(result.detail).toContain('the verified pairing');
+    expect(result.detail).toContain('a verified pairing');
   });
 
-  it('warns on a matched pair past that series rather than failing a working substrate', async () => {
-    // What a brew install gives today. The two halves agree, which is the requirement; nobody has
-    // run the procedure census on it, which is the warning.
+  it('passes the Homebrew pairing on the census run against it', async () => {
     const result = await graphPairingCheck(
       driverFor({ agent: 'Neo4j/2026.08.1', gdsVersion: '2026.08.1' }),
       'bolt://127.0.0.1:7687',
     );
 
+    expect(result).toMatchObject({ ok: true });
+    expect(result.warn).toBeUndefined();
+    expect(result.detail).toContain(
+      'a verified pairing (2026.08 with graph-data-science 2026.08.1',
+    );
+    expect(result.detail).toContain('census of 2026-09-27');
+  });
+
+  it('warns on a matched pair no census has run on rather than failing a working substrate', async () => {
+    // The two halves agree, which is the requirement; nobody has run the procedure census on the
+    // series, which is the warning.
+    const result = await graphPairingCheck(
+      driverFor({ agent: 'Neo4j/2026.09.0', gdsVersion: '2026.09.0' }),
+      'bolt://127.0.0.1:7687',
+    );
+
     expect(result).toMatchObject({ ok: true, warn: true });
-    expect(result.detail).toContain('past the verified pairing');
+    expect(result.detail).toContain('outside the verified pairings');
   });
 
   it('fails a mismatched pair, which is where a procedure signature moves', async () => {

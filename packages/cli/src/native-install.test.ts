@@ -194,22 +194,27 @@ describe('the environment the job carries', () => {
    * forever, which is the one thing the freshness check cannot recover from on its own.
    */
   it('is exported by the wrapper that starts a native run', () => {
-    expect(nativeWrapper()).toContain('AION_BUILD_SHA="$AION_REPO_HEAD_SHA"');
+    expect(nativeWrapper()).toContain('AION_BUILD_SHA="$BUILT_SHA"');
     expect(nativeWrapper()).toMatch(/\bexport .*\bAION_BUILD_SHA\b/);
   });
 
   /**
-   * And exported only when HEAD is what was built. `npm run build` is a separate step here, where
-   * the docker wrapper rebuilds its image on the way past, so a pull with no build would stamp
-   * the job with a sha the running code does not hold and `doctor` would read a stale service as
-   * fresh — a wrong answer, where the unstamped one was only a useless one.
+   * And exported only when the recorded build holds the source on disk. `npm run build` is a
+   * separate step here, where the docker wrapper rebuilds its image on the way past, so a pull
+   * with no build would stamp the job with a sha the running code does not hold and `doctor` would
+   * read a stale service as fresh — a wrong answer, where the unstamped one was only a useless
+   * one. `build-record.test.ts` drives the record itself over a real repository.
    */
-  it('stamps HEAD only when the build is not older than the tracked sources', () => {
+  it('stamps only what the build record says the build holds, and requires the entry launchd runs', () => {
     const wrapper = nativeWrapper();
+    const script = readFileSync(
+      fileURLToPath(new URL('../../../scripts/build-record.mjs', import.meta.url)),
+      'utf8',
+    );
 
-    expect(wrapper).toMatch(/if build_holds_head; then\n\s*AION_BUILD_SHA="\$AION_REPO_HEAD_SHA"/);
-    expect(wrapper).toContain('ls-files');
-    expect(wrapper).toContain(MCP_SCRIPT_RELATIVE);
+    expect(wrapper).toContain('scripts/build-record.mjs" state');
+    expect(wrapper).toMatch(/if \[ -n "\$BUILT_SHA" \]; then\n\s*AION_BUILD_SHA="\$BUILT_SHA"/);
+    expect(script).toContain(`'${MCP_SCRIPT_RELATIVE}'`);
   });
 });
 
