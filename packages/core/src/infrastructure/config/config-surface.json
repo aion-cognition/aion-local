@@ -23,8 +23,7 @@
       "dailyCeilingUsd": 5
     },
     "generation": {
-      "recallProvider": "anthropic",
-      "reflectProvider": "anthropic"
+      "provider": "anthropic"
     },
     "openai": {
       "apiKey": "",
@@ -277,6 +276,7 @@
     "AION_EMBED_MODEL -> models.embed : string",
     "AION_ENTITY_MERGE_MODE -> reflection.entityMergeMode : string",
     "AION_FACTS_RESTATEMENT_FLOOR -> recall.restatementFloor : number",
+    "AION_GENERATION_PROVIDER -> generation.provider : string",
     "AION_HEBBIAN_BATCH_SIZE -> hebbian.batchSize : number",
     "AION_HEBBIAN_DECAY_PEAK_DAYS -> hebbian.decayPeakDays : number",
     "AION_HEBBIAN_DECAY_RATE -> hebbian.decayRate : number",
@@ -396,7 +396,6 @@
     "AION_RECALL_OWN_SESSION_FILTER -> recall.ownSessionFilter : boolean",
     "AION_RECALL_PATH_STRENGTH_SLOTS -> recall.pathStrengthSlots : number",
     "AION_RECALL_PROBE_SAMPLE -> maintenance.recallProbeSample : number",
-    "AION_RECALL_PROVIDER -> generation.recallProvider : string",
     "AION_RECALL_SESSION_DEDUP -> recall.sessionDedup : boolean",
     "AION_RECALL_TOKEN_BUDGET -> recall.tokenBudget : number",
     "AION_RECALL_TYPED_ADMISSION -> recall.typedAdmission : boolean",
@@ -404,7 +403,6 @@
     "AION_RECALL_VECTOR_LIMIT -> recall.vectorLimit : number",
     "AION_RECONCILE_WARN_THRESHOLD -> operational.reconcileWarnThreshold : number",
     "AION_REDACTION_ENTROPY_THRESHOLD -> redaction.entropyThreshold : number",
-    "AION_REFLECT_PROVIDER -> generation.reflectProvider : string",
     "AION_REFLECTION_ASSOCIATION_SIMILAR_LIMIT -> reflection.associationSimilarLimit : number",
     "AION_REFLECTION_ENTITY_DEDUP_THRESHOLD -> reflection.entityDedupThreshold : number",
     "AION_REFLECTION_ENTITY_NOMINATION_JACCARD_FLOOR -> reflection.entityNominationJaccardFloor : number",
@@ -620,6 +618,9 @@
     "AION_FACTS_RESTATEMENT_FLOOR=0.5": "ok 0.5",
     "AION_FACTS_RESTATEMENT_FLOOR=1.5": "ConfigError Invalid configuration:\nAION_FACTS_RESTATEMENT_FLOOR: Too big: expected number to be <=1",
     "AION_FACTS_RESTATEMENT_FLOOR=2": "ConfigError Invalid configuration:\nAION_FACTS_RESTATEMENT_FLOOR: Too big: expected number to be <=1",
+    "AION_GENERATION_PROVIDER=": "ConfigError Invalid configuration:\nAION_GENERATION_PROVIDER: Invalid option: expected one of \"anthropic\"|\"openai\"",
+    "AION_GENERATION_PROVIDER=zzz": "ConfigError Invalid configuration:\nAION_GENERATION_PROVIDER: Invalid option: expected one of \"anthropic\"|\"openai\"",
+    "AION_GENERATION_PROVIDER=x": "ConfigError Invalid configuration:\nAION_GENERATION_PROVIDER: Invalid option: expected one of \"anthropic\"|\"openai\"",
     "AION_HEBBIAN_BATCH_SIZE=not-a-number": "ConfigError Invalid configuration:\nAION_HEBBIAN_BATCH_SIZE: Invalid input: expected number, received NaN",
     "AION_HEBBIAN_BATCH_SIZE=": "ConfigError Invalid configuration:\nAION_HEBBIAN_BATCH_SIZE: Invalid input: expected number, received NaN",
     "AION_HEBBIAN_BATCH_SIZE=-1": "ConfigError Invalid configuration:\nAION_HEBBIAN_BATCH_SIZE: Too small: expected number to be >0",
@@ -1351,9 +1352,6 @@
     "AION_RECALL_PROBE_SAMPLE=0.5": "ConfigError Invalid configuration:\nAION_RECALL_PROBE_SAMPLE: Invalid input: expected int, received number",
     "AION_RECALL_PROBE_SAMPLE=1.5": "ConfigError Invalid configuration:\nAION_RECALL_PROBE_SAMPLE: Invalid input: expected int, received number",
     "AION_RECALL_PROBE_SAMPLE=2": "ok 2",
-    "AION_RECALL_PROVIDER=": "ConfigError Invalid configuration:\nAION_RECALL_PROVIDER: Invalid option: expected one of \"anthropic\"|\"openai\"",
-    "AION_RECALL_PROVIDER=zzz": "ConfigError Invalid configuration:\nAION_RECALL_PROVIDER: Invalid option: expected one of \"anthropic\"|\"openai\"",
-    "AION_RECALL_PROVIDER=x": "ConfigError Invalid configuration:\nAION_RECALL_PROVIDER: Invalid option: expected one of \"anthropic\"|\"openai\"",
     "AION_RECALL_SESSION_DEDUP=true": "ok true",
     "AION_RECALL_SESSION_DEDUP=false": "ok false",
     "AION_RECALL_SESSION_DEDUP=yes": "ConfigError Invalid configuration:\nAION_RECALL_SESSION_DEDUP: Invalid input: expected boolean, received string",
@@ -1394,9 +1392,6 @@
     "AION_REDACTION_ENTROPY_THRESHOLD=0.5": "ok 0.5",
     "AION_REDACTION_ENTROPY_THRESHOLD=1.5": "ok 1.5",
     "AION_REDACTION_ENTROPY_THRESHOLD=2": "ok 2",
-    "AION_REFLECT_PROVIDER=": "ConfigError Invalid configuration:\nAION_REFLECT_PROVIDER: Invalid option: expected one of \"anthropic\"|\"openai\"",
-    "AION_REFLECT_PROVIDER=zzz": "ConfigError Invalid configuration:\nAION_REFLECT_PROVIDER: Invalid option: expected one of \"anthropic\"|\"openai\"",
-    "AION_REFLECT_PROVIDER=x": "ConfigError Invalid configuration:\nAION_REFLECT_PROVIDER: Invalid option: expected one of \"anthropic\"|\"openai\"",
     "AION_REFLECTION_ASSOCIATION_SIMILAR_LIMIT=not-a-number": "ConfigError Invalid configuration:\nAION_REFLECTION_ASSOCIATION_SIMILAR_LIMIT: Invalid input: expected number, received NaN",
     "AION_REFLECTION_ASSOCIATION_SIMILAR_LIMIT=": "ConfigError Invalid configuration:\nAION_REFLECTION_ASSOCIATION_SIMILAR_LIMIT: Invalid input: expected number, received NaN",
     "AION_REFLECTION_ASSOCIATION_SIMILAR_LIMIT=-1": "ConfigError Invalid configuration:\nAION_REFLECTION_ASSOCIATION_SIMILAR_LIMIT: Too small: expected number to be >0",
@@ -1870,6 +1865,9 @@
     "recall.restatementFloor=2": "recall.restatementFloor: Too big: expected number to be <=1",
     "recall.restatementFloor=NaN": "recall.restatementFloor: Invalid input: expected number, received NaN",
     "recall.restatementFloor=\"text\"": "recall.restatementFloor: Invalid input: expected number, received string",
+    "generation.provider=\"\"": "generation.provider: Invalid option: expected one of \"anthropic\"|\"openai\"",
+    "generation.provider=42": "generation.provider: Invalid option: expected one of \"anthropic\"|\"openai\"",
+    "generation.provider=null": "generation.provider: Invalid option: expected one of \"anthropic\"|\"openai\"",
     "hebbian.batchSize=-1": "hebbian.batchSize: Too small: expected number to be >0",
     "hebbian.batchSize=0": "hebbian.batchSize: Too small: expected number to be >0",
     "hebbian.batchSize=0.5": "hebbian.batchSize: Invalid input: expected int, received number",
@@ -2565,9 +2563,6 @@
     "maintenance.recallProbeSample=2": "ok",
     "maintenance.recallProbeSample=NaN": "maintenance.recallProbeSample: Invalid input: expected number, received NaN",
     "maintenance.recallProbeSample=\"text\"": "maintenance.recallProbeSample: Invalid input: expected number, received string",
-    "generation.recallProvider=\"\"": "generation.recallProvider: Invalid option: expected one of \"anthropic\"|\"openai\"",
-    "generation.recallProvider=42": "generation.recallProvider: Invalid option: expected one of \"anthropic\"|\"openai\"",
-    "generation.recallProvider=null": "generation.recallProvider: Invalid option: expected one of \"anthropic\"|\"openai\"",
     "recall.sessionDedup=\"true\"": "recall.sessionDedup: Invalid input: expected boolean, received string",
     "recall.sessionDedup=1": "recall.sessionDedup: Invalid input: expected boolean, received number",
     "recall.tokenBudget=-1": "recall.tokenBudget: Too small: expected number to be >0",
@@ -2602,9 +2597,6 @@
     "redaction.entropyThreshold=2": "ok",
     "redaction.entropyThreshold=NaN": "redaction.entropyThreshold: Invalid input: expected number, received NaN",
     "redaction.entropyThreshold=\"text\"": "redaction.entropyThreshold: Invalid input: expected number, received string",
-    "generation.reflectProvider=\"\"": "generation.reflectProvider: Invalid option: expected one of \"anthropic\"|\"openai\"",
-    "generation.reflectProvider=42": "generation.reflectProvider: Invalid option: expected one of \"anthropic\"|\"openai\"",
-    "generation.reflectProvider=null": "generation.reflectProvider: Invalid option: expected one of \"anthropic\"|\"openai\"",
     "reflection.associationSimilarLimit=-1": "reflection.associationSimilarLimit: Too small: expected number to be >0",
     "reflection.associationSimilarLimit=0": "reflection.associationSimilarLimit: Too small: expected number to be >0",
     "reflection.associationSimilarLimit=0.5": "reflection.associationSimilarLimit: Invalid input: expected int, received number",
@@ -2924,6 +2916,6 @@
     "reserved var list": "AION_BUILD_SHA, AION_CAMPAIGN_INCIDENT_DIR, AION_GIT_USER_NAME, AION_HOOKS_INSTALLED, AION_REPO_HEAD_SHA, AION_REPO_PATH",
     "schema accepts DEFAULTS": "ok",
     "schema rejects an empty object": "rejected",
-    "default key order": "install: profile | neo4j: uri,password | ollama: url,embedKeepAlive | models: embed,embedDimension | anthropic: apiKey,model,promptCache,thinkingBudgetTokens,dailyCeilingUsd | generation: recallProvider,reflectProvider | openai: apiKey,model,reasoningEffort | recall: mode,maxHops,vectorLimit,maxFacts,maxEpisodes,maxNarratives,maxPreferences,maxResonant,maxIntentions,useContextResonance,intentionTriggers,intentionSituationFloor,sessionDedup,ownSessionFilter,associationStrength,adjacencyTopK,compressionThreshold,cueBudgetMs,cueCacheTtlMinutes,tokenBudget,vectorAdmissionFloor,corroborationFloor,bm25AdmissionMode,entityMatchThreshold,clusterCap,clusterCosineThreshold,packDuplicateSuppression,entityGlossCap,restatementFloor,decisionBoost,relatedClaimFloor,typedAdmission,typedAdmissionActivationFloor,pathStrengthSlots | search: methods,reranker,rrfConstant,mmrLambda,weights | activation: maxIterations,decayFactor,minActivation,maxNodesVisited,hubThreshold | hebbian: weightFloor,learningRate,decayRate,decayPeakDays,decaySigma,batchSize,flushCeiling,drainIntervalMs,decayScanFraction | contextResonance: seedLimit,seedBudgetBase,seedBudgetGrowth,activationLimit,resonantLimit,contextSearchThreshold | reflection: stageTimeoutMs,maxEntities,minExtractionChars,entityDedupThreshold,entityNominationJaccardFloor,entityMergeMode,associationSemanticThreshold,associationSimilarLimit,maxCognitiveNodes,maxRelationships,supersedeMode,keyedCloseMode,supersedeAutoConfidence,supersedeNeighborThreshold,supersedeFamilyRelatednessFloor,maxSupersessionSubjects,maxContradictionNeighbors,maxContradictionJudgments,narrativeIdleMinutes,maxNarrativeEpisodes,maxNarrativeEpisodeChars,keyedNarrativeEpisodes,keyedNarrativeSentences,keyedNarrativeEpisodeChars,narrativeSweepLimit,maxSynthesisConclusions,synthesisNeighbourThreshold,maxSynthesisNeighbours,maxPreferenceSignals,maxStandingPreferences | lanes: arrivalWindowMs,sessionArrivalMax,globalArrivalMax,hotSessionArrivalMax | redaction: entropyThreshold | maintenance: tier3,tier3Mode,tier3AcceptanceFloor,tier3InsightCount,autoMerge,tickMinutes,starvationCycles,urgencyThreshold,effectivenessFloor,costReferenceMs,costDecades,maxCostDivisor,vectorBackfillBatchSize,contextRefreshBatchSize,reconcileBatchSize,replayBatchSize,deadLetterBatchSize,redactionPurgeBatchSize,narrativeCleanupBatch,narrativeEdgeRepairBatch,retroSupersessionBatch,descriptionFreshness,descriptionRefreshBatch,descriptionRefreshMentionGrowth,backboneRepairBatch,orphanCleanupBatch,orphanForgetAfterDays,communityNodeLimit,communityMinNodes,bridgeMinCommunitySize,bridgeOverlapCeiling,bridgeMemberSample,bridgeMinCompatibility,proposalHygiene,hygienePollutedAgeHours,hygieneResidueAgeDays,hygieneJudgeBatch,proposalResolution,resolutionBatch,reinforcementFlush,memoryDecay,edgePrune,edgePruneUnreinforcedDays,edgePruneBatch,identifierDecay,identifierDecayBatch,identifierHalfLifeDays,identifierMentionFloor,claimDedup,claimDedupBatch,claimDedupCosineFloor,mergeDecisionReconcileBatch,chunkRenderedInputAllowance,chunkMaxSpanMs,narrativeSealBatch,episodeEvictMinAgeMs,episodeEvictBatch,narrativeRollup,narrativeRollupWindows,claimConsolidation,structuralDiscovery,structuralDiscoveryDegreeCeiling,structuralDiscoverySeedBatch,structuralDiscoveryBatch,intentionUpkeep,intentionUpkeepBatch,curiosity,curiosityBatch,recallProbe,recallProbeSample | temporal: readingHorizonDays,intentionHorizonDays,expiryAnnotation | sqlite: path,reinforcementQueueCap | operational: dataDir,mcpPort,workerCount,workerStaleClaimTimeoutMs,workerRetryBaseMs,workerRetryCapMs,workerMaxAttempts,workerBreakerThreshold,workerBreakerCooldownMs,workerVectorBatchSize,reconcileWarnThreshold,lagOldestUnclaimedWarnMs,lagQueueDepthWarnThreshold,sessionIdleExpiryMinutes | logging: filePath,level,retentionDays"
+    "default key order": "install: profile | neo4j: uri,password | ollama: url,embedKeepAlive | models: embed,embedDimension | anthropic: apiKey,model,promptCache,thinkingBudgetTokens,dailyCeilingUsd | generation: provider | openai: apiKey,model,reasoningEffort | recall: mode,maxHops,vectorLimit,maxFacts,maxEpisodes,maxNarratives,maxPreferences,maxResonant,maxIntentions,useContextResonance,intentionTriggers,intentionSituationFloor,sessionDedup,ownSessionFilter,associationStrength,adjacencyTopK,compressionThreshold,cueBudgetMs,cueCacheTtlMinutes,tokenBudget,vectorAdmissionFloor,corroborationFloor,bm25AdmissionMode,entityMatchThreshold,clusterCap,clusterCosineThreshold,packDuplicateSuppression,entityGlossCap,restatementFloor,decisionBoost,relatedClaimFloor,typedAdmission,typedAdmissionActivationFloor,pathStrengthSlots | search: methods,reranker,rrfConstant,mmrLambda,weights | activation: maxIterations,decayFactor,minActivation,maxNodesVisited,hubThreshold | hebbian: weightFloor,learningRate,decayRate,decayPeakDays,decaySigma,batchSize,flushCeiling,drainIntervalMs,decayScanFraction | contextResonance: seedLimit,seedBudgetBase,seedBudgetGrowth,activationLimit,resonantLimit,contextSearchThreshold | reflection: stageTimeoutMs,maxEntities,minExtractionChars,entityDedupThreshold,entityNominationJaccardFloor,entityMergeMode,associationSemanticThreshold,associationSimilarLimit,maxCognitiveNodes,maxRelationships,supersedeMode,keyedCloseMode,supersedeAutoConfidence,supersedeNeighborThreshold,supersedeFamilyRelatednessFloor,maxSupersessionSubjects,maxContradictionNeighbors,maxContradictionJudgments,narrativeIdleMinutes,maxNarrativeEpisodes,maxNarrativeEpisodeChars,keyedNarrativeEpisodes,keyedNarrativeSentences,keyedNarrativeEpisodeChars,narrativeSweepLimit,maxSynthesisConclusions,synthesisNeighbourThreshold,maxSynthesisNeighbours,maxPreferenceSignals,maxStandingPreferences | lanes: arrivalWindowMs,sessionArrivalMax,globalArrivalMax,hotSessionArrivalMax | redaction: entropyThreshold | maintenance: tier3,tier3Mode,tier3AcceptanceFloor,tier3InsightCount,autoMerge,tickMinutes,starvationCycles,urgencyThreshold,effectivenessFloor,costReferenceMs,costDecades,maxCostDivisor,vectorBackfillBatchSize,contextRefreshBatchSize,reconcileBatchSize,replayBatchSize,deadLetterBatchSize,redactionPurgeBatchSize,narrativeCleanupBatch,narrativeEdgeRepairBatch,retroSupersessionBatch,descriptionFreshness,descriptionRefreshBatch,descriptionRefreshMentionGrowth,backboneRepairBatch,orphanCleanupBatch,orphanForgetAfterDays,communityNodeLimit,communityMinNodes,bridgeMinCommunitySize,bridgeOverlapCeiling,bridgeMemberSample,bridgeMinCompatibility,proposalHygiene,hygienePollutedAgeHours,hygieneResidueAgeDays,hygieneJudgeBatch,proposalResolution,resolutionBatch,reinforcementFlush,memoryDecay,edgePrune,edgePruneUnreinforcedDays,edgePruneBatch,identifierDecay,identifierDecayBatch,identifierHalfLifeDays,identifierMentionFloor,claimDedup,claimDedupBatch,claimDedupCosineFloor,mergeDecisionReconcileBatch,chunkRenderedInputAllowance,chunkMaxSpanMs,narrativeSealBatch,episodeEvictMinAgeMs,episodeEvictBatch,narrativeRollup,narrativeRollupWindows,claimConsolidation,structuralDiscovery,structuralDiscoveryDegreeCeiling,structuralDiscoverySeedBatch,structuralDiscoveryBatch,intentionUpkeep,intentionUpkeepBatch,curiosity,curiosityBatch,recallProbe,recallProbeSample | temporal: readingHorizonDays,intentionHorizonDays,expiryAnnotation | sqlite: path,reinforcementQueueCap | operational: dataDir,mcpPort,workerCount,workerStaleClaimTimeoutMs,workerRetryBaseMs,workerRetryCapMs,workerMaxAttempts,workerBreakerThreshold,workerBreakerCooldownMs,workerVectorBatchSize,reconcileWarnThreshold,lagOldestUnclaimedWarnMs,lagQueueDepthWarnThreshold,sessionIdleExpiryMinutes | logging: filePath,level,retentionDays"
   }
 }

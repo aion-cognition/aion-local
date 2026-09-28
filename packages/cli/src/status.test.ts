@@ -164,22 +164,23 @@ describe('renderStatus', () => {
       `routing  cue=anthropic:${DEFAULTS.anthropic.model} reflect=anthropic:${DEFAULTS.anthropic.model}`,
     );
     expect(text).toContain(`resident   ${DEFAULTS.models.embed}`);
-    expect(text).toContain(`remote   anthropic (${DEFAULTS.anthropic.model})`);
+    expect(text).toContain(
+      `generation leaves this machine for anthropic (${DEFAULTS.anthropic.model})`,
+    );
   });
 
-  it('names the model each role actually runs on when a role is routed to OpenAI', () => {
+  it('names the model generation runs on when OpenAI is the selected provider', () => {
     const { lines, write } = collector();
-    const split: Config = {
+    const openai: Config = {
       ...DEFAULTS,
-      anthropic: { ...DEFAULTS.anthropic, apiKey: 'sk-ant-test' },
       openai: { ...DEFAULTS.openai, apiKey: 'sk-test-openai' },
-      generation: { recallProvider: 'openai', reflectProvider: 'anthropic' },
+      generation: { provider: 'openai' },
     };
 
-    renderStatus(healthy, split, write);
+    renderStatus(healthy, openai, write);
 
     const text = lines.join('\n');
-    expect(text).toContain(`generation=${DEFAULTS.openai.model}, ${DEFAULTS.anthropic.model}`);
+    expect(text).toContain(`generation=${DEFAULTS.openai.model}`);
     expect(text).toContain(`routing  cue=openai:${DEFAULTS.openai.model}`);
     expect(text).not.toContain('sk-test-openai');
   });
@@ -203,7 +204,10 @@ describe('renderStatus', () => {
 
     const text = lines.join('\n');
     expect(text).toContain(`routing  cue=anthropic:${DEFAULTS.anthropic.model}`);
-    expect(text).toContain(`remote   anthropic (${DEFAULTS.anthropic.model}): recall`);
+    expect(text).toContain(
+      `generation leaves this machine for anthropic (${DEFAULTS.anthropic.model})`,
+    );
+    expect(text).toContain('recall (candidate assessment');
     expect(text).toContain('reflection extraction and session narratives');
     expect(text).toContain('embeddings and every graph read stay local');
     // The key itself is never rendered.
@@ -218,7 +222,7 @@ describe('renderStatus', () => {
     const text = lines.join('\n');
     expect(text).toContain('routing  cue=queued(anthropic) reflect=queued(anthropic)');
     expect(text).toContain('needs AION_ANTHROPIC_API_KEY');
-    expect(text).toContain('queues until its key is set');
+    expect(text).toContain('until the key is set');
   });
 
   it('reports the edge-weight distribution per type, and n=0 for a type with no live edge', () => {

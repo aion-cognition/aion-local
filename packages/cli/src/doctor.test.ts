@@ -97,8 +97,7 @@ describe('the Ollama round-trip check', () => {
 
     expect(result.ok).toBe(true);
     expect(result.detail).toContain(
-      'generation queued (AION_RECALL_PROVIDER=anthropic needs AION_ANTHROPIC_API_KEY; ' +
-        'AION_REFLECT_PROVIDER=anthropic needs AION_ANTHROPIC_API_KEY)',
+      'generation queued (AION_GENERATION_PROVIDER=anthropic needs AION_ANTHROPIC_API_KEY)',
     );
     expect(paths).not.toContain('/api/chat');
   });

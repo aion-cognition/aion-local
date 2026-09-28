@@ -8,16 +8,13 @@ import type { Config } from '../config/schema.js';
 
 const SCHEMA = { type: 'object' };
 
-function config(key = '', openai: { key?: string; roles?: 'reflect' | 'both' } = {}): Config {
+function config(key = '', openai: { key?: string; selected?: boolean } = {}): Config {
   return {
     ...DEFAULTS,
     ollama: { ...DEFAULTS.ollama, url: 'http://ollama.test:11434' },
     anthropic: { ...DEFAULTS.anthropic, apiKey: key },
     openai: { ...DEFAULTS.openai, apiKey: openai.key ?? '' },
-    generation: {
-      recallProvider: openai.roles === 'both' ? 'openai' : 'anthropic',
-      reflectProvider: openai.roles === undefined ? 'anthropic' : 'openai',
-    },
+    generation: { provider: openai.selected === true ? 'openai' : 'anthropic' },
   };
 }
 
@@ -117,20 +114,20 @@ describe('what each role generates against', () => {
     expect(err.message).toContain('AION_ANTHROPIC_API_KEY');
   });
 
-  it('sends each role to the provider its knob names, one role on each', async () => {
+  it('sends both roles to OpenAI at the OpenAI model when that provider is selected', async () => {
     const { calls, impl } = recordingFetch();
     const router = new ProviderRouter({
-      config: config('sk-ant-test', { key: 'sk-test', roles: 'reflect' }),
+      config: config('', { key: 'sk-test', selected: true }),
       fetchImpl: impl,
     });
 
     const cue = await router.forRole('cue').generate(request('whatever the caller named'));
     const reflect = await router.forRole('reflect').generate(request('whatever the caller named'));
 
-    expect(cue).toEqual({ from: 'anthropic' });
+    expect(cue).toEqual({ from: 'openai' });
     expect(reflect).toEqual({ from: 'openai' });
     expect(calls.map((call) => [call.url, call.body.model])).toEqual([
-      ['https://api.anthropic.com/v1/messages', DEFAULTS.anthropic.model],
+      ['https://api.openai.com/v1/responses', DEFAULTS.openai.model],
       ['https://api.openai.com/v1/responses', DEFAULTS.openai.model],
     ]);
     expect(router.forRole('reflect').route).toEqual({
@@ -139,10 +136,10 @@ describe('what each role generates against', () => {
     });
   });
 
-  it('refuses an OpenAI-routed role with no OpenAI key, naming that key, and never reaches Anthropic', async () => {
+  it('refuses the OpenAI selection with no OpenAI key, naming that key, and never reaches Anthropic', async () => {
     const { calls, impl } = recordingFetch();
     const router = new ProviderRouter({
-      config: config('sk-ant-test', { roles: 'both' }),
+      config: config('sk-ant-test', { selected: true }),
       fetchImpl: impl,
     });
 
@@ -152,7 +149,7 @@ describe('what each role generates against', () => {
       .catch((error: unknown) => error)) as Error;
 
     expect(err).toBeInstanceOf(GenerationUnavailableError);
-    expect(err.message).toContain('AION_RECALL_PROVIDER=openai needs AION_OPENAI_API_KEY');
+    expect(err.message).toContain('AION_GENERATION_PROVIDER=openai needs AION_OPENAI_API_KEY');
     expect(calls).toEqual([]);
   });
 
@@ -248,7 +245,7 @@ describe('the telemetry a caller reads the route from', () => {
     const { impl } = recordingFetch();
     const events: GenerationEvent[] = [];
     const router = new ProviderRouter({
-      config: config('', { key: 'sk-test', roles: 'both' }),
+      config: config('', { key: 'sk-test', selected: true }),
       fetchImpl: impl,
       onGeneration: (event) => events.push(event),
     });

@@ -11,7 +11,7 @@ import { applyEnvDefaults } from '../env-file.js';
  *
  * Each remote route's key and model, and no more. The throwaway Neo4j containers carry
  * credentials of their own, and a setting sitting in the file would change a run without saying
- * so: which route a battery measures (`AION_REFLECT_PROVIDER`) is exported by the person running
+ * so: which provider a battery measures (`AION_GENERATION_PROVIDER`) is exported by the person running
  * it, never read from here. An exported value wins over the file.
  */
 const REPO_ROOT = fileURLToPath(new URL('../../../../../../', import.meta.url));

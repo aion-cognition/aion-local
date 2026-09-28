@@ -262,7 +262,7 @@ describe('what the nomination writes down', () => {
   it('keeps its own Anthropic batch lane when synchronous reflection is routed to OpenAI', async () => {
     const outcome = await descriptionFreshnessOperation().run({
       ...contextFor(unusedProvider(), new AbortController().signal),
-      config: { ...CONFIG, generation: { ...CONFIG.generation, reflectProvider: 'openai' } },
+      config: { ...CONFIG, generation: { ...CONFIG.generation, provider: 'openai' } },
     });
 
     expect(outcome.itemsAffected).toBe(1);

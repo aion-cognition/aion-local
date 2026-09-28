@@ -290,7 +290,7 @@ Integration tests that drive enrichment call `testGenerationProvider(options)`
 (`infrastructure/providers/test-support/generation-provider.ts`) instead of constructing a
 provider directly. With `AION_ANTHROPIC_API_KEY` set, generation runs on Anthropic
 (`claude-haiku-4-5`, override with `AION_ANTHROPIC_MODEL`) and returns in a second or two. With
-`AION_REFLECT_PROVIDER=openai` exported and `AION_OPENAI_API_KEY` set it runs on OpenAI
+`AION_GENERATION_PROVIDER=openai` exported and `AION_OPENAI_API_KEY` set it runs on OpenAI
 (`gpt-6-luna`, override with `AION_OPENAI_MODEL`) instead, which is how a comparison is run; the
 route is only ever chosen by that export.
 Embedding always stays on Ollama, since the substrate has one embedding space. With no key the

@@ -7,23 +7,18 @@ import { GENERATION_PROVIDERS } from '../providers/types.js';
 const provider = z.enum(GENERATION_PROVIDERS);
 
 /**
- * Which remote API each generation role runs on, and the OpenAI route's own settings. Split out of
- * `knobs.ts` the way `maintenance` is, since that file sits near the line cap.
+ * Which remote API the substrate's hosted generation runs on, and the OpenAI route's own settings.
+ * Split out of `knobs.ts` the way `maintenance` is, since that file sits near the line cap.
  *
- * The choice is explicit per role and nothing chooses for the operator: a role whose provider has
- * no key is unavailable, and its work queues or its recall falls back to the existing ranking and
- * says so. It is never quietly sent to the other provider, because a comparison between the two
- * would then be measuring whichever one happened to have a key.
+ * One choice for the whole installation: recall assessment, reflection, model-assisted
+ * introspection and batched description refresh all run on the selected provider, and only that
+ * vendor's key is needed. A selected provider with no key is unavailable, and its work queues or
+ * its recall falls back to the existing ranking and says so. It is never quietly sent to the other
+ * provider. Absent, the selector reads as Anthropic, which is every installation made before it
+ * existed.
  */
 export const GENERATION_KNOBS = {
-  // The recall role: the one generation on the hot path, which assesses what retrieval found (or,
-  // in the `cues` recall mode, extracts search cues).
-  recallProvider: ['AION_RECALL_PROVIDER', provider, 'anthropic'],
-  // Every synchronous background generation: reflection stages and judgments, narratives, and
-  // introspection's model calls. Batched description refresh is a separate, retained lane: it
-  // stays on the Anthropic Message Batches route, with the Anthropic key and model, whatever this
-  // names, and `aion status` says so when the two differ.
-  reflectProvider: ['AION_REFLECT_PROVIDER', provider, 'anthropic'],
+  provider: ['AION_GENERATION_PROVIDER', provider, 'anthropic'],
 } as const;
 
 export const OPENAI_KNOBS = {

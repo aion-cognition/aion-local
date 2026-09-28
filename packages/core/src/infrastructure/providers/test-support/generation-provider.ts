@@ -90,7 +90,7 @@ export class OpenAiTestProvider implements Provider {
 
 /** Whether a run routes background generation to OpenAI: only when the shell says so. */
 export function testRoutesToOpenAi(): boolean {
-  return process.env.AION_REFLECT_PROVIDER === 'openai';
+  return process.env.AION_GENERATION_PROVIDER === 'openai';
 }
 
 /** The key the selected test route needs, read at call time and stored nowhere else. */
@@ -117,10 +117,7 @@ export function testGenerationConfig(
         ? {}
         : { model: process.env.AION_OPENAI_MODEL }),
     },
-    generation: {
-      ...base.generation,
-      reflectProvider: testRoutesToOpenAi() ? 'openai' : 'anthropic',
-    },
+    generation: { ...base.generation, provider: testRoutesToOpenAi() ? 'openai' : 'anthropic' },
   };
 }
 
@@ -165,7 +162,7 @@ export type TestGenerationProviderOptions = OllamaProviderOptions & {
 /**
  * The provider an integration test drives enrichment through. With `AION_ANTHROPIC_API_KEY` in
  * the environment the generations run on Haiku and come back in a second or two; with
- * `AION_REFLECT_PROVIDER=openai` exported and `AION_OPENAI_API_KEY` set they run on the OpenAI
+ * `AION_GENERATION_PROVIDER=openai` exported and `AION_OPENAI_API_KEY` set they run on the OpenAI
  * model instead, which is how a battery compares the two. With no key for the selected route,
  * generation refuses the same way the service refuses, because no other route stands in: an
  * enrichment file on a keyless machine has to skip rather than measure something else.

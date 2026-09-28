@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path';
  * the substrate is local-first, the key is optional spend, and local reflection measured 18.5s a
  * call. Hooks are route-agnostic now.
  *
- * A capture feeds reflection, so the answer is about the provider `AION_REFLECT_PROVIDER` names
+ * A capture feeds reflection, so the answer is about the provider `AION_GENERATION_PROVIDER` names
  * and the key that provider reads. With no key there, reflection has nowhere to run and its work
  * queues, which `aion status` and `aion doctor` both report; `local` is that answer. Either way
  * this never refuses a fire: what a fire still fails open on is the service not answering, which
@@ -25,7 +25,7 @@ const KEY_ENV_VARS = {
   anthropic: 'AION_ANTHROPIC_API_KEY',
   openai: 'AION_OPENAI_API_KEY',
 } as const;
-const REFLECT_PROVIDER_ENV_VAR = 'AION_REFLECT_PROVIDER';
+const PROVIDER_ENV_VAR = 'AION_GENERATION_PROVIDER';
 
 const ENV_FILE_NAME = '.env';
 
@@ -89,8 +89,8 @@ export function generationRoute(
   // What a capture feeds is reflection, so the answer is about the key its provider reads: a key
   // for the other provider leaves reflection with nowhere to run.
   const named =
-    env[REFLECT_PROVIDER_ENV_VAR] ??
-    (envFile === undefined ? undefined : envFileValue(envFile, REFLECT_PROVIDER_ENV_VAR));
+    env[PROVIDER_ENV_VAR] ??
+    (envFile === undefined ? undefined : envFileValue(envFile, PROVIDER_ENV_VAR));
   const keyVar = KEY_ENV_VARS[named?.trim() === 'openai' ? 'openai' : 'anthropic'];
   if ((env[keyVar] ?? '').trim() !== '') {
     return 'keyed';

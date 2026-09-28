@@ -17,23 +17,21 @@ const EMBED_MODEL = DEFAULTS.models.embed;
 
 function config(
   keys: { anthropic?: string; openai?: string } = {},
-  providers: { recall?: GenerationProvider; reflect?: GenerationProvider } = {},
+  provider?: GenerationProvider,
 ): Config {
   return {
     ...DEFAULTS,
     anthropic: { ...DEFAULTS.anthropic, apiKey: keys.anthropic ?? '' },
     openai: { ...DEFAULTS.openai, apiKey: keys.openai ?? '' },
-    generation: {
-      recallProvider: providers.recall ?? DEFAULTS.generation.recallProvider,
-      reflectProvider: providers.reflect ?? DEFAULTS.generation.reflectProvider,
-    },
+    generation: { provider: provider ?? DEFAULTS.generation.provider },
   };
 }
 
 describe('the routing rule', () => {
-  it('routes every generation role to the Anthropic model by default when its key is set', () => {
+  it('runs every role on Anthropic when nothing selects a provider, as installs always have', () => {
     const routing = resolveProviderRouting(config({ anthropic: 'sk-ant-test' }));
 
+    expect(routing.provider).toBe('anthropic');
     expect(routing.keyPresent).toBe(true);
     for (const role of GENERATION_ROLES) {
       expect(routing.roles[role]).toEqual({
@@ -45,125 +43,86 @@ describe('the routing rule', () => {
     }
   });
 
-  it('routes each role to the provider its own knob names, at that provider model', () => {
-    const routing = resolveProviderRouting(
-      config({ anthropic: 'sk-ant-test', openai: 'sk-test' }, { reflect: 'openai' }),
-    );
+  it('runs every role on OpenAI at the OpenAI model when that is the selection', () => {
+    const routing = resolveProviderRouting(config({ openai: 'sk-test' }, 'openai'));
 
-    expect(routing.roles.cue).toMatchObject({ provider: 'anthropic', model: HAIKU });
-    expect(routing.roles.reflect).toMatchObject({
-      provider: 'openai',
-      model: LUNA,
-      available: true,
-    });
-  });
-
-  it('never moves a role to the provider that has a key when its own has none', () => {
-    const routing = resolveProviderRouting(
-      config({ anthropic: 'sk-ant-test' }, { recall: 'openai' }),
-    );
-
-    expect(routing.roles.cue).toMatchObject({ provider: 'openai', available: false });
-    expect(routing.roles.reflect).toMatchObject({ provider: 'anthropic', available: true });
-    expect(routing.keyPresent).toBe(false);
-  });
-
-  it('makes every role unavailable with no key rather than routing it somewhere else', () => {
-    const routing = resolveProviderRouting(config());
-
-    expect(routing.keyPresent).toBe(false);
     for (const role of GENERATION_ROLES) {
-      expect(routing.roles[role].available).toBe(false);
-      expect(routing.roles[role].model).toBe(HAIKU);
+      expect(routing.roles[role]).toMatchObject({
+        provider: 'openai',
+        model: LUNA,
+        available: true,
+      });
     }
+  });
+
+  it('needs only the selected provider key, and never moves to the provider that has one', () => {
+    expect(resolveProviderRouting(config({ openai: 'sk-test' }, 'openai')).keyPresent).toBe(true);
+
+    const routing = resolveProviderRouting(config({ anthropic: 'sk-ant-test' }, 'openai'));
+    expect(routing.keyPresent).toBe(false);
+    expect(routing.roles.cue).toMatchObject({ provider: 'openai', available: false });
   });
 
   it('reads a key that is only whitespace as no key', () => {
     expect(resolveProviderRouting(config({ anthropic: '  \n' })).keyPresent).toBe(false);
-    expect(
-      resolveProviderRouting(config({ openai: ' \n' }, { recall: 'openai', reflect: 'openai' }))
-        .keyPresent,
-    ).toBe(false);
+    expect(resolveProviderRouting(config({ openai: ' \n' }, 'openai')).keyPresent).toBe(false);
   });
 
   it('leaves the embedding model out of the routing question', () => {
-    expect(resolveProviderRouting(config({ openai: 'sk-test' })).embedModel).toBe(EMBED_MODEL);
+    expect(resolveProviderRouting(config({ openai: 'sk-test' }, 'openai')).embedModel).toBe(
+      EMBED_MODEL,
+    );
     expect(resolveProviderRouting(config()).embedModel).toBe(EMBED_MODEL);
   });
 });
 
 describe('what a person reads about the route', () => {
   it('summarizes each role as provider and model', () => {
-    expect(
-      routingSummary(
-        resolveProviderRouting(
-          config({ anthropic: 'sk-ant-test', openai: 'sk-test' }, { reflect: 'openai' }),
-        ),
-      ),
-    ).toBe(`cue=anthropic:${HAIKU} reflect=openai:${LUNA}`);
-  });
-
-  it('summarizes a role with no key as queued on its provider rather than as a model it never calls', () => {
-    expect(routingSummary(resolveProviderRouting(config({}, { reflect: 'openai' })))).toBe(
-      'cue=queued(anthropic) reflect=queued(openai)',
+    expect(routingSummary(resolveProviderRouting(config({ openai: 'sk-test' }, 'openai')))).toBe(
+      `cue=openai:${LUNA} reflect=openai:${LUNA}`,
     );
   });
 
-  it('names the call classes that leave the machine, and for which API', () => {
-    const banner = remoteBannerLines(
-      resolveProviderRouting(
-        config({ anthropic: 'sk-ant-test', openai: 'sk-test' }, { recall: 'openai' }),
-      ),
-    ).join('\n');
-
-    expect(banner).toContain(`openai (${LUNA}): recall`);
-    expect(banner).toContain(`anthropic (${HAIKU}): reflection extraction and session narratives`);
-    expect(banner).toContain('embeddings and every graph read stay local');
+  it('summarizes a provider with no key as queued rather than as a model it never calls', () => {
+    expect(routingSummary(resolveProviderRouting(config({}, 'openai')))).toBe(
+      'cue=queued(openai) reflect=queued(openai)',
+    );
   });
 
-  it('says which key each unrouted role waits for and what still works', () => {
+  it('names the one API every hosted call class goes to, batched refresh included', () => {
     const banner = remoteBannerLines(
-      resolveProviderRouting(config({}, { reflect: 'openai' })),
+      resolveProviderRouting(config({ openai: 'sk-test' }, 'openai')),
     ).join('\n');
 
-    expect(banner).toContain('AION_RECALL_PROVIDER=anthropic needs AION_ANTHROPIC_API_KEY');
-    expect(banner).toContain('AION_REFLECT_PROVIDER=openai needs AION_OPENAI_API_KEY');
+    expect(banner).toContain(`generation leaves this machine for openai (${LUNA})`);
+    expect(banner).toContain('recall (candidate assessment');
+    expect(banner).toContain('reflection extraction and session narratives');
+    expect(banner).toContain('batched description refresh');
+    expect(banner).toContain('embeddings and every graph read stay local');
+    expect(banner).not.toContain('anthropic');
+  });
+
+  it('says which key the selection waits for and what still works', () => {
+    const banner = remoteBannerLines(resolveProviderRouting(config({}, 'openai'))).join('\n');
+
+    expect(banner).toContain('AION_GENERATION_PROVIDER=openai needs AION_OPENAI_API_KEY');
     expect(banner).toContain('capture, embeddings and every graph read still work');
     expect(banner).toContain('recall serves the existing ranking');
   });
 
-  it('warns at boot about a role with no key and a role naming an unpriced model', () => {
-    const base = config({ anthropic: 'sk-ant-test', openai: 'sk-test' }, { recall: 'openai' });
-    const unpriced = { ...base, openai: { ...base.openai, model: 'gpt-nobody-priced' } };
+  it('warns at boot about a missing selected key or an unpriced model, and nothing else', () => {
+    const unpriced = config({ openai: 'sk-test' }, 'openai');
 
-    expect(routingWarnings(resolveProviderRouting(config({ anthropic: 'sk-ant-test' })))).toEqual(
-      [],
-    );
-    expect(routingWarnings(resolveProviderRouting(unpriced))).toEqual([
-      expect.stringContaining('openai:gpt-nobody-priced, which has no price on record'),
-    ]);
-    expect(routingWarnings(resolveProviderRouting(config({}, { reflect: 'openai' })))).toEqual([
-      expect.stringContaining('AION_RECALL_PROVIDER=anthropic needs AION_ANTHROPIC_API_KEY'),
-      expect.stringContaining('AION_REFLECT_PROVIDER=openai needs AION_OPENAI_API_KEY'),
-    ]);
-  });
-
-  it('says description refresh stays on its Anthropic batch lane when reflection is on OpenAI', () => {
-    const mixed = remoteBannerLines(
-      resolveProviderRouting(
-        config({ anthropic: 'sk-ant-test', openai: 'sk-test' }, { reflect: 'openai' }),
+    expect(
+      routingWarnings(resolveProviderRouting(config({ openai: 'sk-test' }, 'openai'))),
+    ).toEqual([]);
+    expect(
+      routingWarnings(
+        resolveProviderRouting({ ...unpriced, openai: { ...unpriced.openai, model: 'gpt-x' } }),
       ),
-    ).join('\n');
-    const noAnthropic = resolveProviderRouting(
-      config({ openai: 'sk-test' }, { recall: 'openai', reflect: 'openai' }),
-    );
-
-    expect(mixed).toContain('description refresh stays on the Anthropic batch route');
-    expect(remoteBannerLines(noAnthropic).join('\n')).toContain(
-      'cannot run without AION_ANTHROPIC_API_KEY',
-    );
-    expect(routingWarnings(noAnthropic)).toEqual([
-      expect.stringContaining('description refresh runs on the Anthropic batch route'),
+    ).toEqual([expect.stringContaining('openai:gpt-x, which has no price on record')]);
+    expect(routingWarnings(resolveProviderRouting(config({}, 'openai')))).toEqual([
+      expect.stringContaining('AION_GENERATION_PROVIDER=openai needs AION_OPENAI_API_KEY'),
     ]);
   });
 });
