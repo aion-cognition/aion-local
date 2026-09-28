@@ -55,8 +55,9 @@ export function retroJudgmentSweepOperation(): IntrospectionOperation {
       const toJudge = unswept.slice(0, batch);
 
       // The one option the sweep sets for itself: it judges a backlog no session is waiting on,
-      // so its verdicts go to review rather than straight to the graph. The rest comes from the
-      // pipeline's builder, since a second copy of the list drifts the moment a knob joins it.
+      // so its verdicts go to the proposal queue `proposal_resolution` decides, rather than
+      // straight to the graph. The rest comes from the pipeline's builder, since a second copy of
+      // the list drifts the moment a knob joins it.
       const stage = new SupersessionStage({ ...supersessionOptions(ctx.config), mode: 'propose' });
 
       let judged = 0;

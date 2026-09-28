@@ -144,10 +144,10 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     burst_id TEXT
   )`,
   /**
-   * Every affirmative contradiction judgment from reflection's supersession stage. `aion why`
-   * surfaces the open rows and a person applies them, and the stage applies them itself under
-   * `AION_SUPERSEDE_MODE=unanimous`. `UNIQUE (old_id, new_id)` is what makes a re-judged pair
-   * one row rather than a growing pile.
+   * Every affirmative contradiction judgment from reflection's supersession stage. The stage
+   * applies them itself under `AION_SUPERSEDE_MODE=unanimous`, `proposal_resolution` decides the
+   * open rows, and `aion why` surfaces them. `UNIQUE (old_id, new_id)` is what makes a re-judged
+   * pair one row rather than a growing pile.
    */
   `CREATE TABLE IF NOT EXISTS supersession_proposals (
     id TEXT PRIMARY KEY,
@@ -191,10 +191,10 @@ const SCHEMA_STATEMENTS: readonly string[] = [
     PRIMARY KEY (session_id, item_id)
   )`,
   /**
-   * The cascade's residue: pairs the two judge passes split on, which is the one case left for
-   * a person. Its own table rather than a `kind` column on `supersession_proposals` because the
-   * columns do not overlap: no contradiction judgment, no model confidence, and a pair of names
-   * and types the reviewer has to see to decide. The pair is stored id-sorted, so discovery
+   * The cascade's residue: pairs the two judge passes split on, which `proposal_resolution`
+   * decides again. Its own table rather than a `kind` column on `supersession_proposals` because
+   * the columns do not overlap: no contradiction judgment, no model confidence, and a pair of
+   * names and types whoever decides has to see. The pair is stored id-sorted, so discovery
    * from either side is one row.
    *
    * `similarity` needs `similarity_source` beside it to mean anything. A vector nomination

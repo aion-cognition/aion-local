@@ -198,7 +198,10 @@ export function dueRemainderGroups(
 
 export type BlockedSourceTally = {
   readonly reason: string;
-  /** Sources inside the blocked chunks, which is the population a person has to unblock. */
+  /**
+   * Sources inside the blocked chunks. `narrative_seal` clears a block whose recorded prerequisite
+   * has moved; the rest stay counted here as evidence still missing.
+   */
   readonly sources: number;
   readonly oldestAt: string;
 };

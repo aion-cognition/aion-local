@@ -326,19 +326,22 @@ export function buildDoctorChecks(deps: DoctorDeps): readonly Check[] {
     },
     {
       /**
-       * Propose-only supersession means every judgment is a row waiting on a person. An open
-       * review queue nobody can see is the same failure from the other side: the table had
-       * never held a row, and the answer to that cannot be a table nothing counts.
-       * Informational, since a proposal is work to do, not a broken invariant.
+       * Open proposals are work `proposal_resolution` decides on its own. The count is here so a
+       * backlog it has not reached, or one left standing with the operation turned off, is
+       * visible rather than a table nothing counts. Informational, since a proposal is work to
+       * do, not a broken invariant.
        */
-      name: 'review-queue',
+      name: 'proposal-queue',
       run: () => {
         const snapshot = queueLagSnapshot(db, config.operational.workerMaxAttempts);
         const open = snapshot.supersessionProposalsOpen + snapshot.entityMergeProposalsOpen;
+        const decider = config.maintenance.proposalResolution
+          ? 'proposal_resolution decides them'
+          : 'proposal_resolution is off';
         const detail =
           `${String(snapshot.supersessionProposalsOpen)} supersession, ` +
           `${String(snapshot.entityMergeProposalsOpen)} entity-merge proposals open${
-            open === 0 ? '' : '... aion proposals ls'
+            open === 0 ? '' : `, ${decider}... aion proposals ls`
           }`;
         return Promise.resolve({ ok: true, detail });
       },

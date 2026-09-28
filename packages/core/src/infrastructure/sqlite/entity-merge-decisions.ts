@@ -16,8 +16,9 @@ import type { SqliteHandle } from './database.js';
  */
 
 /**
- * Who decided. Tier 0 is deterministic name-form equality, tier 3 the two-pass judge, and
- * `human` a person applying a row from the review queue. Tiers 1 and 2 are absent because
+ * Who decided. Tier 0 is deterministic name-form equality, tier 3 the two-pass judge (in the
+ * dedup stage or in `proposal_resolution`), and `human` a person who chose to apply a proposal
+ * through `aion proposals` before the loop decided it. Tiers 1 and 2 are absent because
  * neither decides anything: tier 1 nominates pairs and tier 2 assembles the facts tier 3 reads,
  * so a value for either would name a tier that never fires. A deterministic tier-2 rule would
  * add its own value when it exists.

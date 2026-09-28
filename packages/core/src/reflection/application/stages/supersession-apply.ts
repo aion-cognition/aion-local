@@ -81,8 +81,8 @@ export type JudgedPair = {
  * How a judgment ended, told apart by graph state rather than by which write ran.
  *
  * Three of these are what a count or an agreement rate may be built from: `closed` is a
- * judgment that acted on a live target, `vetoed` and `proposed` are judgments downgraded to
- * review, and `stale` is neither. A stale judgment was made and then had nothing left to take,
+ * judgment that acted on a live target, `vetoed` and `proposed` are judgments filed for
+ * `proposal_resolution` to decide, and `stale` is neither. A stale judgment was made and then had nothing left to take,
  * because a family close earlier in the same run or a person reviewing a neighbouring proposal
  * had already taken the losing side. It is counted apart and scored by nothing: reading it as
  * a closure inflates what the judge did, and reading it as a veto invents a disagreement
@@ -262,8 +262,8 @@ async function applyUnanimous(
   tally.recordUnanimous();
   const gone = await goneSides(ctx, pair);
   if (gone.length > 0) {
-    // Nothing to close and nothing to review: the row is resolved so it does not sit in the
-    // queue asking a person to apply a correction that has already happened.
+    // Nothing to close and nothing to decide: the row is resolved so it does not sit in the
+    // queue as a correction that has already happened.
     const id = record(ctx, pair, `${second}, and the target was already gone: ${gone.join(', ')}`);
     resolveSupersessionProposal(ctx.db, id, ctx.now.toISOString());
     tally.recordStaleTarget();

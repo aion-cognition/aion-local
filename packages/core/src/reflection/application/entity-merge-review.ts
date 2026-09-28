@@ -9,6 +9,10 @@ import {
   type DedupEntityDetail,
 } from '../../infrastructure/graph/entity-dedup-queries.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import type {
+  EntityMergeJudgeVerdicts,
+  EntityMergeTier,
+} from '../../infrastructure/sqlite/entity-merge-decisions.js';
 import {
   getEntityMergeProposal,
   resolveEntityMergeProposal,
@@ -17,24 +21,51 @@ import {
 import { selectCanonical } from '../domain/entity-merge.js';
 
 /**
- * The review half of entity-merge detection. Identity on the graph is keyed on `name_norm`
+ * The decision half of entity-merge detection. Identity on the graph is keyed on `name_norm`
  * alone, so a pair the dedup stage declined is two different names: joining them means deciding
- * they are one referent, a judgment about the world rather than about strings. That decision is
- * a person's, which is why this operator path is the only place these rows are applied.
+ * they are one referent, a judgment about the world rather than about strings. This is the one
+ * path these rows are applied by.
  *
- * Nothing in the pipeline calls any of this. It is reached from `aion proposals` and nowhere
- * else, matching the supersession review path next to it.
+ * Two callers reach it, and the record says which one decided. `proposal_resolution` decides
+ * open rows on its own, on wider evidence than the dedup stage saw. `aion proposals` lets a
+ * person decide one first, which is optional and never something an open row waits for.
  */
 
 /** Provenance on the merge lineage edge: a person applied this, not the dedup stage. */
 export const ENTITY_MERGE_APPLY_METHOD = 'merge_proposal_apply';
 
+/**
+ * Provenance for a merge the maintenance loop decided from the open queue. Neither a person nor
+ * the dedup stage decided it, and lineage, `aion why` and `aion unmerge` read this string.
+ */
+export const ENTITY_MERGE_RESOLUTION_METHOD = 'merge_proposal_introspector_resolution';
+
 /** The graph, the ledger and the log the writer needs; the same three every tier hands it. */
 export type EntityMergeReviewDeps = EntityMergeWriterDeps;
+
+/** Who decided the merge, as its decision record and its lineage edge state it. */
+export type EntityMergeAttribution = {
+  readonly tier: EntityMergeTier;
+  readonly reasons: readonly string[];
+  readonly method: string;
+  /** The two passes that decided it, where a judge did. */
+  readonly judge?: EntityMergeJudgeVerdicts;
+};
+
+/**
+ * How `proposal_resolution` stamps a merge it decided: its own two passes, at tier 3, so neither
+ * the record nor the lineage ever reads as though a person applied it.
+ */
+export const MERGE_RESOLUTION: Pick<EntityMergeAttribution, 'tier' | 'method'> = {
+  tier: 'tier3',
+  method: ENTITY_MERGE_RESOLUTION_METHOD,
+};
 
 export type ApplyEntityMergeProposalInput = {
   readonly id: string;
   readonly now?: Date;
+  /** Absent means a person decided, which is what `aion proposals apply` means. */
+  readonly attribution?: EntityMergeAttribution;
 };
 
 export type EntityMergeAlreadyResolved = {
@@ -118,15 +149,21 @@ function currentDetail(detail: DedupEntityDetail | undefined): DedupEntityDetail
 /** What a decision record says the reasons were when the reason is that a person said so. */
 const HUMAN_APPLY_REASON = 'applied from the review queue by a person';
 
+const HUMAN_APPLY: EntityMergeAttribution = {
+  tier: 'human',
+  reasons: [HUMAN_APPLY_REASON],
+  method: ENTITY_MERGE_APPLY_METHOD,
+};
+
 /**
- * Applies one merge proposal a person has reviewed. It takes the same writer every tier of the
+ * Applies one merge proposal someone decided on. It takes the same writer every tier of the
  * cascade takes (`entity-merge-writer.ts`), because a merge is a merge regardless of who decided
  * it: the graph write, the decision record and the ledger mark are the same three steps in the
- * same order, and only the tier and the lineage provenance tell the two apart.
+ * same order, and only the tier and the lineage provenance tell them apart.
  *
- * The record matters most on this path. It is the one merge a person made, so it is the one a
- * reversal most wants to cite, and an apply that wrote no record left `aion unmerge` with a
- * restored node and nothing to say about why it was ever absorbed.
+ * The record matters most on this path. A merge decided from the queue is the one a reversal
+ * most wants to cite, and an apply that wrote no record left `aion unmerge` with a restored node
+ * and nothing to say about why it was ever absorbed.
  */
 export async function applyEntityMergeProposal(
   deps: EntityMergeReviewDeps,
@@ -159,10 +196,8 @@ export async function applyEntityMergeProposal(
   const result = await applyEntityMerge(deps, {
     canonical,
     members: pair,
-    tier: 'human',
-    reasons: [HUMAN_APPLY_REASON],
+    ...(input.attribution ?? HUMAN_APPLY),
     signals,
-    method: ENTITY_MERGE_APPLY_METHOD,
     now,
   });
 

@@ -22,11 +22,11 @@ import {
 } from '../../infrastructure/sqlite/supersession-proposals.js';
 
 /**
- * Where a judged contradiction is applied. `aion proposals apply` is the human end of it, and
- * the confidence the judge attaches is worth nothing on its own, so a person decides every row
- * the pipeline does not close itself. Without this the proposal table is write-only and a
- * correction can never change what recall answers, which is the user-visible failure the whole
- * posture was meant to fix rather than entrench.
+ * Where a judged contradiction is applied. The confidence the judge attaches is worth nothing on
+ * its own, so every row the pipeline does not close itself is decided again on wider evidence
+ * by `proposal_resolution`, and `aion proposals apply` lets a person decide one first. Without
+ * this the proposal table is write-only and a correction can never change what recall answers,
+ * which is the user-visible failure the whole posture was meant to fix rather than entrench.
  *
  * The supersession stage reaches the same call under `AION_SUPERSEDE_MODE=unanimous`, which is
  * what `attribution` exists for: one apply path, two provenances, so lineage says which closes

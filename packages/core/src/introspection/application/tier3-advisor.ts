@@ -147,7 +147,8 @@ function describeSnapshot(health: HealthSnapshot): string {
       `${String(health.graph.decayableEdges)} decayable edges`,
     `queue: depth ${String(health.queue.depth)}, ${String(health.queue.exhausted)} exhausted, ` +
       `oldest unclaimed ${optional(health.queue.oldestUnclaimedMs)} ms, ` +
-      `${String(health.queue.deadLetterAttentionCount)} needing a person`,
+      `${String(health.queue.deadLetterAttentionCount)} failed again after a retry ` +
+      '(retried once their conditions change)',
     `enrichment: ${String(health.enrichment.episodes)} episodes, ` +
       `${String(health.enrichment.unenriched)} unenriched, ` +
       `${String(health.enrichment.queued)} queued${floor}`,

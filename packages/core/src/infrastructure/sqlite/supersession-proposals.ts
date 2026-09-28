@@ -18,9 +18,10 @@ import {
  * resolves its row on the way out. A veto leaves the row open carrying the veto, so
  * `aion proposals ls` shows both what the judge wanted and what stopped it.
  *
- * An open row is a queue a person acts on with `aion proposals apply`. The supersession stage
- * reaches that same apply path itself under `AION_SUPERSEDE_MODE=unanimous` and stamps
- * `supersession_unanimous_auto`, so lineage separates an autonomous close from a reviewed one.
+ * An open row is work `proposal_resolution` decides on its own; `aion proposals apply` lets a
+ * person decide one first. The supersession stage reaches that same apply path itself under
+ * `AION_SUPERSEDE_MODE=unanimous` and stamps `supersession_unanimous_auto`, so lineage says which
+ * of the three decided each close.
  */
 
 export type SupersessionProposal = {
@@ -33,7 +34,7 @@ export type SupersessionProposal = {
   rationale: string | null;
   episodeId: string;
   createdAt: string;
-  /** Null while the proposal is still open; a timestamp once a person has dealt with it. */
+  /** Null while the proposal is still open; a timestamp once it has been decided. */
   resolvedAt: string | null;
   /**
    * How many lifecycle transitions this row has been through, advanced by the writer that makes
@@ -89,7 +90,7 @@ const PROPOSALS: ProposalTableSpec<SupersessionProposalRow, SupersessionProposal
  * Idempotent on the pair: a second judgment of the same (old, new) refreshes the confidence,
  * rationale, and episode rather than adding a row, so the orchestrator's re-run after a crash
  * before the ledger mark leaves the queue exactly as long as it was. `created_at` and
- * `resolved_at` survive the refresh: a proposal a person already resolved stays resolved.
+ * `resolved_at` survive the refresh: a proposal already resolved stays resolved.
  */
 export function recordSupersessionProposal(
   db: SqliteHandle,

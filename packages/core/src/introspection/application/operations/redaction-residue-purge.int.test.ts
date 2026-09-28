@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
   REDACTION_RESIDUE_MIN_RELEVANCE,
@@ -56,6 +56,10 @@ afterAll(async () => {
   await stopNeo4jHarness(harness);
   db.close();
   rmSync(dataDir, { recursive: true, force: true });
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 function ctxFor(overrides: Partial<OperationContext> = {}): OperationContext {
@@ -168,7 +172,8 @@ describe('redaction_residue_purge', () => {
     expect(text).not.toMatch(/⟨secret:[a-z0-9-]*⟨/);
   }, 60_000);
 
-  it('skips a flagged node the property rewriter could not fix, so it stops taking a batch slot', async () => {
+  it('skips a flagged node the property rewriter could not fix, until a later build looks again', async () => {
+    vi.stubEnv('AION_BUILD_SHA', 'build-a');
     await writeStampedNode(harness.driver, {
       label: 'Episode',
       id: 'leak-node-unfixable',
@@ -180,6 +185,8 @@ describe('redaction_residue_purge', () => {
     // batch, instead of sitting at the head of it on every run forever.
     markLedgerApplied(db, redactionUnresolvedKey('leak-node-unfixable'), {
       reason: 'flagged by the node scan, with no single property this rewriter can redact',
+      build: 'build-a',
+      entropyThreshold: config.redaction.entropyThreshold,
     });
 
     const result = await redactionResiduePurgeOperation().run(ctxFor());
@@ -190,6 +197,15 @@ describe('redaction_residue_purge', () => {
     expect(result.detail).toContain('1 flagged');
     const props = await nodeProperties(harness.driver, 'leak-node-unfixable');
     expect(String(props.text)).toContain(LEAKED_KEY);
+
+    // A later build can change what the rewriter does, so it examines the node once more on its
+    // own. This one turns out to be fixable one property at a time.
+    vi.stubEnv('AION_BUILD_SHA', 'build-b');
+    const later = await redactionResiduePurgeOperation().run(ctxFor());
+
+    expect(later.itemsAffected).toBe(1);
+    const rewritten = await nodeProperties(harness.driver, 'leak-node-unfixable');
+    expect(String(rewritten.text)).not.toContain(LEAKED_KEY);
   }, 60_000);
 
   it('bounds one run to redactionPurgeBatchSize nodes', async () => {
