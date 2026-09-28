@@ -107,6 +107,37 @@ function instructionsOf(req: StructuredRequest, frameOverride: FrameOverride | u
     .join('\n\n');
 }
 
+/**
+ * The Responses body one structured request is sent as, synchronously or as one line of a batch,
+ * so a surface that batches its work asks the model exactly what the synchronous route would.
+ */
+export function responsesRequestBody(
+  req: StructuredRequest,
+  options: {
+    readonly reasoningEffort?: OpenAiReasoningEffort;
+    readonly frameOverride?: FrameOverride;
+    /** JSON mode, which constrains the answer's shape; the retry for an answer that won't parse. */
+    readonly constrained?: boolean;
+  } = {},
+): Record<string, unknown> {
+  const { rest } = splitSystem(req.messages);
+  const instructions = instructionsOf(req, options.frameOverride);
+  const effort = req.think === true ? (options.reasoningEffort ?? 'low') : 'none';
+  return {
+    model: req.model,
+    ...(instructions.length === 0 ? {} : { instructions }),
+    input: rest.map((message) => ({ role: message.role, content: message.content })),
+    // Reasoning is counted inside this ceiling, the way thinking is inside `max_tokens`.
+    max_output_tokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
+    reasoning: { effort },
+    // Accepted only at effort `none`; the reasoning efforts refuse it outright.
+    ...(effort !== 'none' || req.temperature === undefined ? {} : { temperature: req.temperature }),
+    ...(options.constrained === true ? { text: { format: { type: 'json_object' } } } : {}),
+    // Nothing here needs a stored response, and the input is memory content.
+    store: false,
+  };
+}
+
 /** The answer text, or the error that says why there is none. */
 function answerText(body: ResponseBody): string {
   const content = (body?.output ?? [])
@@ -136,6 +167,17 @@ function answerText(body: ResponseBody): string {
 }
 
 /**
+ * The JSON value one Responses answer carries, read the same way on both lanes. A refusal, a
+ * cut-off answer and text no parse can read throw, each as the error the synchronous route raises.
+ */
+export function readResponsesAnswer(body: unknown): unknown {
+  return parseJsonPayload(
+    answerText(body as ResponseBody),
+    (detail) => new OpenAiResponseError(detail),
+  );
+}
+
+/**
  * One call, one delivery mode, parsed. The hold, the dispatch bookkeeping and the settlement are
  * the Anthropic route's (`askAnthropic`) rule for rule, since both routes answer to one day's
  * ceiling: held before the request leaves, released if it never did, settled at the real charge
@@ -149,24 +191,20 @@ async function askOpenAi(
   const now = options.now ?? Date.now;
   const started = now();
   const fetchImpl = options.fetchImpl ?? fetch;
-  const { rest } = splitSystem(req.messages);
-  const instructions = instructionsOf(req, options.frameOverride);
   const maxTokens = req.maxTokens ?? options.maxTokens ?? DEFAULT_MAX_TOKENS;
-  const effort = req.think === true ? (options.reasoningEffort ?? 'low') : 'none';
 
-  const requestBody = JSON.stringify({
-    model: req.model,
-    ...(instructions.length === 0 ? {} : { instructions }),
-    input: rest.map((message) => ({ role: message.role, content: message.content })),
-    // Reasoning is counted inside this ceiling, the way thinking is inside `max_tokens`.
-    max_output_tokens: maxTokens,
-    reasoning: { effort },
-    // Accepted only at effort `none`; the reasoning efforts refuse it outright.
-    ...(effort !== 'none' || req.temperature === undefined ? {} : { temperature: req.temperature }),
-    ...(constrained ? { text: { format: { type: 'json_object' } } } : {}),
-    // Nothing here needs a stored response, and the input is memory content.
-    store: false,
-  });
+  const requestBody = JSON.stringify(
+    responsesRequestBody(
+      { ...req, maxTokens },
+      {
+        constrained,
+        ...(options.reasoningEffort === undefined
+          ? {}
+          : { reasoningEffort: options.reasoningEffort }),
+        ...(options.frameOverride === undefined ? {} : { frameOverride: options.frameOverride }),
+      },
+    ),
+  );
 
   const surface = req.surface ?? 'unlabeled';
   const held = options.spending?.hold({
@@ -237,7 +275,7 @@ async function askOpenAi(
       call.usageError === undefined ? estimateApiCost(call, { singleRequest: true }) : undefined,
       new Date(now()),
     );
-    return parseJsonPayload(answerText(body), (detail) => new OpenAiResponseError(detail));
+    return readResponsesAnswer(body);
   } finally {
     if (!reconciled) {
       if (dispatched) {
