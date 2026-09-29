@@ -314,8 +314,9 @@ The key needs no export. The `integration` and `integration-ollama` projects run
 sets whichever of them the shell left unset or blank. Setup files run before any test module
 loads, so a battery reading the key at module scope sees the loaded value. An exported value wins
 over the file. Those are the only ones loaded, so a pin sitting in `.env` cannot reroute a run.
-`npm run quality:extraction` loads `AION_ANTHROPIC_API_KEY` and `AION_ANTHROPIC_MODEL` from the
-working directory and measures the Anthropic route only.
+`npm run quality:extraction` reads the service's `AION_*` settings from the working directory's
+`.env` (an exported value wins) and measures the selected provider's reflection route. With no
+key for that provider, the report records the route as skipped.
 
 Opt-in live checks use `TEST_AION_*` switches, outside the product's `AION_*` namespace, so an
 exported switch never trips the loader's unknown-variable check. Each spends money and none runs
