@@ -19,13 +19,37 @@ if [ ! -f "$COMPOSE_FILE" ]; then
   exit 1
 fi
 
+# Match the config reader's literal KEY=value format; .env is data, not shell code.
 if [ -f "$REPO_DIR/.env" ]; then
-  PRESET="$(export -p)"
-  set -a
-  # shellcheck disable=SC1091
-  . "$REPO_DIR/.env"
-  set +a
-  eval "$PRESET"
+  CLI_INHERITED_ENV=" $(compgen -e | tr '\n' ' ') "
+  while IFS= read -r CLI_ENV_LINE || [ -n "$CLI_ENV_LINE" ]; do
+    CLI_ENV_LINE="${CLI_ENV_LINE#"${CLI_ENV_LINE%%[![:space:]]*}"}"
+    case "$CLI_ENV_LINE" in
+      ''|'#'*) continue ;;
+      *=*) ;;
+      *) continue ;;
+    esac
+    CLI_ENV_KEY="${CLI_ENV_LINE%%=*}"
+    CLI_ENV_KEY="${CLI_ENV_KEY%"${CLI_ENV_KEY##*[![:space:]]}"}"
+    case "$CLI_ENV_KEY" in
+      ''|[0-9]*|*[!a-zA-Z0-9_]*) continue ;;
+    esac
+    case "$CLI_ENV_KEY" in
+      AION_*|COMPOSE_PROJECT_NAME) ;;
+      *) continue ;;
+    esac
+    case "$CLI_INHERITED_ENV" in
+      *" $CLI_ENV_KEY "*) continue ;;
+    esac
+    CLI_ENV_VALUE="${CLI_ENV_LINE#*=}"
+    CLI_ENV_VALUE="${CLI_ENV_VALUE#"${CLI_ENV_VALUE%%[![:space:]]*}"}"
+    CLI_ENV_VALUE="${CLI_ENV_VALUE%"${CLI_ENV_VALUE##*[![:space:]]}"}"
+    case "$CLI_ENV_VALUE" in
+      \"*\"|\'*\') CLI_ENV_VALUE="${CLI_ENV_VALUE:1:${#CLI_ENV_VALUE}-2}" ;;
+    esac
+    export "$CLI_ENV_KEY=$CLI_ENV_VALUE"
+  done < "$REPO_DIR/.env"
+  unset CLI_ENV_LINE CLI_ENV_KEY CLI_ENV_VALUE CLI_INHERITED_ENV
 fi
 
 COMMAND="${1:-help}"
