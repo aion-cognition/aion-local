@@ -13,10 +13,7 @@ import {
   type HorizonIntegrity,
   type SqliteHandle,
 } from '@aion/core';
-import { runningInContainer } from '@aion/mcp';
 import type { Driver } from 'neo4j-driver';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 
 import type { CheckResult } from './doctor.js';
 import {
@@ -31,8 +28,6 @@ import {
  * orders them and prints the report. `doctor.ts` composes; each function here owns one
  * invariant and the sentence it reports it in.
  */
-
-const execFileAsync = promisify(execFile);
 
 /** Which substrate this install runs on. Informational, and the first thing a report needs. */
 export function installProfileCheck(config: Config): CheckResult {
@@ -106,83 +101,22 @@ export async function storePairingCheck(
   return storePairingDetail(await readStorePairing(driver, db), config);
 }
 
-/**
- * The two daemon-level settings the local generation route was measured with. Neither is an
- * Ollama config setting: they are environment variables of the `ollama serve` process, so the
- * HTTP API cannot report them and a restart or an upgrade of the daemon silently drops them —
- * which is the whole reason this check exists rather than a note in a runbook.
- */
-export const OLLAMA_TUNING_VARS = ['OLLAMA_FLASH_ATTENTION', 'OLLAMA_KV_CACHE_TYPE'] as const;
-
-/** What an operator runs where this process cannot see the daemon's process table. */
-export const OLLAMA_ENV_PROBE = 'ps eww $(pgrep -f "ollama serve")';
-
-function daemonSetting(daemonEnv: string, name: string): string | undefined {
-  const token = daemonEnv
-    .split(/\s+/)
-    .find((entry) => entry.startsWith(`${name}=`) && entry.length > name.length + 1);
-  return token?.slice(name.length + 1);
-}
-
 export type OllamaRuntime = {
   readonly version: string;
-  /** The daemon's process environment as one blob, or undefined where it cannot be read. */
-  readonly daemonEnv: string | undefined;
 };
 
-export function ollamaRuntimeCheck(runtime: OllamaRuntime): CheckResult {
-  const version = `ollama ${runtime.version}`;
-  if (runtime.daemonEnv === undefined) {
-    return {
-      ok: true,
-      detail: `${version}; ${OLLAMA_TUNING_VARS.join(' and ')} are process environment and are not visible from here: ${OLLAMA_ENV_PROBE}`,
-    };
-  }
-  const readings = OLLAMA_TUNING_VARS.map((name) => ({
-    name,
-    value: daemonSetting(runtime.daemonEnv ?? '', name),
-  }));
-  const missing = readings.filter((reading) => reading.value === undefined);
-  const set = readings
-    .filter((reading) => reading.value !== undefined)
-    .map((reading) => `${reading.name}=${reading.value ?? ''}`);
-  if (missing.length === 0) {
-    return { ok: true, detail: `${version}, ${set.join(' ')}` };
-  }
-  return {
-    ok: true,
-    warn: true,
-    detail:
-      `${version}; ${missing.map((reading) => reading.name).join(', ')} unset on the running ` +
-      `daemon (an upgrade or a service restart drops them)${set.length === 0 ? '' : `, ${set.join(' ')}`}`,
-  };
-}
-
 /**
- * Reads the daemon's environment from the process table, which is the only place it is written
- * down. A CLI run inside the container is asking about a process on another machine as far as
- * the kernel is concerned, so it does not ask.
+ * The daemon's version. The check used to warn when two daemon flags were unset, but those were
+ * the settings the local generation route was measured with, and Ollama now serves only the
+ * embedder, so nothing measured says they matter.
  */
-export async function readOllamaDaemonEnv(): Promise<string | undefined> {
-  if (runningInContainer()) {
-    return undefined;
-  }
-  try {
-    const { stdout } = await execFileAsync('/bin/sh', ['-c', OLLAMA_ENV_PROBE]);
-    return stdout.trim() === '' ? undefined : stdout;
-  } catch {
-    // No pgrep, no daemon of its own on this host, or a process table this user cannot read.
-    return undefined;
-  }
+export function ollamaRuntimeCheck(runtime: OllamaRuntime): CheckResult {
+  return { ok: true, detail: `ollama ${runtime.version}` };
 }
 
 /** The same verdict over a live daemon, which is how `aion doctor` reaches it. */
 export async function ollamaRuntimeProbe(baseUrl: string): Promise<CheckResult> {
-  const [version, daemonEnv] = await Promise.all([
-    readOllamaVersion(baseUrl),
-    readOllamaDaemonEnv(),
-  ]);
-  return ollamaRuntimeCheck({ version, daemonEnv });
+  return ollamaRuntimeCheck({ version: await readOllamaVersion(baseUrl) });
 }
 
 /**

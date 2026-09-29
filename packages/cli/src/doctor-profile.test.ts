@@ -5,7 +5,6 @@ import { describe, expect, it } from 'vitest';
 import {
   graphPairingCheck,
   installProfileCheck,
-  OLLAMA_ENV_PROBE,
   ollamaRuntimeCheck,
   storePairingDetail,
 } from './doctor-checks.js';
@@ -137,44 +136,9 @@ describe('the store-pairing check', () => {
 });
 
 describe('the ollama runtime check', () => {
-  it('reports the version and both tuning flags when the daemon carries them', () => {
-    const result = ollamaRuntimeCheck({
-      version: '0.33.2',
-      daemonEnv: 'PATH=/usr/bin OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q8_0 HOME=/x',
-    });
+  it("reports the daemon's version and nothing about generation tuning", () => {
+    const result = ollamaRuntimeCheck({ version: '0.33.2' });
 
-    expect(result).toMatchObject({ ok: true });
-    expect(result.warn).toBeUndefined();
-    expect(result.detail).toContain('ollama 0.33.2');
-    expect(result.detail).toContain('OLLAMA_FLASH_ATTENTION=1');
-    expect(result.detail).toContain('OLLAMA_KV_CACHE_TYPE=q8_0');
-  });
-
-  it('warns when an upgrade or a service restart dropped one of them', () => {
-    const result = ollamaRuntimeCheck({
-      version: '0.33.2',
-      daemonEnv: 'PATH=/usr/bin OLLAMA_FLASH_ATTENTION=1',
-    });
-
-    expect(result).toMatchObject({ ok: true, warn: true });
-    expect(result.detail).toContain('OLLAMA_KV_CACHE_TYPE unset');
-    // The one that is still set is reported too: a warning that hides the state is a worse read.
-    expect(result.detail).toContain('OLLAMA_FLASH_ATTENTION=1');
-  });
-
-  it('reads an empty value as unset, which is what an exported-but-blank variable is', () => {
-    expect(
-      ollamaRuntimeCheck({ version: '0.33.2', daemonEnv: 'OLLAMA_FLASH_ATTENTION= X=1' }).warn,
-    ).toBe(true);
-  });
-
-  it('prints the manual command where the process table cannot be read from here', () => {
-    // Inside the container the daemon is on another machine as far as the kernel is concerned,
-    // and the flags are process environment: no endpoint reports them.
-    const result = ollamaRuntimeCheck({ version: '0.24.0', daemonEnv: undefined });
-
-    expect(result).toMatchObject({ ok: true });
-    expect(result.warn).toBeUndefined();
-    expect(result.detail).toContain(OLLAMA_ENV_PROBE);
+    expect(result).toEqual({ ok: true, detail: 'ollama 0.33.2' });
   });
 });

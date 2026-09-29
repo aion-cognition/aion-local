@@ -90,8 +90,8 @@ That one command does all of it, in order:
    which is the drain the compose service had as `stop_grace_period`.
 8. Records what it installed in `install-manifest.json` under the data root, which is what
    `aion uninstall` reads to tell what it put there from what was already there.
-9. Prints the `aion doctor` report, which is where the coverage contract and the Ollama tuning
-   flags are reported.
+9. Prints the `aion doctor` report, which is where the coverage contract and the Ollama version
+   are reported.
 10. Prints the `claude mcp add` line that registers the server, and installs the harness hooks
     at the `full` profile ([harness](harness.md)).
 
