@@ -442,6 +442,120 @@ describe('entity judgment evidence selection', () => {
     expect(budget.spent().decoded_raw_bytes).toBe(decoded);
   });
 
+  it('shows one exchange once when another copy of it was already seated', async () => {
+    for (const id of ['dup-a', 'dup-b']) {
+      capture({ id, minutesAgo: 20, nodes: [LEFT], text: 'Aion Local answered the hook.' });
+    }
+    capture({ id: 'left-own', minutesAgo: 30, nodes: [LEFT], text: 'Aion Local, another day.' });
+    capture({ id: 'right-own', minutesAgo: 30, nodes: [RIGHT], text: 'Aion Cognition docs.' });
+
+    const prompted = assembled(await assemble(pair({ promptingSourceId: 'dup-a' })));
+
+    expect(excerptsOf(prompted.sides[0]).map((excerpt) => excerpt.sourceId)).toEqual([
+      'dup-a',
+      'left-own',
+    ]);
+  });
+
+  it('shows a shared exchange once, and not again as either side of it', async () => {
+    for (const id of ['dup-a', 'dup-b']) {
+      capture({
+        id,
+        minutesAgo: 20,
+        nodes: [LEFT, RIGHT],
+        text: 'Aion Local uses Aion Cognition.',
+      });
+    }
+    capture({ id: 'left-own', minutesAgo: 30, nodes: [LEFT], text: 'Aion Local, another day.' });
+    capture({ id: 'right-own', minutesAgo: 30, nodes: [RIGHT], text: 'Aion Cognition docs.' });
+
+    const result = assembled(await assemble());
+
+    expect(result.shared?.excerpts).toHaveLength(1);
+    expect(excerptsOf(result.sides[0]).map((excerpt) => excerpt.sourceId)).toEqual(['left-own']);
+    expect(excerptsOf(result.sides[1]).map((excerpt) => excerpt.sourceId)).toEqual(['right-own']);
+  });
+
+  it('shows the live copy of content whose other copy was forgotten, rather than abstaining', async () => {
+    // A re-push after a forget: the same payload, the same clock, a new occurrence.
+    for (const id of ['occ-a-live', 'occ-z-forgotten']) {
+      capture({ id, minutesAgo: 20, nodes: [LEFT], text: 'Aion Local answered the hook.' });
+    }
+    commitSourceState(store.db, {
+      sourceId: 'occ-z-forgotten',
+      stateKind: 'forgotten',
+      operationId: 'forget-occ-z',
+      at: NOW,
+    });
+    capture({ id: 'right-own', minutesAgo: 30, nodes: [RIGHT], text: 'Aion Cognition docs.' });
+
+    const result = assembled(await assemble());
+
+    expect(excerptsOf(result.sides[0]).map((excerpt) => excerpt.sourceId)).toEqual(['occ-a-live']);
+    expect(result.sides[0].renderedContext).not.toContain('withheld');
+  });
+
+  it('does not claim a mention for a source whose every part is too large and names no one', async () => {
+    capture({
+      id: 'unnamed-long',
+      minutesAgo: 1,
+      nodes: [LEFT],
+      text: `It was renamed. ${'x'.repeat(40_000)}`,
+    });
+    capture({ id: 'left-own', minutesAgo: 2, nodes: [LEFT], text: 'Aion Local, another day.' });
+    capture({ id: 'right-own', minutesAgo: 1, nodes: [RIGHT], text: 'Aion Cognition docs.' });
+
+    const result = assembled(await assemble());
+
+    expect(excerptsOf(result.sides[0]).map((excerpt) => excerpt.sourceId)).toEqual(['left-own']);
+    expect(result.sides[0].renderedContext).toContain(
+      '1 source with no name found in any part and no part within 32768 bytes to show instead',
+    );
+    expect(result.sides[0].renderedContext).not.toContain('whose mention sits only');
+    expect(result.omitted).toEqual([
+      {
+        address: { kind: 'id', id: 'unnamed-long' },
+        field: 'source_content',
+        reason: 'budget_limit',
+        required: false,
+      },
+    ]);
+  });
+
+  it('drops the last excerpts in reading order to fit what the route may still render', async () => {
+    capture({ id: 'right-own', minutesAgo: 1, nodes: [RIGHT], text: 'Aion Cognition docs.' });
+    for (let index = 0; index < 14; index += 1) {
+      capture({
+        id: `left-${String(index).padStart(2, '0')}`,
+        minutesAgo: 10 + index,
+        nodes: [LEFT],
+        text: `Aion Local note ${String(index)}. ${'The service answered. '.repeat(40)}`,
+      });
+    }
+    // The prompting episode reads first, so every excerpt the fit can drop is one of the left's.
+    const roomy = pair({ promptingSourceId: 'right-own' });
+    const tight = pair({ promptingSourceId: 'right-own', reservedUnits: 131_072 - 6_000 });
+
+    const full = excerptsOf(assembled(await assemble(roomy)).sides[0]);
+    const result = assembled(await assemble(tight));
+
+    expect(full).toHaveLength(12);
+    expect(renderedUnits(result)).toBeLessThanOrEqual(renderableUnits(tight));
+    const shown = excerptsOf(result.sides[0]).map((excerpt) => excerpt.sourceId);
+    const dropped = full.slice(shown.length).map((excerpt) => excerpt.sourceId);
+    expect(shown.length).toBeGreaterThan(0);
+    expect(dropped.length).toBeGreaterThan(0);
+    expect(shown).toEqual(full.slice(0, shown.length).map((excerpt) => excerpt.sourceId));
+    expect(excerptsOf(result.sides[1]).map((excerpt) => excerpt.sourceId)).toEqual(['right-own']);
+    expect(result.sides[0].renderedContext).toContain(
+      `Not shown: ${String(dropped.length)} sources past this pair's read or prompt allowance.`,
+    );
+    const spent = result.omitted.filter((issue) => issue.reason === 'budget_limit');
+    expect(new Set(spent.map((issue) => issue.address))).toEqual(
+      new Set(full.slice(shown.length).map((excerpt) => excerpt.address)),
+    );
+  });
+
   it('shows a redacted capture with its fingerprint whole and never the secret', async () => {
     const redacted = redactPayload({
       turns: [
@@ -524,6 +638,28 @@ describe('entity judgment evidence and what cannot be shown', () => {
       reason: 'unresolved_mapping',
       required: false,
     });
+  });
+
+  it.each([
+    ['no longer claims verification', "verification_status = 'pinned'"],
+    ['names a content digest its archive row does not hold', "verified_content_digest = 'wrong'"],
+  ])('names a source whose record %s, and still assembles', async (_, change) => {
+    store.db.prepare(`UPDATE source_records SET ${change} WHERE source_id = 'left-a'`).run();
+
+    const result = assembled(await assemble());
+
+    expect(excerptsOf(result.sides[0]).map((excerpt) => excerpt.sourceId)).toEqual(['left-b']);
+    expect(result.sides[0].renderedContext).toContain(
+      '1 source that could not be verified against its record',
+    );
+    expect(result.omitted).toEqual([
+      {
+        address: { kind: 'id', id: 'left-a' },
+        field: 'source_content',
+        reason: 'unresolved_mapping',
+        required: false,
+      },
+    ]);
   });
 
   it.each([

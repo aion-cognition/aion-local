@@ -57,9 +57,10 @@ import type { EvidenceIssue } from '../domain/result.js';
  * the acceptance limit on one request's size times the seats a pair has.
  *
  * What cannot be shown is named rather than blocking. A withheld source, an unverifiable one, a
- * part too large to verify within bounds, and an allowance already spent are counted in the
- * judge's input and listed in `omitted`. A side abstains only when every source nominated for it
- * is withheld from disclosure, since then nothing can be said about it at all.
+ * part too large to verify within bounds, a source with no name spelled and no part small enough
+ * to open on, and an allowance already spent are counted in the judge's input and listed in
+ * `omitted`. A side abstains only when every source nominated for it is withheld from
+ * disclosure, since then nothing can be said about it at all.
  */
 
 type ExcerptRead =
@@ -130,8 +131,12 @@ function namesOf(side: JudgmentSideRequest): readonly string[] {
   return side.names === undefined || side.names.length === 0 ? [side.statement] : side.names;
 }
 
+type PartChoice =
+  | { readonly status: 'shown'; readonly parts: readonly LocatedPart[] }
+  | { readonly status: 'omitted'; readonly kind: 'oversized' | 'unmatched' };
+
 /** The parts a source is shown by: where both names meet, else where each is first spelled. */
-function chosenParts(location: PartLocation, sides: readonly EntitySide[]): LocatedPart[] {
+function chosenParts(location: PartLocation, sides: readonly EntitySide[]): PartChoice {
   const onBoth = sides.length !== 1;
   const bothHits =
     location.together === undefined ? [location.first[0], location.first[1]] : [location.together];
@@ -145,14 +150,20 @@ function chosenParts(location: PartLocation, sides: readonly EntitySide[]): Loca
         ) === index,
     );
   if (distinct.length > 0) {
-    return distinct;
+    return { status: 'shown', parts: distinct };
   }
   const oversized = onBoth
     ? location.oversized[0] + location.oversized[1]
     : location.oversized[sides[0] ?? 0];
   // A name spelled only in a part too large to verify is not the same as a name never spelled:
   // showing the opening instead would present an unrelated passage as the mention.
-  return oversized > 0 || location.opening === undefined ? [] : [location.opening];
+  if (oversized > 0) {
+    return { status: 'omitted', kind: 'oversized' };
+  }
+  // No name spelled anywhere and no part small enough to open on says nothing about a mention.
+  return location.opening === undefined
+    ? { status: 'omitted', kind: 'unmatched' }
+    : { status: 'shown', parts: [location.opening] };
 }
 
 /** One pair's reads, sharing the budget, the dependency set and the names both sides go by. */
@@ -234,11 +245,11 @@ class ExcerptReader {
         partIssues: [],
       };
     }
-    const parts = chosenParts(location, nominee.sides);
-    if (parts.length === 0) {
-      return { nominee, read: omitted('oversized', address, 'budget_limit'), partIssues: [] };
+    const choice = chosenParts(location, nominee.sides);
+    if (choice.status === 'omitted') {
+      return { nominee, read: omitted(choice.kind, address, 'budget_limit'), partIssues: [] };
     }
-    const reads = parts.map((part) => this.#readPart(record, archived.id, part, nominee));
+    const reads = choice.parts.map((part) => this.#readPart(record, archived.id, part, nominee));
     const shown = reads.flatMap((read) => (read.status === 'shown' ? read.excerpts : []));
     const failed = reads.flatMap((read) => (read.status === 'omitted' ? [read] : []));
     const [firstFailure] = failed;
@@ -385,7 +396,7 @@ export function assembleEntityEvidence(
   budget: RequestBudget,
 ): JudgmentAssembly {
   const dependencies = new EvidenceDependencies();
-  const nomination = nominateEntitySources(deps, pair, budget, dependencies);
+  const nomination = nominateEntitySources(deps, pair, budget, dependencies, context.mode.knownAt);
   if (nomination.status === 'incomplete') {
     return { status: 'incomplete', reasons: nomination.issues, revision: dependencies.revision() };
   }

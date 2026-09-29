@@ -47,14 +47,19 @@ export type SourceExcerpt = {
 
 /**
  * Why a nominated source is not shown: disclosure withheld, a naming part too large to verify
- * within bounds, a record it could not be verified against, a history the vantage cannot place,
- * or an allowance this pair had already spent.
+ * within bounds, no name spelled in any part and no part small enough to open on instead, a
+ * record it could not be verified against, a history the vantage cannot place, or an allowance
+ * this pair had already spent.
  */
-export type OmissionKind = 'withheld' | 'oversized' | 'unverified' | 'unplaced' | 'spent';
+export type OmissionKind =
+  'withheld' | 'oversized' | 'unmatched' | 'unverified' | 'unplaced' | 'spent';
 
 const OMISSION_WORDING: Readonly<Record<OmissionKind, string>> = {
   withheld: 'withheld from disclosure',
   oversized: `whose mention sits only in parts over ${String(ENTITY_EXCERPT_LIMITS.partBytes)} bytes`,
+  unmatched: `with no name found in any part and no part within ${String(
+    ENTITY_EXCERPT_LIMITS.partBytes,
+  )} bytes to show instead`,
   unverified: 'that could not be verified against its record',
   unplaced: 'whose history could not be established at this vantage',
   spent: "past this pair's read or prompt allowance",

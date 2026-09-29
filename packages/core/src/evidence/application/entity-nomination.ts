@@ -121,11 +121,13 @@ class Seats {
   bounded = false;
   readonly #deps: JudgmentDeps;
   readonly #budget: RequestBudget;
+  readonly #knownAt: Date | undefined;
   readonly #taken = new Set<string>();
 
-  constructor(deps: JudgmentDeps, budget: RequestBudget) {
+  constructor(deps: JudgmentDeps, budget: RequestBudget, knownAt: Date | undefined) {
     this.#deps = deps;
     this.#budget = budget;
+    this.#knownAt = knownAt;
   }
 
   take(nominee: EntityNominee, ownRole: boolean): void {
@@ -147,7 +149,10 @@ class Seats {
     return true;
   }
 
-  /** One node's newest sources in the given roles, leaving out every source already seated. */
+  /**
+   * One node's newest sources in the given roles, leaving out every source already seated and
+   * every other copy of content a seated source can show.
+   */
   newest(input: {
     readonly nodeId: string;
     readonly roles: readonly string[];
@@ -157,7 +162,11 @@ class Seats {
     if (input.limit <= 0 || !this.#charged(input.limit)) {
       return [];
     }
-    return newestIncidentSources(this.#deps.db, { ...input, exclude: [...this.#taken] });
+    return newestIncidentSources(this.#deps.db, {
+      ...input,
+      exclude: [...this.#taken],
+      ...(this.#knownAt === undefined ? {} : { knownAt: this.#knownAt }),
+    });
   }
 
   /**
@@ -193,11 +202,13 @@ class Seats {
   }
 }
 
+/** `knownAt` is the vantage the judgment reads at, which is where disclosure is decided. */
 export function nominateEntitySources(
   deps: JudgmentDeps,
   pair: JudgmentPair,
   budget: RequestBudget,
   dependencies: EvidenceDependencies,
+  knownAt: Date | undefined,
 ): EntityNomination {
   const nodeIds = [pair.sides[0].nodeId, pair.sides[1].nodeId] as const;
   const stateIssues = nodeIds.flatMap((nodeId) => {
@@ -215,7 +226,7 @@ export function nominateEntitySources(
     };
   }
 
-  const seats = new Seats(deps, budget);
+  const seats = new Seats(deps, budget, knownAt);
   if (pair.promptingSourceId !== undefined) {
     seats.prompt(nodeIds, pair.promptingSourceId);
   }

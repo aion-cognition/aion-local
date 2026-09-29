@@ -45,6 +45,7 @@ function worstExcerpt(): SourceExcerpt {
 const EVERY_OMISSION: readonly OmissionKind[] = [
   'withheld',
   'oversized',
+  'unmatched',
   'unverified',
   'unplaced',
   'spent',

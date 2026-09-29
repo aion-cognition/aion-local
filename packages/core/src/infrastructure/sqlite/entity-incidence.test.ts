@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { openSqliteHandle, type SqliteHandle } from './database.js';
 import { incidenceOfSource, newestIncidentSources } from './entity-incidence.js';
-import { commitIncidence, seedSource } from '../../evidence/test-support/evidence.fixture.js';
+import {
+  commitIncidence,
+  commitSourceState,
+  seedSource,
+} from '../../evidence/test-support/evidence.fixture.js';
 
 const NOW = new Date('2026-09-20T12:00:00.000Z');
 const ROLES = ['mention', 'participation'];
@@ -117,6 +121,95 @@ describe('newestIncidentSources', () => {
 
     expect(ids(rows)).toHaveLength(2);
     expect(ids(rows)[0]).toBe('other');
+  });
+
+  it('leaves out another copy of content an earlier read already seated', () => {
+    capture({
+      id: 'copy-a',
+      session: 's-a',
+      minutesAgo: 30,
+      nodes: ['entity'],
+      text: 'same words',
+    });
+    capture({
+      id: 'copy-b',
+      session: 's-b',
+      minutesAgo: 30,
+      nodes: ['entity'],
+      text: 'same words',
+    });
+    capture({ id: 'other', session: 's-c', minutesAgo: 20, nodes: ['entity'] });
+
+    const rows = newestIncidentSources(db, {
+      nodeId: 'entity',
+      roles: ROLES,
+      exclude: ['copy-a'],
+      limit: 10,
+    });
+
+    expect(ids(rows)).toEqual(['other']);
+  });
+
+  it('lets a copy that can be disclosed stand for content whose other copy is withheld', () => {
+    capture({ id: 'occ-a-live', session: 's-a', minutesAgo: 30, nodes: ['entity'], text: 'same' });
+    capture({ id: 'occ-z-gone', session: 's-a', minutesAgo: 30, nodes: ['entity'], text: 'same' });
+    commitSourceState(db, {
+      sourceId: 'occ-z-gone',
+      stateKind: 'forgotten',
+      operationId: 'forget-z',
+      at: NOW,
+    });
+
+    expect(
+      ids(newestIncidentSources(db, { nodeId: 'entity', roles: ROLES, exclude: [], limit: 10 })),
+    ).toEqual(['occ-a-live']);
+    // Before the forget was known, the tie falls back to the source order.
+    expect(
+      ids(
+        newestIncidentSources(db, {
+          nodeId: 'entity',
+          roles: ROLES,
+          exclude: [],
+          limit: 10,
+          knownAt: new Date(NOW.getTime() - 1),
+        }),
+      ),
+    ).toEqual(['occ-z-gone']);
+  });
+
+  it('reads a disclosable copy of a seated source that is withheld, and no withheld one', () => {
+    capture({ id: 'seated', session: 's-a', minutesAgo: 30, nodes: ['entity'], text: 'same' });
+    capture({ id: 'live', session: 's-b', minutesAgo: 30, nodes: ['entity'], text: 'same' });
+    capture({ id: 'also-gone', session: 's-c', minutesAgo: 30, nodes: ['entity'], text: 'same' });
+    for (const sourceId of ['seated', 'also-gone']) {
+      commitSourceState(db, {
+        sourceId,
+        stateKind: 'suppressed',
+        operationId: `suppress-${sourceId}`,
+        at: NOW,
+      });
+    }
+
+    expect(
+      ids(
+        newestIncidentSources(db, {
+          nodeId: 'entity',
+          roles: ROLES,
+          exclude: ['seated'],
+          limit: 10,
+        }),
+      ),
+    ).toEqual(['live']);
+    expect(
+      ids(
+        newestIncidentSources(db, {
+          nodeId: 'entity',
+          roles: ROLES,
+          exclude: ['seated', 'live'],
+          limit: 10,
+        }),
+      ),
+    ).toEqual([]);
   });
 
   it('leaves out the sources already nominated', () => {
