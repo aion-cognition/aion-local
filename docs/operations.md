@@ -188,7 +188,7 @@ requests as ordinary input.
 
 | Control | Default | Effect |
 |---|---|---|
-| `AION_ANTHROPIC_DAILY_CEILING_USD` | `5` | Dollars of generation one UTC day may commit, shared by ordinary Messages calls and batch submissions. Consulted before dispatch, never after. |
+| `AION_DAILY_CEILING_USD` | `5` | Dollars of generation one UTC day may commit, shared by ordinary calls and batch submissions on either provider. Consulted before dispatch, never after. The older name `AION_ANTHROPIC_DAILY_CEILING_USD` still sets it; where both are set the new name wins, and the service logs a warning at start if the two differ. |
 | `AION_ANTHROPIC_PROMPT_CACHE` | `true` | Allows the marker on the shared frame when it reaches the API's 4,096-token floor. Neither rendering does, so no shipped call carries it; the provider decides per call rather than marking unconditionally. `false` switches the marker off whatever the length. |
 | `AION_CUE_CACHE_TTL_MINUTES` | `30` | Reuses successful cue results in this process for identical generation requests. `0` disables it. The cache holds at most 256 entries. |
 
@@ -273,11 +273,26 @@ submitted batch is spend that has not been charged yet.
 
 Its cadence is the introspection engine's, not a timer of its own and not a promise of fifteen
 minutes. The engine wakes every `AION_MAINTENANCE_TICK_MINUTES` (15 by default) and runs **one**
-operation, chosen from the whole catalog by tier, urgency and waiting time. This one carries a
-standing relevance of 0.15 and no gauge in the health snapshot, so it reaches the threshold on
-starvation rather than on demand, and several ticks can pass between its turns. The `quarter-hour`
-bucket is a ceiling on how often it may be selected, not a floor on how often it is. What that
-costs is latency on an answer already hours old, which is the reason this work was batched.
+operation, chosen from the whole catalog by tier, urgency and waiting time. The health snapshot
+carries the lane's census (`batch`): never-sent rows the selected provider can take now, rows held
+back by a missing key or a spent day, never-sent rows encoded for the other provider, jobs a vendor
+still holds, jobs whose provider key is gone, and settled jobs whose files OpenAI would not delete
+(the `batch_release:` rows of the ops ledger). The census calls a day spent once the batch a run
+would send no longer fits under the ceiling, which is the test the submission's hold applies: a
+day that stopped short by less than that batch's bound is spent for the lane. Every figure comes
+from durable state, so a restart does not reset it.
+
+The pump's relevance follows that census. An empty lane scores zero and yields its tick. Work a
+run can move scores at least 0.15 and rises to full relevance as it waits: never-sent work from
+when it was owed, a vendor's job from when it was sent, both at most from the pump's last run, and
+a failed deletion from the run that last tried it, so a check that could not help is not repeated
+on the next tick. A failed deletion is retried with its provider's key even when no row is left
+outstanding, because those files hold memory text until they are gone. Full relevance comes
+after one starvation span of wall time (`AION_MAINTENANCE_STARVATION_CYCLES` ticks), and from
+there the engine's starvation boost gives the pump its turn among everything else that has work.
+Work no run can move scores nothing, so a missing key or a spent day costs neither ticks nor
+calls. A tier-1 condition still preempts it. The `quarter-hour` bucket is a ceiling on how often
+it may be selected, not a floor.
 
 `description_freshness` is the producer. It nominates entity glosses that fell behind their
 mentions, builds each request with the same prompt and result schema the inline call used, and

@@ -63,7 +63,7 @@ export class GenerationCeilingReachedError extends GenerationUnavailableError {
       surface,
       `generation for "${surface}" would pass today's ceiling of $${ceilingUsd.toFixed(2)} ` +
         `(committed $${committedUsd.toFixed(4)}); the work stays queued until the next UTC day ` +
-        `or a higher AION_ANTHROPIC_DAILY_CEILING_USD`,
+        `or a higher AION_DAILY_CEILING_USD`,
     );
     this.name = 'GenerationCeilingReachedError';
   }

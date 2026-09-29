@@ -1,6 +1,13 @@
 import { DEFAULTS } from './defaults.js';
 import { ConfigError, loadConfig } from './load-config.js';
-import { KNOB_REGISTRY, RESERVED_ENV_VARS, RETIRED_ENV_VARS, type Knob } from './registry.js';
+import {
+  aliasFor,
+  ENV_VAR_ALIASES,
+  KNOB_REGISTRY,
+  RESERVED_ENV_VARS,
+  RETIRED_ENV_VARS,
+  type Knob,
+} from './registry.js';
 import { ConfigSchema } from './schema.js';
 
 /**
@@ -82,16 +89,37 @@ function encodeDefault(knob: Knob): string {
   return String(value);
 }
 
+/**
+ * An older spelling gets the same probes as the name it stands for, since it sets the same leaf.
+ */
 function envProbes(): Record<string, string> {
   const captured: Record<string, string> = {};
   for (const knob of sortedKnobs()) {
-    for (const probe of ENV_PROBES[knob.kind] ?? []) {
-      captured[`${knob.envVar}=${probe}`] = verdict(() =>
-        leafValue(loadConfig({ [knob.envVar]: probe }), knob),
-      );
+    const alias = aliasFor(knob.envVar);
+    for (const envVar of alias === undefined ? [knob.envVar] : [knob.envVar, alias]) {
+      for (const probe of ENV_PROBES[knob.kind] ?? []) {
+        captured[`${envVar}=${probe}`] = verdict(() =>
+          leafValue(loadConfig({ [envVar]: probe }), knob),
+        );
+      }
     }
   }
   return captured;
+}
+
+/** Both spellings of every aliased knob set at once, to different values. */
+function aliasPrecedence(): string {
+  return [...ENV_VAR_ALIASES]
+    .map(([alias, current]) => {
+      const knob = KNOB_REGISTRY.find((entry) => entry.envVar === current);
+      if (knob === undefined) {
+        return `${alias}: no knob`;
+      }
+      return `${alias} beside ${current}: ${verdict(() =>
+        leafValue(loadConfig({ [current]: '2', [alias]: '0.5' }), knob),
+      )}`;
+    })
+    .join(' | ');
 }
 
 function schemaProbes(): Record<string, string> {
@@ -161,6 +189,10 @@ function aggregates(): Record<string, string> {
       return JSON.stringify(loadConfig(env)) === JSON.stringify(DEFAULTS);
     }),
     'reserved var list': reserved.join(', '),
+    'alias var list': [...ENV_VAR_ALIASES]
+      .map(([alias, current]) => `${alias} -> ${current}`)
+      .join(', '),
+    'the current name wins over its alias': aliasPrecedence(),
     'schema accepts DEFAULTS': ConfigSchema.safeParse(DEFAULTS).success ? 'ok' : 'rejected',
     'schema rejects an empty object': ConfigSchema.safeParse({}).success ? 'ok' : 'rejected',
     'default key order': Object.entries(DEFAULTS as unknown as MutableConfig)

@@ -109,7 +109,14 @@ export {
   readServedItems,
 } from './sqlite/served-items.js';
 
-export { DEFAULTS, envFileValue, loadConfig, parseEnvFile, ConfigError } from './config/index.js';
+export {
+  DEFAULTS,
+  configNotices,
+  envFileValue,
+  loadConfig,
+  parseEnvFile,
+  ConfigError,
+} from './config/index.js';
 /**
  * Where the substrate's files go, decided before a process opens one. Every entry point calls
  * `prepareSubstrateRoots` ahead of `loadConfig`: the table's path defaults are container paths,

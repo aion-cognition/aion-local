@@ -17,6 +17,7 @@ import {
 import type { GenerationProvider, Provider } from '../../../infrastructure/providers/types.js';
 import { enqueueBatchWork, readBatchWork } from '../../../infrastructure/sqlite/batch-work.js';
 import { SqliteStore, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import { getLedgerEntry, markLedgerApplied } from '../../../infrastructure/sqlite/ops-ledger.js';
 import { beginSubstratePairing } from '../../../infrastructure/sqlite/publication-control.js';
 import type { OperationContext, OperationOutcome } from '../../domain/operation.js';
 import { healthFixture } from '../../domain/test-support/health.fixture.js';
@@ -141,7 +142,8 @@ function run(
     now: NOW,
     signal: new AbortController().signal,
   };
-  return batchSettlementOperation([() => handler()]).run(ctx);
+  // Only the run is exercised here; the scale shapes the relevance alone.
+  return batchSettlementOperation([() => handler()], { fullWaitMs: 0 }).run(ctx);
 }
 
 function anthropicCalls(): RecordedCall[] {
@@ -257,5 +259,33 @@ describe('the selected provider and its key', () => {
       batchId: 'msgbatch_new',
     });
     expect(outcome.detail).not.toContain('OPENAI');
+  });
+});
+
+describe('a settled job whose vendor files an earlier pass could not delete', () => {
+  const RELEASE_KEY = `batch_release:openai:${OPENAI_BATCH_ID}`;
+
+  beforeEach(() => {
+    markLedgerApplied(db, RELEASE_KEY, { batchId: OPENAI_BATCH_ID, released: false });
+  });
+
+  it('retries the deletion with that key though no row is left outstanding', async () => {
+    const outcome = await run('openai', { openai: OPENAI_KEY });
+
+    expect(openAiCalls().filter((call) => call.method === 'DELETE')).toHaveLength(1);
+    expect(getLedgerEntry(db, RELEASE_KEY)?.summary).toMatchObject({ released: true });
+    expect(outcome.status).toBe('applied');
+    expect(outcome.detail).toContain("1 settled jobs' files deleted at the vendor on a retry");
+  });
+
+  it('calls nobody without that key, and says the files stay', async () => {
+    const outcome = await run('openai', {});
+
+    expect(calls).toEqual([]);
+    expect(getLedgerEntry(db, RELEASE_KEY)?.summary).toMatchObject({ released: false });
+    expect(outcome.status).toBe('noop');
+    expect(outcome.detail).toContain(
+      "1 settled jobs' files at openai stay undeleted without AION_OPENAI_API_KEY",
+    );
   });
 });

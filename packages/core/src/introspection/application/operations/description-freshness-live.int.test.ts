@@ -222,7 +222,8 @@ describe.skipIf(!ENABLED)('description refresh on the live batch API', () => {
         true,
       );
 
-      const settlement = batchSettlementOperation([descriptionFreshnessHandler]);
+      // Only the run is exercised here; the scale shapes the relevance alone.
+      const settlement = batchSettlementOperation([descriptionFreshnessHandler], { fullWaitMs: 0 });
       const started = Date.now();
       const first = await settlement.run(contextFor());
       console.log(`LIVE BATCH submit on ${provider}:${model}: ${first.detail}`);

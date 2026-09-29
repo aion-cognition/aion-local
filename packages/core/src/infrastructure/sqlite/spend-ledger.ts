@@ -90,6 +90,14 @@ export function readSpendDay(db: SqliteHandle, now: Date): SpendDayTotals {
   return totalsFor(db, spendDay(now));
 }
 
+/**
+ * The rule a hold is refused on. A reader that only asks whether a dispatch would fit applies this
+ * same rule, so it cannot call a day open that the hold would call spent.
+ */
+export function crossesCeiling(committedUsd: number, maxUsd: number, ceilingUsd: number): boolean {
+  return committedUsd + maxUsd > ceilingUsd;
+}
+
 export type ReserveSpendInput = {
   readonly surface: string;
   readonly route: SpendRoute;
@@ -125,7 +133,7 @@ export function reserveGenerationSpend(
   return db
     .transaction((): ReserveSpendOutcome => {
       const totals = totalsFor(db, day);
-      if (totals.committedUsd + input.maxUsd > input.ceilingUsd) {
+      if (crossesCeiling(totals.committedUsd, input.maxUsd, input.ceilingUsd)) {
         return { ok: false, totals, maxUsd: input.maxUsd };
       }
       const reservationId = randomUUID();

@@ -1,6 +1,8 @@
 import { DEFAULTS } from './defaults.js';
 import type { KnobKind } from './knobs.js';
 import {
+  aliasFor,
+  ENV_VAR_ALIASES,
   envVarForPath,
   knownEnvVars,
   KNOB_REGISTRY,
@@ -88,6 +90,7 @@ function collectUnknownVars(env: NodeJS.ProcessEnv): string[] {
       key.startsWith(AION_PREFIX) &&
       env[key] !== undefined &&
       !known.has(key) &&
+      !ENV_VAR_ALIASES.has(key) &&
       !RESERVED_ENV_VARS.has(key) &&
       !RETIRED_ENV_VARS.has(key)
     ) {
@@ -95,6 +98,54 @@ function collectUnknownVars(env: NodeJS.ProcessEnv): string[] {
     }
   }
   return unknown.sort();
+}
+
+/**
+ * The variable that sets this knob in this environment: its own name where that is set, else the
+ * older spelling that still sets it, else nothing.
+ */
+function supplierOf(env: NodeJS.ProcessEnv, knob: Knob): string | undefined {
+  if (env[knob.envVar] !== undefined) {
+    return knob.envVar;
+  }
+  const alias = aliasFor(knob.envVar);
+  return alias !== undefined && env[alias] !== undefined ? alias : undefined;
+}
+
+/** `5` and `5.0` are one ceiling, so a numeric knob compares by value rather than by spelling. */
+function sameSetting(kind: KnobKind | undefined, left: string, right: string): boolean {
+  if (left.trim() === right.trim()) {
+    return true;
+  }
+  if (kind !== 'number' || left.trim() === '' || right.trim() === '') {
+    return false;
+  }
+  return Number(left) === Number(right);
+}
+
+/**
+ * What an operator should hear about how the environment was read, one line each. Today that is a
+ * knob set under both its current and its older name to different values: the current name wins,
+ * and a `.env` carrying both would otherwise hide which number the service runs on.
+ */
+export function configNotices(env: NodeJS.ProcessEnv): readonly string[] {
+  const notices: string[] = [];
+  for (const [alias, current] of ENV_VAR_ALIASES) {
+    const older = env[alias];
+    const newer = env[current];
+    if (older === undefined || newer === undefined) {
+      continue;
+    }
+    const kind = KNOB_REGISTRY.find((entry) => entry.envVar === current)?.kind;
+    if (sameSetting(kind, older, newer)) {
+      continue;
+    }
+    notices.push(
+      `${current}=${newer} and ${alias}=${older} are both set; ${current} wins. ` +
+        `${alias} is its older name, so remove that line.`,
+    );
+  }
+  return notices;
 }
 
 /**
@@ -109,19 +160,23 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   }
 
   const merged = structuredClone(DEFAULTS) as unknown as Record<string, Record<string, unknown>>;
+  // Which variable supplied each path, so an error names the one the operator actually set.
+  const suppliers = new Map<string, string>();
   for (const knob of KNOB_REGISTRY) {
-    const raw = env[knob.envVar];
-    if (raw === undefined) {
+    const supplier = supplierOf(env, knob);
+    if (supplier === undefined) {
       continue;
     }
-    setAtPath(merged, knob, parseRaw(raw, knob.kind, knob.envVar));
+    const raw = env[supplier] ?? '';
+    suppliers.set(knob.path.join('.'), supplier);
+    setAtPath(merged, knob, parseRaw(raw, knob.kind, supplier));
   }
 
   const result = ConfigSchema.safeParse(merged);
   if (!result.success) {
     const lines = result.error.issues.map((issue) => {
       const path = issue.path.map(String);
-      const envVar = envVarForPath(path);
+      const envVar = suppliers.get(path.slice(0, 2).join('.')) ?? envVarForPath(path);
       // The tail names the field inside a subtree variable, so AION_SEARCH_WEIGHTS says which
       // of its three parts failed.
       const field = path.slice(2).join('.');

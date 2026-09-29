@@ -1,7 +1,7 @@
 import type { Config } from '../../infrastructure/config/schema.js';
 import type { IntrospectionOperation } from '../domain/operation.js';
 import { backboneRepairOperation } from './operations/backbone-repair.js';
-import { batchSettlementOperation } from './operations/batch-settlement.js';
+import { batchRelevanceScales, batchSettlementOperation } from './operations/batch-settlement.js';
 import { claimConsolidationOperation } from './operations/claim-consolidation.js';
 import { claimDedupOperation } from './operations/claim-dedup.js';
 import { communityRefreshOperation } from './operations/community-refresh.js';
@@ -53,8 +53,8 @@ import type { ReinforcementDrain } from '../../plasticity/application/drain.js';
  * chose it. What one run does and what the loop thinks the backlog is worth are then two
  * readings of one number instead of a shipped default and a live one.
  *
- * Ten of the thirty-one declare a `measure`, a number in the health snapshot their run is
- * scored on moving. The other twenty-one are recorded as unmeasured rather than scored. Seventeen
+ * Ten of the thirty-two declare a `measure`, a number in the health snapshot their run is
+ * scored on moving. The other twenty-two are recorded as unmeasured rather than scored. Seventeen
  * of those are waiting on a gauge the snapshot does not carry yet:
  *
  * - `claim_dedup`: a near-duplicate claim-pair count.
@@ -83,7 +83,7 @@ import type { ReinforcementDrain } from '../../plasticity/application/drain.js';
  * Each is a graph read nothing computes on the tick today. Until one exists, its operation is
  * scored on relevance, waiting time, and cost alone, which is everything known about it.
  *
- * The last four declare none on purpose rather than for want of a gauge. `proposal_resolution`
+ * The last five declare none on purpose rather than for want of a gauge. `proposal_resolution`
  * moves the open-proposal count, and scoring it on lowering that would reward an applied
  * correction and a dismissed one alike, which rewards emptying the queue rather than deciding
  * it. `recall_probe` produces the numbers instead of moving them: it measures retrieval and
@@ -93,6 +93,9 @@ import type { ReinforcementDrain } from '../../plasticity/application/drain.js';
  * same for a chunk it blocked as for one it published. `episode_evict` is the same refusal one
  * step further: what it would be scored on lowering is the resident population, and an operation
  * rewarded for removing more of that is the last incentive a destructive pass should carry.
+ * `batch_settlement` has a demand reading too, and a run that finds every job still working at
+ * the vendor did its job while moving nothing, so a backlog metric would score the vendor's
+ * turnaround rather than the pump.
  */
 export function introspectionOperations(
   config: Config,
@@ -113,7 +116,7 @@ export function introspectionOperations(
     // The remote half of the same hygiene: send the background generation that was batched and
     // settle what came back. Description freshness is the producer behind it; a surface that
     // moves its own judgment off the hot path registers its handler here beside that one.
-    batchSettlementOperation([descriptionFreshnessHandler]),
+    batchSettlementOperation([descriptionFreshnessHandler], batchRelevanceScales(config)),
     deadLetterOperation(),
     redactionResiduePurgeOperation(),
 
