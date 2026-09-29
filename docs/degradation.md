@@ -154,8 +154,11 @@ way: the narrative stage reports `failed` and its job retries on the same backof
 read path, the recall model call degrades exactly as the first rung above describes, with
 `reason: model_error`.
 
-**Diagnose.** `aion stats`'s `generation by route` section prints calls, failure share and
-mean duration per role and provider, from counters in the meta table that survive a restart.
+**Diagnose.** At `AION_LOG_LEVEL=debug` the service logs `generation routed` for every call,
+with its role, provider, model and duration; a failing call shows `ok: false`. A log line is gone
+on the next rotation, so `aion stats`'s `generation by route` section prints the same outcomes as
+calls, failure share and mean duration per role and provider, from counters in the meta table
+that survive a restart.
 A route nothing has called reads as `never called` rather than as a clean record. `aion
 doctor`'s `ollama-round-trip` check and `aion status` print the routing line
 (`cue=<provider>:<model> reflect=<provider>:<model>`), and `aion queue ls` shows the backlog
