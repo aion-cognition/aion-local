@@ -123,6 +123,10 @@ export const THIN_NARRATIVE: NarrativeFixture = {
  * The "wrong architecture invented" fixture: an episode stating four decisions produced a
  * narrative about a microservices architecture and a service mesh, neither of which appears in
  * the source. On this input the narrative has to name the decisions instead.
+ *
+ * The turns carry no timestamps of their own. The battery's substrate is born when the run opens
+ * it, and intake trims every turn stamped before that birth: dated in April, both turns were cut
+ * and the session held only its observation.
  */
 export const PLANNING_NARRATIVE: NarrativeFixture = {
   identity: 'gate-narrative-planning',
@@ -132,7 +136,6 @@ export const PLANNING_NARRATIVE: NarrativeFixture = {
       {
         role: 'user',
         text: 'walk through the rollout decisions we settled on for Meridian this afternoon',
-        occurred_at: '2026-04-03T09:00:00Z',
       },
       {
         role: 'assistant',
@@ -140,7 +143,6 @@ export const PLANNING_NARRATIVE: NarrativeFixture = {
           'four decisions: the orders table stays unsharded, session state moves to signed cookies, ' +
           'Meridian ships behind a flag with two weeks of shadow reads, and this service never writes ' +
           'to the finops-owned billing table',
-        occurred_at: '2026-04-03T09:01:00Z',
       },
     ],
     observations: [

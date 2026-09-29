@@ -392,9 +392,11 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('narrative grounding on the fabrication fix
 
   it('scales with its source and cites what the planning session extracted', async () => {
     const planning = await narrate(PLANNING_NARRATIVE);
-    expect(planning.sentences).toBeGreaterThan(1);
     // The platitude failure: a narrative that names none of the session's decisions and cites
-    // only the episode it compressed reads as history and carries none of it.
-    expect(planning.extracted).toBeGreaterThan(0);
+    // only the episode it compressed reads as history and carries none of it. Scaling is read off
+    // what it draws on, not how many sentences it spends: the prompt caps the count and asks for
+    // fewer when the sources say little, so one sentence citing every decision is faithful, and
+    // one citing a single claim of a four-decision session is not.
+    expect(planning.extracted).toBeGreaterThan(1);
   }, 600_000);
 });

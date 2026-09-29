@@ -223,7 +223,15 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('an unrelated query returns a thin or empty
     );
 
     expect(result.items).toHaveLength(0);
-    expect(result.pack.rendered_text).toContain('No memories matched this query.');
+    // Two sentences for two states. Under the shipped mode the model was shown what retrieval
+    // found, floor refusals included, and chose none, so the text says that rather than blaming
+    // the floors; a pack served from the ranking says nothing cleared them.
+    const judged = result.pack.metadata.assessment?.outcome === 'selected';
+    expect(result.pack.rendered_text).toContain(
+      judged
+        ? 'the assessment judged none of them useful here.'
+        : 'No memories matched this query.',
+    );
   }, 120_000);
 });
 

@@ -132,7 +132,14 @@ function config(): Config {
   return {
     ...DEFAULTS,
     models: { ...DEFAULTS.models, embedDimension: EMBED_DIMENSION },
-    recall: { ...DEFAULTS.recall, vectorLimit: 1 },
+    recall: {
+      ...DEFAULTS.recall,
+      // The stub answers as the cue model, and its two cues are what put both memories in the
+      // pack, so this file runs the `cues` recall mode. Under `assess` the query is embedded
+      // whole and the stub's answer reaches the assessment instead.
+      mode: 'cues',
+      vectorLimit: 1,
+    },
     contextResonance: { ...DEFAULTS.contextResonance, seedLimit: 1 },
   };
 }

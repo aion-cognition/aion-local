@@ -379,8 +379,12 @@ describe('a stale belief surfaced by resonance alone', () => {
       { identity: READ_SESSION, now: RECALLED_AT },
     );
 
-    expect(pack.resonant?.map((item) => item.id)).toEqual([STALE_TURN_ID]);
+    // Both turns share the anchor's shape, and the bucket is not capped by how many items fusion
+    // admitted, so both come back, the exact shape match first. Only the turn that names a
+    // subject has a family to annotate it from.
+    expect(pack.resonant?.map((item) => item.id)).toEqual([STALE_TURN_ID, ORPHAN_TURN_ID]);
     expect(pack.resonant?.[0]?.related_claim?.id).toBe(CORRECTION_ID);
+    expect(pack.resonant?.[1]?.related_claim).toBeUndefined();
     expect(pack.rendered_text).toContain(
       `current related claim: ${CORRECTION_TEXT} [${CORRECTION_ID}]`,
     );
