@@ -229,7 +229,8 @@ async function resolveStructural(
         extracted: entity,
         id,
         created: false,
-        // The backbone was minted by the bootstrap that drew it, which counted it then.
+        // The bootstrap drew the backbone's ids and `publishBackboneBirth` counts them for it;
+        // this run only moves the counters.
         minted: false,
         structural: true,
         // The backbone is connectivity, not content: it carries no `text` to embed.

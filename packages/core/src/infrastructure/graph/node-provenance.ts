@@ -30,9 +30,9 @@ export type NodeProvenance = CurrencyAnnotation & {
   readonly content: string;
   /**
    * `extraction_method` on every node a named pipeline stage wrote: intake's Turn and Episode,
-   * entity resolution's Entity, and the Narrative a session compression, a rollup or a claim
-   * consolidation produced. Absent on the nine cognitive types, whose provenance is their
-   * `EXTRACTED_FROM` edge.
+   * entity resolution's Entity, the backbone a bootstrap minted, and the Narrative a session
+   * compression, a rollup or a claim consolidation produced. Absent on the nine cognitive types,
+   * whose provenance is their `EXTRACTED_FROM` edge, and on a backbone node an older build minted.
    */
   readonly extractionMethod?: string;
   readonly sourceEpisodeId?: string;

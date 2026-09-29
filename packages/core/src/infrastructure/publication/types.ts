@@ -50,6 +50,11 @@ export const PUBLICATION_KINDS = [
   // already holds, and the receipt is what says a node's sources were counted from birth rather
   // than by a later walk.
   'derived_node_evidence',
+  // The census a backbone identity is born with. Its own kind rather than a variant of
+  // `derived_node_evidence`, because no capture stands behind the Member, the Workspace or the
+  // Substrate: the bootstrap drew their ids before anything could publish, and this records the
+  // census that birth entitles them to, once a coordinator stands.
+  'backbone_birth',
 ] as const;
 export type PublicationKind = (typeof PUBLICATION_KINDS)[number];
 

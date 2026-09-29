@@ -1,3 +1,4 @@
+import { backboneBirthPublication } from './backbone-evidence.js';
 import { reflectionCompletionPublication } from './completion-publication.js';
 import { contextVectorSyncPublication } from './context-vector-sync.js';
 import { derivedNodeEvidencePublication } from './derived-node-evidence.js';
@@ -48,4 +49,7 @@ export const INSTALLED_PUBLICATION_HANDLERS: readonly PublicationHandler[] = [
   // Reached from the two extraction stages, which are the only callers that can say what they
   // wrote. Installed here like any other so a process that meets one pending can recover it.
   derivedNodeEvidencePublication,
+  // Reached from the service start, which counts the backbone the bootstrap minted before any
+  // coordinator stood.
+  backboneBirthPublication,
 ];

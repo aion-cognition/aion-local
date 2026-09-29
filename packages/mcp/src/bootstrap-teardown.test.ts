@@ -138,6 +138,10 @@ vi.mock('@aion/core', async (importOriginal) => {
       calls.push('coverage.activate');
       return { state: 'active', historySince: '2026-09-11T06:00:00.000Z' };
     },
+    publishBackboneBirth: async () => {
+      calls.push('backbone.birth');
+      return { status: 'nothing_owed' };
+    },
     // The shape the real report returns when routing has nothing to unload, `evicted` included:
     // boot reads that list to decide whether the run is worth recording.
     reconcileResidentModels: async () => ({ checked: false, evicted: [] }),
@@ -170,6 +174,9 @@ describe('bootstrapService failing partway through construction', () => {
     expect(calls).toEqual([
       'publications.initialize',
       'coverage.activate',
+      // The backbone's birth census needs the coordinator and must land before the worker reads
+      // a backbone node.
+      'backbone.birth',
       // Arming follows activation and precedes the recovery loop: it refuses against a contract
       // that is not active, and one actor asks for the guard at boot.
       'publicationRecovery.start',

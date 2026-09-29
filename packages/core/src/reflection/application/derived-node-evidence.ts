@@ -285,8 +285,9 @@ export type { DerivedNode };
  * The caller owes the other half and this function cannot check it. An uncounted id is no
  * evidence about who drew it, so only a writer whose own identity fixes the id may ask: the
  * cognitive stage folds it from the source episode, an entity node records the episode that
- * created it, and a consolidation folds it from its own member set. A caller that asked about an
- * arbitrary node would claim a census over a population it never looked at.
+ * created it, a consolidation folds it from its own member set, and a backbone node carries the
+ * bootstrap's creation mark (`backbone-evidence.ts`). A caller that asked about an arbitrary node
+ * would claim a census over a population it never looked at.
  */
 export function owesBirthEstablishment(db: SqliteHandle, nodeId: string): boolean {
   return [...NODE_SUPPORT_ROLE_SCOPES, GRAPH_NODE_SCOPE].some(
