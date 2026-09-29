@@ -13,25 +13,24 @@ The shims replace the judgment with a cadence. Session start recalls. A substant
 recalls. Compaction, stop, subagent stop, and session end capture. Nothing changes in the
 substrate: the hooks are a client that speaks the same MCP wire an agent does.
 
-## The two profiles
+## Setup, keys and the two hook profiles
 
-`aion init local` and `aion init full` both install the hooks. What differs is whether init
-settles a key. Generation runs on the one provider `AION_GENERATION_PROVIDER` selects either way:
-`anthropic` when it is unset, or `openai`.
+`aion init` installs the hooks on either installation and with either provider. Generation runs
+on the one provider `AION_GENERATION_PROVIDER` selects: `anthropic` when it is unset, or `openai`.
+Init makes sure `.env` holds that provider's key (`AION_ANTHROPIC_API_KEY` or
+`AION_OPENAI_API_KEY`), because the service reads it from there and nowhere else. A key already in
+`.env` wins, a key exported only in the shell is recorded, and otherwise a terminal offers an
+optional prompt. The other provider's key is never asked for. Embeddings stay local either way,
+because the vector space is the substrate.
 
-`aion init local` provisions the substrate without asking for a key. `aion init full` makes sure
-`.env` holds the selected provider's key (`AION_ANTHROPIC_API_KEY` or `AION_OPENAI_API_KEY`),
-because the service reads it from there and nowhere else. A key exported only in the shell is
-recorded, and with none anywhere init asks. The other provider's key is never asked for. The shims
-push a lot of small capture work, and capture is small-model work: read a turn, shape it, store
-it. Embeddings stay local either way, because the vector space is the substrate.
+Hooks install and fire with or without a key. Capture never depends on generation: a hook hands
+the turn to intake, intake stores it and queues the work, and the enrichment runs when there is a
+key to run it with. The queue is what absorbs a key that is missing.
 
-Hooks install and fire on every profile. Capture never depends on generation: a hook hands the
-turn to intake, intake stores it and queues the work, and the enrichment runs when there is a
-key to run it with. That was not always true. Install refused without a key, the server refused
-capture on a local route, and the client stripped its own entries on its next fire. All three
-came from a build that had a local model to protect from the cadence. There is no local model
-now, and the queue is what absorbs a key that is missing.
+`aion hooks install --profile` picks the cadence. `full`, the default and what init installs,
+recalls on session start and on every substantial prompt and captures on compaction, stop,
+subagent stop and session end. `lite` fires on session start and session end only. Both stamp
+the session id onto a direct recall or reflection call (see "One session, one Session node").
 
 `aion doctor` reports what digests a capture as `hooks-route`; with no key it says the captures
 are stored and queued. `aion init` ends by naming the variable the selection needs when `.env`
@@ -110,7 +109,7 @@ only an absent one. A call that already carries the right id gets no rewrite. Th
 stdin and writes stdout with no round trip, because it sits in front of every recall and
 reflection the model makes.
 
-Both profiles install it, so a session running aion hooks holds the invariant. The frame omits
+Both hook profiles install it, so a session running aion hooks holds the invariant. The frame omits
 `permissionDecision`, so approval stays with the normal permission flow.
 
 ## Research capture
@@ -133,8 +132,9 @@ someone scopes the channels.
 every key and every hook that is not ours. The installer recognizes aion entries by
 `hook-main.js` in the command path, so a second install replaces them rather than stacking.
 
-When run through `./bin/aion`, the CLI sits inside a container that can reach neither the host
-repo nor the host's Claude settings. It prints the block to merge by hand instead of failing. The
+On the native installation `aion hooks install` writes the settings directly. On the Docker
+installation the CLI runs inside a container that can reach neither the host repo nor the host's
+Claude settings, so it prints the block to merge by hand instead of failing. The
 block looks like this, with the absolute path to your own checkout. The eighth entry,
 PostToolUse, is research capture. Pass `--no-research-capture` and merge only the first seven.
 
@@ -241,9 +241,9 @@ exists. `aion hooks uninstall` removes exactly those entries.
 
 ## Codex
 
-Codex runs the same hooks out of its own files. Install from the host, not through `./bin/aion`:
-the container can see neither the host repo nor `~/.codex`, so it prints the blocks to merge by
-hand instead of writing them.
+Codex runs the same hooks out of its own files. On the Docker installation, install from a host
+build rather than through the container: the container can see neither the host repo nor
+`~/.codex`, so it prints the blocks to merge by hand instead of writing them.
 
 ```
 npm run build
