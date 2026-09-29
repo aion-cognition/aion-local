@@ -7,6 +7,12 @@ import { GenerationUnavailableError } from './errors.js';
 import { ProviderRouter, type GenerationEvent } from './role-provider.js';
 import { resolveProviderRouting } from './routing.js';
 import {
+  testGenerationConfig,
+  testGenerationKey,
+  testRoutesToOpenAi,
+} from './test-support/generation-provider.js';
+import type { GenerationProvider } from './types.js';
+import {
   handleReflection,
   type ReflectionIntakeDeps,
 } from '../../reflection/application/intake.js';
@@ -37,31 +43,39 @@ import type { PublicationCoordinator } from '../publication/coordinator.js';
 import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
 
 /**
- * The routed provider against the two live backends: a real enrichment on the Anthropic route,
- * and the same router with the key taken away answering from Ollama. It lives beside the
- * routing code rather than beside the stages because what is under test is where the call
- * goes; the stages are the realistic load that proves it.
+ * The routed provider against the two live backends: a real enrichment on the remote route the
+ * shell selected, and the same router with that key taken away, which refuses generation and
+ * still embeds on Ollama. It lives beside the routing code rather than beside the stages because
+ * what is under test is where the call goes; the stages are the realistic load that proves it.
+ * The file name predates provider selection: it runs on whichever provider the shell selects.
  *
- * The key is read from the environment and never written anywhere. With no key the remote half
- * skips and the local half still runs.
+ * The unselected provider holds a key throughout, so a call that crossed to it would go out and
+ * fail rather than pass as a refusal. The selected key is read from the environment and never
+ * written anywhere. With no key the remote half skips and the local half still runs.
  */
 
-const API_KEY = (process.env.AION_ANTHROPIC_API_KEY ?? '').trim();
+const PROVIDER: GenerationProvider = testRoutesToOpenAi() ? 'openai' : 'anthropic';
+const API_KEY = testGenerationKey();
+/** Never sent anywhere unless a route crosses to the provider nobody selected. */
+const UNSELECTED_KEY = 'unselected-provider-placeholder-key';
 const OLLAMA_URL = process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434';
 const MEMBER_NAME = 'Ryan Huber';
 
+/**
+ * The turns carry no timestamps, so the episode is stamped at intake. A fixed date would fall
+ * before the substrate's birth, which the coordinator stamps as it initializes, and intake would
+ * cut both turns and leave the enrichment the summary alone.
+ */
 const PAYLOAD = {
   summary: 'choosing the graph store for the Aion reflection pipeline',
   turns: [
     {
       role: 'user',
       text: 'Priya Raman and I decided to keep Neo4j as the graph store instead of moving to Postgres, because the traversal queries are the whole point of the reflection pipeline.',
-      occurred_at: '2026-08-29T09:00:00Z',
     },
     {
       role: 'assistant',
       text: 'Understood. Priya Raman owns the Neo4j migration, and Aion keeps extracting entities through the provider layer.',
-      occurred_at: '2026-08-29T09:00:30Z',
     },
   ],
   observations: ['Traversal is the reason the graph store stays Neo4j'],
@@ -75,12 +89,23 @@ let events: GenerationEvent[];
 let router: ProviderRouter;
 let publications: PublicationCoordinator;
 
-function config(apiKey: string): Config {
+/** The shell's selected route, holding `selectedKey` for that provider and a key for the other. */
+function config(selectedKey: string): Config {
+  const selected = { ...DEFAULTS, ...testGenerationConfig(DEFAULTS) };
+  const keyOf = (provider: GenerationProvider): string =>
+    provider === PROVIDER ? selectedKey : UNSELECTED_KEY;
   return {
-    ...DEFAULTS,
+    ...selected,
     ollama: { ...DEFAULTS.ollama, url: OLLAMA_URL },
-    anthropic: { ...DEFAULTS.anthropic, apiKey },
+    anthropic: { ...selected.anthropic, apiKey: keyOf('anthropic') },
+    openai: { ...selected.openai, apiKey: keyOf('openai') },
   };
+}
+
+/** The model the selected provider is configured with, read off the config rather than routing. */
+function configuredModel(): string {
+  const { anthropic, openai } = config(API_KEY);
+  return PROVIDER === 'openai' ? openai.model : anthropic.model;
 }
 
 function newRouter(apiKey: string): ProviderRouter {
@@ -123,8 +148,10 @@ beforeAll(async () => {
     publications: directIntakePublisher(harness.driver, db),
   };
 
-  episodeId = (await handleReflection(intake, PAYLOAD, { identity: 'anthropic-routing' }))
-    .episode_id;
+  const stored = await handleReflection(intake, PAYLOAD, { identity: 'anthropic-routing' });
+  // The enrichment below is only a realistic load if intake kept the conversation.
+  expect(stored.pre_birth_trim).toBeUndefined();
+  episodeId = stored.episode_id;
 }, 300_000);
 
 afterAll(async () => {
@@ -133,19 +160,21 @@ afterAll(async () => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
-describe.skipIf(API_KEY === '')('enrichment on the Anthropic route', () => {
-  it('resolves both generation roles to the configured Anthropic model', () => {
+describe.skipIf(API_KEY === '')('enrichment on the selected route', () => {
+  it('resolves both generation roles to the selected provider at its configured model', () => {
     const routing = resolveProviderRouting(config(API_KEY));
 
     expect(routing.keyPresent).toBe(true);
     expect(routing.roles.cue).toEqual({
       role: 'cue',
-      model: DEFAULTS.anthropic.model,
+      provider: PROVIDER,
+      model: configuredModel(),
       available: true,
     });
     expect(routing.roles.reflect).toEqual({
       role: 'reflect',
-      model: DEFAULTS.anthropic.model,
+      provider: PROVIDER,
+      model: configuredModel(),
       available: true,
     });
   });
@@ -182,26 +211,28 @@ describe.skipIf(API_KEY === '')('enrichment on the Anthropic route', () => {
     const generations = events.slice(before);
     expect(generations.length).toBeGreaterThan(0);
     for (const event of generations) {
-      expect(event.provider).toBe('anthropic');
-      expect(event.model).toBe(DEFAULTS.anthropic.model);
+      expect(event.provider).toBe(PROVIDER);
+      expect(event.model).toBe(configuredModel());
       expect(event.role).toBe('reflect');
     }
   }, 300_000);
 });
 
-describe('the same router with the key taken away', () => {
-  it('marks every role unavailable rather than routing it somewhere else', () => {
+describe('the same router with the selected key taken away', () => {
+  it('marks every role unavailable rather than routing it to the provider with a key', () => {
     const routing = resolveProviderRouting(config(''));
 
     expect(routing.keyPresent).toBe(false);
     expect(routing.roles.cue).toEqual({
       role: 'cue',
-      model: DEFAULTS.anthropic.model,
+      provider: PROVIDER,
+      model: configuredModel(),
       available: false,
     });
     expect(routing.roles.reflect).toEqual({
       role: 'reflect',
-      model: DEFAULTS.anthropic.model,
+      provider: PROVIDER,
+      model: configuredModel(),
       available: false,
     });
   });
@@ -213,7 +244,7 @@ describe('the same router with the key taken away', () => {
     await expect(
       keyless.forRole('cue').generate({
         surface: 'cues',
-        model: DEFAULTS.anthropic.model,
+        model: configuredModel(),
         messages: [{ role: 'user', content: 'Answer with {"ok": true} and nothing else.' }],
         schema: {
           type: 'object',
