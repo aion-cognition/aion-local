@@ -9,7 +9,11 @@ import {
   proposalResolutionRelevance,
   resolutionLedgerKey,
 } from './proposal-resolution.js';
-import type { JudgmentEvidence } from '../../../evidence/application/judgment.js';
+import type {
+  JudgmentEvidence,
+  JudgmentPair,
+  JudgmentSide,
+} from '../../../evidence/application/judgment.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import type { Config } from '../../../infrastructure/config/schema.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
@@ -523,6 +527,68 @@ describe('proposal_resolution on an entity-merge pair', () => {
     const entry = getLedgerEntry(db, resolutionLedgerKey('entity_merge', id));
     expect(entry?.summary).toMatchObject({ verdict: 'dismissed', leftId: 'left-1' });
     expect((entry?.summary as { grounds: string }).grounds).toContain('store');
+  });
+
+  it('reads the filing episode first and shows shared captured text once to both passes', async () => {
+    const id = seedMerge();
+    const asked: JudgmentPair[] = [];
+    const side = (pair: JudgmentPair, index: 0 | 1, context: string): JudgmentSide => ({
+      evidence: 'excerpts',
+      nodeId: pair.sides[index].nodeId,
+      statement: pair.sides[index].statement,
+      excerpts: [],
+      unreadSourcesRemain: false,
+      renderedContext: context,
+      renderedUnits: context.length,
+    });
+    const evidence: JudgmentEvidence = {
+      assemble: (pair) => {
+        asked.push(pair);
+        return Promise.resolve({
+          status: 'assembled',
+          sides: [side(pair, 0, 'LEFT-CAPTURE'), side(pair, 1, 'RIGHT-CAPTURE')],
+          shared: { excerpts: [], renderedContext: 'SHARED-CAPTURE', renderedUnits: 14 },
+          revision: { contractVersion: 1, dependencies: [], digest: 'digest' },
+          omitted: [],
+        });
+      },
+      confirm: () => ({ status: 'current' }),
+    };
+    const prompts: string[] = [];
+    const answers = judgingProvider({
+      first: { same: true, rationale: 'both name the cache' },
+      second: { different_referent: true, reason: 'one is the store, one is the cache' },
+    });
+    const provider: Provider = {
+      embed: answers.embed,
+      generate: (request: StructuredRequest) => {
+        prompts.push(request.messages.map((message) => message.content).join('\n'));
+        return answers.generate(request);
+      },
+    };
+
+    const result = await proposalResolutionOperation().run(
+      ctxFor(DEFAULTS, { driver: fakeDriver(), provider, evidence }),
+    );
+
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatchObject({
+      route: 'proposal_resolution',
+      use: 'entity_judgment',
+      promptingSourceId: 'ep-merge',
+    });
+    expect(asked[0]?.sides.map((entry) => entry.names)).toEqual([
+      ['Ledger Cache'],
+      ['Ledger Store'],
+    ]);
+    expect(prompts).toHaveLength(2);
+    for (const prompt of prompts) {
+      expect(prompt).toContain('LEFT-CAPTURE');
+      expect(prompt).toContain('RIGHT-CAPTURE');
+      expect(prompt.split('SHARED-CAPTURE')).toHaveLength(2);
+    }
+    expect(result.itemsAffected).toBe(1);
+    expect(getEntityMergeProposal(db, id)?.resolvedAt).toBe(NOW.toISOString());
   });
 
   it('leaves a pair open when the second pass never answers', async () => {

@@ -33,6 +33,7 @@ import {
   applySupersessionProposal,
   INTROSPECTOR_RESOLUTION,
 } from '../../../reflection/application/proposals.js';
+import { withEvidence } from '../../../reflection/application/stages/entity-dedup-prompt.js';
 import {
   judgeContradiction,
   type ContradictionPair,
@@ -49,6 +50,7 @@ import type {
 } from '../../domain/operation.js';
 import {
   contradictionPair,
+  entityMergeEvidence,
   evidenceMoved,
   judgmentEvidence,
   readClaimEvidence,
@@ -346,14 +348,7 @@ async function resolveMerge(
     leaveOpen(ctx, proposal.id, 'a side of the pair has lost currency', tally);
     return;
   }
-  const evidence = await judgmentEvidence(
-    ctx,
-    [
-      { nodeId: proposal.leftId, statement: pair.subject.name },
-      { nodeId: proposal.rightId, statement: pair.candidate.name },
-    ],
-    'entity_judgment',
-  );
+  const evidence = await entityMergeEvidence(ctx, pair, proposal);
   if (evidence.status === 'withheld') {
     leaveOpen(
       ctx,
@@ -365,15 +360,7 @@ async function resolveMerge(
     return;
   }
 
-  const merged = evidence.status === 'ready' ? evidence.sides : undefined;
-  const verdict = await decideMerge(ctx, {
-    ...pair,
-    facts: [
-      ...pair.facts,
-      statementWithContext(`${pair.subject.name} rests on:`, merged?.[0]),
-      statementWithContext(`${pair.candidate.name} rests on:`, merged?.[1]),
-    ],
-  });
+  const verdict = await decideMerge(ctx, withEvidence(pair, evidence));
   if (verdict.decision === 'unanswered') {
     leaveOpen(ctx, proposal.id, verdict.detail, tally);
     return;

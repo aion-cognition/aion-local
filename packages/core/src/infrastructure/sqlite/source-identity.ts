@@ -275,6 +275,19 @@ export function readSourceParts(db: SqliteHandle, sourceId: string): readonly So
   return rows.map(toSourcePart);
 }
 
+/** One recorded part by its tuple, for a reader that verifies that part and no other. */
+export function readSourcePart(
+  db: SqliteHandle,
+  sourceId: string,
+  partKind: string,
+  ordinal: number,
+): SourcePartRecord | undefined {
+  const row = db
+    .prepare(`${SELECT_SOURCE_PARTS} WHERE source_id = ? AND part_kind = ? AND ordinal = ?`)
+    .get(sourceId, partKind, ordinal) as SourcePartRowData | undefined;
+  return row === undefined ? undefined : toSourcePart(row);
+}
+
 /** The part an original turn id addresses, for a caller holding a graph id rather than a tuple. */
 export function findSourcePartByTurnId(
   db: SqliteHandle,

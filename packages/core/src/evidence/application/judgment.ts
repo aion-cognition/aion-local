@@ -1,6 +1,8 @@
 import type { Driver } from 'neo4j-driver';
 
 import { EvidenceDependencies, type RevisionCheck } from './dependencies.js';
+import type { SourceExcerpt } from './entity-excerpt-render.js';
+import { assembleEntityEvidence } from './entity-excerpts.js';
 import { readRequired } from './judgment-required.js';
 import type { SourceEvidence } from './sources.js';
 import { readClaimSubjects } from './subjects.js';
@@ -30,12 +32,22 @@ import type { EvidenceIssue, EvidenceUse } from '../domain/result.js';
  * an abstention: no assembled input, no provider call, and the obligation stays where it was.
  * That is supported non-disclosure rather than missing evidence, and turning it into either a
  * history gap or a complete answer would misreport what the substrate did.
+ *
+ * Entity judgments are the exception to reading every source whole. An entity's history only
+ * grows, and requiring all of it made a well-known entity impossible to judge, so an entity side
+ * is entitled to a bounded selection of excerpts with its limits disclosed
+ * (`entity-excerpts.ts`). Claim judgments keep every source whole.
  */
 
 export type JudgmentSideRequest = {
   readonly nodeId: string;
   /** The statement as the caller states it, which is what the judge is asked about. */
   readonly statement: string;
+  /**
+   * The names and aliases an entity is spelled with, which is how its excerpts are placed in
+   * captured text. A claim judgment reads whole sources and ignores them.
+   */
+  readonly names?: readonly string[];
 };
 
 export type JudgmentPair = {
@@ -44,9 +56,16 @@ export type JudgmentPair = {
   readonly reservedUnits: number;
   readonly use: Extract<EvidenceUse, 'claim_judgment' | 'entity_judgment'>;
   readonly sides: readonly [JudgmentSideRequest, JudgmentSideRequest];
+  /**
+   * The source whose reflection or proposal prompted this comparison. An entity judgment reads it
+   * before any other, since it is the context the pair was put forward in.
+   */
+  readonly promptingSourceId?: string;
 };
 
-export type JudgmentSide = {
+/** A claim side: every source its own family reaches, read whole. */
+export type WholeSourceSide = {
+  readonly evidence: 'whole_sources';
   readonly nodeId: string;
   readonly statement: string;
   readonly requiredSources: readonly SourceEvidence[];
@@ -56,10 +75,36 @@ export type JudgmentSide = {
   readonly renderedUnits: number;
 };
 
+/**
+ * An entity side: a bounded selection of excerpts from the captured text recorded against it
+ * alone, with what was left out named in the rendered text. It holds no whole source.
+ */
+export type ExcerptSide = {
+  readonly evidence: 'excerpts';
+  readonly nodeId: string;
+  readonly statement: string;
+  readonly excerpts: readonly SourceExcerpt[];
+  /** The bounded read found more recorded sources than it nominated. A probe row, not a count. */
+  readonly unreadSourcesRemain: boolean;
+  readonly renderedContext: string;
+  readonly renderedUnits: number;
+};
+
+export type JudgmentSide = WholeSourceSide | ExcerptSide;
+
+/** Excerpts from sources recorded against both entities, rendered once rather than per side. */
+export type SharedExcerpts = {
+  readonly excerpts: readonly SourceExcerpt[];
+  readonly renderedContext: string;
+  readonly renderedUnits: number;
+};
+
 export type JudgmentAssembly =
   | {
       readonly status: 'assembled';
       readonly sides: readonly [JudgmentSide, JudgmentSide];
+      /** An entity pair's shared captures, which belong to neither side alone. */
+      readonly shared?: SharedExcerpts;
       readonly revision: EvidenceRevision;
       /** Optional context left out, disclosed without lowering what the required units say. */
       readonly omitted: readonly EvidenceIssue[];
@@ -140,6 +185,7 @@ export type JudgmentEvidenceOutcome =
   | {
       readonly status: 'ready';
       readonly sides: readonly [JudgmentSide, JudgmentSide];
+      readonly shared?: SharedExcerpts;
       readonly revision: EvidenceRevision;
       /** The coverage contract the assembly was made under, where the seam checked one. */
       readonly coverageEpoch?: string;
@@ -162,6 +208,7 @@ export async function judgmentEvidenceFor(
     return {
       status: 'ready',
       sides: assembly.sides,
+      ...(assembly.shared === undefined ? {} : { shared: assembly.shared }),
       revision: assembly.revision,
       ...(assembly.coverageEpoch === undefined ? {} : { coverageEpoch: assembly.coverageEpoch }),
     };
@@ -244,9 +291,10 @@ function sideOf(
   request: JudgmentSideRequest,
   sources: readonly SourceEvidence[],
   subjects: readonly ClaimSubject[],
-): JudgmentSide {
+): WholeSourceSide {
   const renderedContext = renderContext(sources, subjects);
   return {
+    evidence: 'whole_sources',
     nodeId: request.nodeId,
     statement: request.statement,
     requiredSources: sources,
@@ -270,6 +318,9 @@ export async function assembleJudgmentEvidence(
   context: CheckedReadContext,
   budget: RequestBudget = new RequestBudget(),
 ): Promise<JudgmentAssembly> {
+  if (pair.use === 'entity_judgment') {
+    return assembleEntityEvidence(deps, pair, context, budget);
+  }
   const dependencies = new EvidenceDependencies();
   // Both sides' required units are reserved before either side's optional context is read, so a
   // gloss on the first side cannot spend the allowance the second side's own source needs.
@@ -309,7 +360,7 @@ export async function assembleJudgmentEvidence(
   // Whatever the required units left over, and no more. An omitted gloss is disclosed; it never
   // lowers what the required units say.
   const omitted: EvidenceIssue[] = [];
-  const sides: JudgmentSide[] = [];
+  const sides: WholeSourceSide[] = [];
   let spent = requiredUnits;
   for (const [index, side] of pair.sides.entries()) {
     const sources = required[index]?.sources ?? [];

@@ -5,7 +5,7 @@ import {
   nominatePairs,
   type NominatedPair,
 } from './entity-dedup-cascade.js';
-import { buildJudgePair, withEvidence } from './entity-dedup-prompt.js';
+import { buildJudgePair, entityJudgmentPair, withEvidence } from './entity-dedup-prompt.js';
 import { addTallies, NOTHING_DONE, type CascadeTally } from './entity-dedup-tally.js';
 import {
   judgmentEvidenceFor,
@@ -255,27 +255,6 @@ export class EntityDedupStage implements ReflectionStage {
     return tally;
   }
 
-  /**
-   * Whether this pair's required evidence supports asking at all. Asked before the pair is
-   * counted as judged and before either pass runs, so a withheld pair costs nothing and stays
-   * exactly as nominated.
-   */
-  async #evidenceFor(
-    ctx: StageContext,
-    left: DedupEntityDetail,
-    right: DedupEntityDetail,
-  ): Promise<JudgmentEvidenceOutcome> {
-    return judgmentEvidenceFor(ctx.evidence, {
-      route: 'entity_merge',
-      reservedUnits: ENTITY_MERGE_ROUTE_RESERVE,
-      use: 'entity_judgment',
-      sides: [
-        { nodeId: left.id, statement: left.name },
-        { nodeId: right.id, statement: right.name },
-      ],
-    });
-  }
-
   async #judgePair(
     ctx: StageContext,
     cache: EntityDetailCache,
@@ -292,7 +271,20 @@ export class EntityDedupStage implements ReflectionStage {
       timeoutMs: this.#options.timeoutMs,
       ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
     };
-    const evidence = await this.#evidenceFor(ctx, left, right);
+    // Whether this pair's evidence supports asking at all, read before the pair is counted as
+    // judged and before either pass runs, so a withheld pair costs nothing and stays exactly as
+    // nominated. The episode being reflected on is read first, since it put the pair forward.
+    const bare = buildJudgePair(left, right, pair);
+    const evidence = await judgmentEvidenceFor(
+      ctx.evidence,
+      entityJudgmentPair({
+        route: 'entity_merge',
+        routeReserve: ENTITY_MERGE_ROUTE_RESERVE,
+        pair: bare,
+        nodeIds: [left.id, right.id],
+        promptingSourceId: ctx.episodeId,
+      }),
+    );
     if (evidence.status === 'withheld') {
       ctx.logger.info(
         {
@@ -314,7 +306,7 @@ export class EntityDedupStage implements ReflectionStage {
       };
     }
 
-    const prompt = withEvidence(buildJudgePair(left, right, pair), evidence);
+    const prompt = withEvidence(bare, evidence);
     const asked: CascadeTally = { ...NOTHING_DONE, judged: 1 };
 
     const detect = await judgeEntityMerge(ctx.provider, prompt, options);

@@ -29,6 +29,7 @@ import type {
   EntityMergePair,
   EntityMergeSide,
 } from '../../reflection/application/entity-merge-judge.js';
+import { entityJudgmentPair } from '../../reflection/application/stages/entity-dedup-prompt.js';
 import { LIVE_SUPERSESSION_ROUTE_RESERVE } from '../../reflection/application/stages/supersession-judge.js';
 import type { ContradictionPair } from '../../reflection/application/stages/supersession-judge.js';
 import {
@@ -131,6 +132,27 @@ export async function judgmentEvidence(
     use,
     sides,
   });
+}
+
+/**
+ * A merge proposal's evidence: the same bounded excerpts dedup reads, with the episode the
+ * proposal was filed from read first.
+ */
+export async function entityMergeEvidence(
+  ctx: OperationContext,
+  pair: EntityMergePair,
+  proposal: EntityMergeProposal,
+): Promise<JudgmentEvidenceOutcome> {
+  return judgmentEvidenceFor(
+    ctx.evidence,
+    entityJudgmentPair({
+      route: 'proposal_resolution',
+      routeReserve: RESOLUTION_ROUTE_RESERVE,
+      pair,
+      nodeIds: [proposal.leftId, proposal.rightId],
+      promptingSourceId: proposal.episodeId,
+    }),
+  );
 }
 
 /**

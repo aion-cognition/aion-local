@@ -38,7 +38,7 @@ export type RequiredSources = {
  * through the mentions and participations its writers actually record; demanding an extraction
  * role of an entity would make a resolver ask writers to invent a relation nobody owns.
  */
-const REQUIRED_ROLES = {
+export const REQUIRED_ROLES = {
   claim_judgment: [{ role: 'extraction', direction: 'out' }],
   entity_judgment: [
     { role: 'mention', direction: 'in' },
@@ -121,7 +121,7 @@ export type RequiredReading = {
  * corrected, closed or re-typed underneath an answer and still confirm as current, so the scope
  * is bound here and an uncounted one blocks rather than passing as agreement.
  */
-function readNodeState(
+export function readNodeState(
   deps: JudgmentDeps,
   nodeId: string,
   dependencies: EvidenceDependencies,

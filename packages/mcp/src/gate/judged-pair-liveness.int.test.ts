@@ -118,7 +118,9 @@ it.skipIf(REMOTE_JUDGE_ABSENT)(
     // Each side names the capture it came from. A side with no required source is a side the judge
     // would be shown a bare sentence for.
     for (const side of assembly.sides) {
-      expect(side.requiredSources.length).toBeGreaterThan(0);
+      expect(side.evidence === 'whole_sources' ? side.requiredSources.length : 0).toBeGreaterThan(
+        0,
+      );
     }
     // The node's own state is bound, so a correction or a closure landing between the answer and
     // the write refuses the decision instead of confirming it.

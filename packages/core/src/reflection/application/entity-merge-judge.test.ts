@@ -74,6 +74,14 @@ describe('describeEntityMergePair', () => {
     expect(text).toContain('none recorded');
     expect(text).toContain('no evidence');
   });
+
+  it('labels a stored description as interpretation, apart from captured text', () => {
+    const text = describeEntityMergePair(pair());
+
+    expect(text).toContain(
+      "described as (reflection's interpretation, not captured text): Postgres (tool)",
+    );
+  });
 });
 
 describe('judgeEntityMerge', () => {

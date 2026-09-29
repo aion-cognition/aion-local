@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { DedupFakeGraph } from './entity-dedup.fixture.js';
 import { EntityDedupStage } from './entity-dedup.js';
-import type { JudgmentEvidence } from '../../../evidence/application/judgment.js';
+import type { JudgmentEvidence, JudgmentPair } from '../../../evidence/application/judgment.js';
 import { JUDGE_ROUTE_ALLOWANCE } from '../../../evidence/domain/budget.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
 import { ACCESS_COUNT_PROPERTY } from '../../../infrastructure/graph/access-tracking.js';
@@ -46,6 +46,7 @@ import {
   unreachableEntityJudge as unreachableProvider,
   type ScriptedEntityJudge,
 } from '../entity-merge-judge.fixture.js';
+import { ENTITY_MERGE_ROUTE_RESERVE } from '../entity-merge-judge.js';
 
 /** The shape `runRead` expects back from a statement the fake answers itself. */
 const SUMMARY_STUB = {
@@ -206,16 +207,20 @@ function assembled(): JudgmentEvidence {
       status: 'assembled',
       sides: [
         {
-          ...pair.sides[0],
-          requiredSources: [],
-          optionalSubjects: [],
+          evidence: 'excerpts',
+          nodeId: pair.sides[0].nodeId,
+          statement: pair.sides[0].statement,
+          excerpts: [],
+          unreadSourcesRemain: false,
           renderedContext: 'source context',
           renderedUnits: 20,
         },
         {
-          ...pair.sides[1],
-          requiredSources: [],
-          optionalSubjects: [],
+          evidence: 'excerpts',
+          nodeId: pair.sides[1].nodeId,
+          statement: pair.sides[1].statement,
+          excerpts: [],
+          unreadSourcesRemain: false,
           renderedContext: 'source context',
           renderedUnits: 20,
         },
@@ -314,6 +319,48 @@ describe('tier 3 with an evidence seam', () => {
     // Nothing was asked, so nothing was judged and no proposal was queued for a person.
     expect.soft(outcome.counts?.merge_judgments).toBe(0);
     expect.soft(outcome.counts?.merge_proposals).toBe(0);
+  });
+
+  it('asks for bounded excerpts, reading the reflected episode first and showing shared text once', async () => {
+    seedNearDuplicatePair();
+    graph.nodes.get('strong')!.properties[ENTITY_ALIASES_PROPERTY] = ['aion-core'];
+    const asked: JudgmentPair[] = [];
+    const seam = assembled();
+    const evidence: JudgmentEvidence = {
+      assemble: async (pair) => {
+        asked.push(pair);
+        const assembly = await seam.assemble(pair);
+        return assembly.status === 'assembled'
+          ? {
+              ...assembly,
+              shared: { excerpts: [], renderedContext: 'SHARED-CAPTURE', renderedUnits: 20 },
+            }
+          : assembly;
+      },
+      confirm: seam.confirm,
+    };
+    const judge = scriptedJudge();
+
+    await new EntityDedupStage().run({ ...context(judge), evidence });
+
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatchObject({
+      route: 'entity_merge',
+      use: 'entity_judgment',
+      promptingSourceId: EPISODE_ID,
+    });
+    expect(asked[0]?.sides.map((side) => side.names)).toEqual(
+      expect.arrayContaining([['Aion', 'aion-core'], ['Aion Project']]),
+    );
+    // The pair's own description is reserved beside the route's prompts, so the excerpts the seam
+    // fits still fit once both passes send the whole input.
+    expect(asked[0]?.reservedUnits).toBeGreaterThan(ENTITY_MERGE_ROUTE_RESERVE + 200);
+    expect(judge.calls.length).toBeGreaterThan(0);
+    for (const call of judge.calls) {
+      const prompt = call.messages.map((message) => message.content).join('\n');
+      expect(prompt.split('source context')).toHaveLength(3);
+      expect(prompt.split('SHARED-CAPTURE')).toHaveLength(2);
+    }
   });
 
   it('does not complete the entity stage on a negative decision whose evidence moved', async () => {

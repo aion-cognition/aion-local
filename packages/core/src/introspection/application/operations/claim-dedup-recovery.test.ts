@@ -295,6 +295,7 @@ function assembled(): JudgmentAssembly {
     status: 'assembled',
     sides: [
       {
+        evidence: 'whole_sources',
         nodeId: 'subject-a',
         statement: 'one',
         requiredSources: [source],
@@ -303,6 +304,7 @@ function assembled(): JudgmentAssembly {
         renderedUnits: MARKER.length + 3,
       },
       {
+        evidence: 'whole_sources',
         nodeId: 'neighbor-a',
         statement: 'two',
         requiredSources: [source],

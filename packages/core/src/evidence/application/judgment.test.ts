@@ -5,7 +5,12 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { verifyEvidenceRevision } from './dependencies.js';
-import { assembleJudgmentEvidence, type JudgmentPair } from './judgment.js';
+import {
+  assembleJudgmentEvidence,
+  type JudgmentPair,
+  type JudgmentSide,
+  type WholeSourceSide,
+} from './judgment.js';
 import { EvidenceResolver } from './resolver.js';
 import { SqliteStore } from '../../infrastructure/sqlite/database.js';
 import type { ReflectionContent } from '../../reflection/domain/content.js';
@@ -31,6 +36,14 @@ function emptyDriver(): Driver {
 
 function content(text: string): ReflectionContent {
   return { turns: [{ role: 'user', text, occurred_at: NOW.toISOString() }] };
+}
+
+/** A claim side, which reads its sources whole. */
+function whole(side: JudgmentSide): WholeSourceSide {
+  if (side.evidence !== 'whole_sources') {
+    throw new Error('a claim side read excerpts');
+  }
+  return side;
 }
 
 function pair(reservedUnits = 0): JudgmentPair {
@@ -94,10 +107,12 @@ describe('judgment evidence assembly', () => {
     if (assembly.status !== 'assembled') {
       return;
     }
-    expect(assembly.sides[0].requiredSources.map((source) => source.sourceId)).toEqual([
+    expect(whole(assembly.sides[0]).requiredSources.map((source) => source.sourceId)).toEqual([
       'episode-old',
     ]);
-    expect(assembly.sides[1].requiredSources[0]?.text).toContain('claim-new was stated here');
+    expect(whole(assembly.sides[1]).requiredSources[0]?.text).toContain(
+      'claim-new was stated here',
+    );
     expect(assembly.revision.dependencies.length).toBeGreaterThan(0);
   });
 
@@ -119,9 +134,9 @@ describe('judgment evidence assembly', () => {
     });
     const assembly = await assembleJudgmentEvidence(deps, pair(), checkedContext());
 
-    expect(assembly.status === 'assembled' ? assembly.sides[0].requiredSources : []).toHaveLength(
-      2,
-    );
+    expect(
+      assembly.status === 'assembled' ? whole(assembly.sides[0]).requiredSources : [],
+    ).toHaveLength(2);
   });
 
   it('abstains with no assembled input when a required source is proved suppressed', async () => {
@@ -201,7 +216,7 @@ describe('judgment evidence assembly', () => {
     if (assembly.status !== 'assembled') {
       return;
     }
-    expect(assembly.sides[0].optionalSubjects).toEqual([]);
+    expect(whole(assembly.sides[0]).optionalSubjects).toEqual([]);
     expect(assembly.omitted.length).toBeGreaterThan(0);
     expect(assembly.omitted.every((issue) => !issue.required)).toBe(true);
   });

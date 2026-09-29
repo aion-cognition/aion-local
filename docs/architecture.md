@@ -126,6 +126,16 @@ no notion of episodes, cues, or memory packs beyond those primitives.
   acknowledgment that made the change — a forget, an orphan suppression, a family repair, and an
   applied or auto-closed supersession. A pair whose sides carry neither is not judged; the judge
   is not asked at all, and the work is reported as withheld with the scope that blocked it.
+
+  An entity pair is entitled to less of the first thing, because an entity's history only grows:
+  reading every source of both sides whole was a budget no well-known entity could meet. Each side
+  gets a bounded, disclosed selection instead (`entity-excerpts.ts`). Up to twelve sources are
+  nominated per side: the episode that prompted the comparison, then stated corrections, then
+  sources both entities share, then each side's newest. Each is shown as a window around the name
+  from one part, and that part is decoded alone and verified against its recorded digest. The
+  judge's input counts what was not read and what could not be shown, and says why. The censuses
+  above still gate the pair, and the revision still binds every scope and source consulted. Claim
+  pairs keep every source whole.
 - **`session/`**: `session-manager.ts`, identity-to-session-id resolution, cached per
   process, backed by `infrastructure/graph/sessions.ts`.
 

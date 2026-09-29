@@ -63,6 +63,7 @@ function readyEvidence(): JudgmentEvidence {
       Promise.resolve({
         status: 'assembled',
         sides: [0, 1].map((index) => ({
+          evidence: 'whole_sources',
           nodeId: pair.sides[index]!.nodeId,
           statement: pair.sides[index]!.statement,
           requiredSources: [],

@@ -108,7 +108,9 @@ function reserved(assembly: JudgmentAssembly): readonly (readonly [string, strin
     throw new Error(`expected an assembled judgment, got ${assembly.status}`);
   }
   return assembly.sides.flatMap((side) =>
-    side.requiredSources.map((source) => [source.sourceId, source.text] as const),
+    side.evidence === 'whole_sources'
+      ? side.requiredSources.map((source) => [source.sourceId, source.text] as const)
+      : [],
   );
 }
 
@@ -158,7 +160,9 @@ it('carries no residency into what the judge is handed', async () => {
   }
   // Not merely unused: the reserved source has no residency field to branch on, so nothing
   // downstream of here could make a decision turn on where the bytes are kept.
-  for (const source of assembly.sides.flatMap((side) => side.requiredSources)) {
+  for (const source of assembly.sides.flatMap((side) =>
+    side.evidence === 'whole_sources' ? side.requiredSources : [],
+  )) {
     expect(source).not.toHaveProperty('residency');
   }
 });

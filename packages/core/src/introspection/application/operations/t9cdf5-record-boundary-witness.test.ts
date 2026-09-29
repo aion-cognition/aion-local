@@ -44,6 +44,7 @@ afterEach(() => {
 
 function assembled(): JudgmentEvidenceOutcome {
   const side = {
+    evidence: 'whole_sources' as const,
     nodeId: 'subject',
     statement: 'one',
     requiredSources: [],

@@ -94,7 +94,7 @@ function describeSide(label: string, side: EntityMergeSide): string {
     `  also answers to: ${aliases}`,
     `  current label: ${side.type}`,
     `  readings observed: ${describeTypeCounts(side.typeCounts)}`,
-    `  described as: ${
+    `  described as (reflection's interpretation, not captured text): ${
       description === undefined || description.length === 0 ? NOTHING_RECORDED : description
     }`,
   ].join('\n');
