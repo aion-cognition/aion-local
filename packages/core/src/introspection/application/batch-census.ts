@@ -1,6 +1,8 @@
 import { BATCH_SETTLEMENT_OPERATION } from './operations/batch-settlement.js';
 import type { Config } from '../../infrastructure/config/schema.js';
+import { pendingReleases } from '../../infrastructure/providers/batch-release.js';
 import { providerKeyPresent } from '../../infrastructure/providers/routing.js';
+import { GENERATION_PROVIDERS } from '../../infrastructure/providers/types.js';
 import { waitingBatchWork } from '../../infrastructure/sqlite/batch-work.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { operationStats } from '../../infrastructure/sqlite/introspection-counters.js';
@@ -9,14 +11,15 @@ import { readSpendDay } from '../../infrastructure/sqlite/spend-ledger.js';
 import type { BatchBlock, BatchDemand } from '../domain/batch-settlement.js';
 
 /**
- * The batch lane's census, read from SQLite alone: the work rows, the pump's own run record, the
- * day's spend and which keys are set. Every input is durable, so the waits it reports survive a
+ * The batch lane's census, read from SQLite alone: the work rows, the deletions the ops ledger
+ * records as failed, the pump's own run record, the day's spend and which keys are set. Every input is durable, so the waits it reports survive a
  * restart, and none of it reaches a vendor, so a tick learns what the lane owes without asking
  * anyone whether a job finished.
  *
  * The rule for who can act mirrors the pump's own. Submission needs the selected provider's key
  * and headroom under the day's ceiling. Reading a job needs the key of the provider that took it,
- * whatever is selected now. Discarding never-sent work for the other provider needs neither.
+ * whatever is selected now, and so does retrying a deletion at that provider. Discarding
+ * never-sent work for the other provider needs neither.
  */
 
 function waitSince(oldestAt: string, checkedAt: number | undefined, now: Date): number {
@@ -40,9 +43,12 @@ export function readBatchDemand(db: SqliteHandle, config: Config, now: Date): Ba
       obsolete: 0,
       outstanding: 0,
       unreadable: 0,
+      releases: 0,
+      unkeyedReleases: 0,
       lastCheckedAt,
       localWaitMs: undefined,
       remoteWaitMs: undefined,
+      releaseWaitMs: undefined,
       availability: 'measured',
     };
   }
@@ -85,7 +91,25 @@ export function readBatchDemand(db: SqliteHandle, config: Config, now: Date): Ba
     oldestLocal = earlier(oldestLocal, group.oldestAt);
   }
 
+  // Every deletion is attempted inside a pump pass, so the pass's own stamp is when a failed one
+  // was last tried. The ledger's stamp stands in only where the pump has no run record.
+  let releases = 0;
+  let unkeyedReleases = 0;
+  let oldestFailure: string | undefined;
+  for (const provider of GENERATION_PROVIDERS) {
+    const pending = pendingReleases(db, provider);
+    if (!providerKeyPresent(config, provider)) {
+      unkeyedReleases += pending.length;
+      continue;
+    }
+    releases += pending.length;
+    for (const release of pending) {
+      oldestFailure = earlier(oldestFailure, release.failedAt);
+    }
+  }
+
   const checkedAt = lastCheckedAt === undefined ? undefined : Date.parse(lastCheckedAt);
+  const lastTried = lastCheckedAt ?? oldestFailure;
   return {
     sendable,
     blocked,
@@ -93,9 +117,15 @@ export function readBatchDemand(db: SqliteHandle, config: Config, now: Date): Ba
     obsolete,
     outstanding,
     unreadable,
+    releases,
+    unkeyedReleases,
     lastCheckedAt,
     localWaitMs: oldestLocal === undefined ? undefined : waitSince(oldestLocal, checkedAt, now),
     remoteWaitMs: oldestRemote === undefined ? undefined : waitSince(oldestRemote, checkedAt, now),
+    releaseWaitMs:
+      releases === 0 || lastTried === undefined
+        ? undefined
+        : Math.max(0, now.getTime() - Date.parse(lastTried)),
     availability: 'measured',
   };
 }

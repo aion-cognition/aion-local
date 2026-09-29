@@ -1,16 +1,19 @@
 /**
  * What the batch lane owes, and how much a reading calls for a run of its pump.
  *
- * The lane has two kinds of waiting work and they are not the same claim. Work nothing has sent is
- * local delay: a run sends it the tick it is chosen. Work a remote job holds is the vendor's time:
- * a run can only ask whether it finished, and asking again soon after the last answer buys
- * nothing. So never-sent work waits from when it was owed, and remote work waits from when it was
- * sent, and both wait at most from the lane's last check, which is what keeps a check that could
- * not help (a refused submission, a job still working) from being repeated on every tick.
+ * The lane has three kinds of waiting work and they are not the same claim. Work nothing has
+ * sent is local delay: a run sends it the tick it is chosen. Work a remote job holds is the
+ * vendor's time: a run can only ask whether it finished, and asking again soon after the last
+ * answer buys nothing. A settled job whose files the vendor would not delete is cleanup the lane
+ * still owes after its last row settled, since those files hold memory text until a retry removes
+ * them. Never-sent work waits from when it was owed and remote work from when it was sent, both
+ * at most from the lane's last check; a failed deletion waits from the pass that last tried it.
+ * That is what keeps a check that could not help (a refused submission, a job still working, a
+ * deletion refused again) from being repeated on every tick.
  *
  * Work no run can move is counted and scores nothing: never-sent work for a provider with no key,
- * never-sent work on a day whose ceiling is spent, and remote work whose provider key is gone.
- * Choosing the pump for any of those would take a tick and make no progress.
+ * never-sent work on a day whose ceiling is spent, and remote work or a deletion whose provider
+ * key is gone. Choosing the pump for any of those would take a tick and make no progress.
  */
 
 export type BatchBlock = 'missing_key' | 'spent_ceiling';
@@ -31,12 +34,18 @@ export type BatchDemand = {
   readonly outstanding: number;
   /** Rows a remote job holds whose provider key is gone. Nothing reads them until it is back. */
   readonly unreadable: number;
+  /** Settled jobs whose files a deletion at the vendor failed to remove, with that key present. */
+  readonly releases: number;
+  /** Failed deletions whose provider key is gone, so no run can retry them yet. */
+  readonly unkeyedReleases: number;
   /** When the pump last ran, from its durable run record. Undefined when it never has. */
   readonly lastCheckedAt: string | undefined;
   /** How long the oldest sendable or obsolete row has waited since it was owed or last checked. */
   readonly localWaitMs: number | undefined;
   /** How long the oldest readable remote job has waited since it was sent or last checked. */
   readonly remoteWaitMs: number | undefined;
+  /** How long the retryable deletions have waited since the pass that last tried them. */
+  readonly releaseWaitMs: number | undefined;
   readonly availability: 'measured' | 'unavailable';
   readonly diagnostic?: string;
 };
@@ -52,9 +61,12 @@ export const NEUTRAL_BATCH_DEMAND: BatchDemand = {
   obsolete: 0,
   outstanding: 0,
   unreadable: 0,
+  releases: 0,
+  unkeyedReleases: 0,
   lastCheckedAt: undefined,
   localWaitMs: undefined,
   remoteWaitMs: undefined,
+  releaseWaitMs: undefined,
   availability: 'unavailable',
   diagnostic: 'the batch lane was not read on this tick',
 };
@@ -86,6 +98,9 @@ export function batchSettlementRelevance(
   }
   if (demand.outstanding > 0) {
     waits.push(demand.remoteWaitMs ?? 0);
+  }
+  if (demand.releases > 0) {
+    waits.push(demand.releaseWaitMs ?? 0);
   }
   if (waits.length === 0) {
     return 0;

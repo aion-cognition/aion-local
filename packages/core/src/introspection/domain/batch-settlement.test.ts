@@ -52,6 +52,13 @@ describe('batch settlement relevance', () => {
     ).toBeCloseTo(0.25);
   });
 
+  it('scores a failed vendor deletion as owed work once no row is left', () => {
+    expect(
+      batchSettlementRelevance(lane({ releases: 1, releaseWaitMs: HOUR_MS }), SCALES),
+    ).toBeCloseTo(0.5);
+    expect(batchSettlementRelevance(lane({ unkeyedReleases: 1 }), SCALES)).toBe(0);
+  });
+
   it('scores nothing for work no run can move', () => {
     const stuck = lane({
       blocked: 10,

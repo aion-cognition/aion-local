@@ -16,14 +16,20 @@ import type { Config } from '../../infrastructure/config/schema.js';
 import type { Logger } from '../../infrastructure/logging/logger.js';
 import type { BatchWorkHandler } from '../../infrastructure/providers/batch-adapter.js';
 import {
+  OPENAI_BATCH_ID,
   openAiBatchApi,
   outputLine,
   responsesAnswer,
   type RecordedCall,
 } from '../../infrastructure/providers/test-support/openai-batch-api.fixture.js';
 import type { Provider } from '../../infrastructure/providers/types.js';
-import { enqueueBatchWork, readBatchWork } from '../../infrastructure/sqlite/batch-work.js';
+import {
+  enqueueBatchWork,
+  readBatchWork,
+  waitingBatchWork,
+} from '../../infrastructure/sqlite/batch-work.js';
 import { SqliteStore, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
+import { getLedgerEntry } from '../../infrastructure/sqlite/ops-ledger.js';
 import { beginSubstratePairing } from '../../infrastructure/sqlite/publication-control.js';
 import { NEUTRAL_GRAPH_HEALTH, type HealthSnapshot } from '../domain/health.js';
 import type { IntrospectionOperation, OperationOutcome } from '../domain/operation.js';
@@ -32,7 +38,8 @@ import { healthFixture } from '../domain/test-support/health.fixture.js';
 /**
  * The batch pump inside the real scheduler, one ordinary tick at a time, while other maintenance
  * keeps asking for every tick. Owed work has to be sent and later settled by ticks nobody forced,
- * within a bounded number of them; an empty lane, and a lane no run can move, must never take one.
+ * within a bounded number of them, and so does the cleanup a settled job still owes the vendor; an
+ * empty lane, and a lane no run can move, must never take one.
  * The lane is read by the same census a live tick takes; only the graph readings are a fixture.
  */
 
@@ -133,8 +140,25 @@ async function tick(introspector: Introspector, count: number): Promise<(string 
   return ran;
 }
 
+/** Ticks until the condition holds, at most `limit` of them, and returns which operation ran on each. */
+async function tickUntil(
+  introspector: Introspector,
+  done: () => boolean,
+  limit: number,
+): Promise<(string | undefined)[]> {
+  const ran: (string | undefined)[] = [];
+  while (!done() && ran.length < limit) {
+    ran.push(...(await tick(introspector, 1)));
+  }
+  return ran;
+}
+
 function oweTen(): void {
-  for (const workKey of KEYS) {
+  oweFirst(KEYS.length);
+}
+
+function oweFirst(count: number): void {
+  for (const workKey of KEYS.slice(0, count)) {
     enqueueBatchWork(db, {
       workKey,
       substrateId,
@@ -209,6 +233,45 @@ describe('the batch pump under contested scheduling', () => {
     expect(ran).not.toContain(BATCH_SETTLEMENT_OPERATION);
     expect(calls).toEqual([]);
     expect(states().every((state) => state === 'pending')).toBe(true);
+  });
+
+  it('retries a vendor deletion that failed after the last row settled, on a later ordinary tick', async () => {
+    const [only = ''] = KEYS;
+    const remote = openAiBatchApi({
+      statuses: ['completed'],
+      output: [outputLine(only, responsesAnswer('{"description":"fresh"}'))],
+      deleteFailures: 1,
+    });
+    ({ calls } = remote);
+    vi.stubGlobal('fetch', remote.impl);
+    oweFirst(1);
+    const release = (): unknown =>
+      getLedgerEntry(db, `batch_release:openai:${OPENAI_BATCH_ID}`)?.summary;
+    const introspector = engine([...BUSY, pump()]);
+
+    const toSettle = await tickUntil(
+      introspector,
+      () => readBatchWork(db, only)?.state === 'applied',
+      2 * SPAN,
+    );
+    expect(readBatchWork(db, only)?.state).toBe('applied');
+    expect(toSettle.filter((name) => name === BATCH_SETTLEMENT_OPERATION)).toHaveLength(2);
+    // The answer is applied and no row is left, but the vendor still holds the job's files.
+    expect(waitingBatchWork(db, substrateId)).toEqual([]);
+    expect(release()).toMatchObject({ batchId: OPENAI_BATCH_ID, released: false });
+
+    const toRelease = await tickUntil(
+      introspector,
+      () => (release() as { released?: unknown } | undefined)?.released === true,
+      SPAN,
+    );
+    expect(release()).toMatchObject({ released: true });
+    expect(toRelease.at(-1)).toBe(BATCH_SETTLEMENT_OPERATION);
+    expect(toRelease.slice(0, -1).every((name) => name?.startsWith('busy_'))).toBe(true);
+
+    // Nothing is owed any more, so the pump yields every tick after.
+    const after = await tick(introspector, 2 * SPAN);
+    expect(after).not.toContain(BATCH_SETTLEMENT_OPERATION);
   });
 
   it('never outranks a structural emergency, however long the work has waited', async () => {

@@ -11,6 +11,7 @@ import type { GenerationProvider } from '../../infrastructure/providers/types.js
 import { enqueueBatchWork, markBatchSubmitted } from '../../infrastructure/sqlite/batch-work.js';
 import { SqliteStore, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { recordOperationRun } from '../../infrastructure/sqlite/introspection-counters.js';
+import { markLedgerApplied } from '../../infrastructure/sqlite/ops-ledger.js';
 import { beginSubstratePairing } from '../../infrastructure/sqlite/publication-control.js';
 import { reserveGenerationSpend } from '../../infrastructure/sqlite/spend-ledger.js';
 
@@ -153,6 +154,32 @@ describe('the batch lane census', () => {
       blocked: 1,
       blockedBy: 'spent_ceiling',
       localWaitMs: undefined,
+    });
+  });
+
+  it('counts a settled job whose vendor files could not be deleted, from the pass that tried', () => {
+    markLedgerApplied(db, 'batch_release:openai:batch_done', {
+      batchId: 'batch_done',
+      released: false,
+    });
+    markLedgerApplied(db, 'batch_release:openai:batch_clean', {
+      batchId: 'batch_clean',
+      released: true,
+    });
+    const tried = new Date(NOW.getTime() - 30 * MINUTE_MS);
+    recordOperationRun(db, BATCH_SETTLEMENT_OPERATION, tried.toISOString());
+
+    expect(readBatchDemand(db, OPENAI_ONLY, NOW)).toMatchObject({
+      sendable: 0,
+      outstanding: 0,
+      releases: 1,
+      unkeyedReleases: 0,
+      releaseWaitMs: 30 * MINUTE_MS,
+    });
+    expect(readBatchDemand(db, config('openai', {}), NOW)).toMatchObject({
+      releases: 0,
+      unkeyedReleases: 1,
+      releaseWaitMs: undefined,
     });
   });
 

@@ -6,6 +6,7 @@ import {
   submitBatchWork,
   type BatchWorkHandler,
 } from '../../../infrastructure/providers/batch-adapter.js';
+import { pendingReleases } from '../../../infrastructure/providers/batch-release.js';
 import {
   PROVIDER_KEY_ENV_VARS,
   unavailableReason,
@@ -128,22 +129,39 @@ export function batchSettlementOperation(
       // Consume first. An answer already in hand is worth more than a request not yet sent, and
       // a tick the signal cuts short leaves the sending rather than the settling undone.
       let consumed = EMPTY_CONSUME;
+      let released = 0;
+      let unreleased = 0;
       const unread: string[] = [];
       for (const provider of GENERATION_PROVIDERS) {
-        if (outstandingBatchIds(ctx.db, substrateId, provider).length === 0) {
+        // A failed deletion outlives the rows it came from, so a provider with nothing outstanding
+        // can still owe one. Consumption retries those before it reads any job.
+        const owedReleases = pendingReleases(ctx.db, provider);
+        const outstanding = outstandingBatchIds(ctx.db, substrateId, provider).length;
+        if (outstanding === 0 && owedReleases.length === 0) {
           continue;
         }
         const apiKey = keyOf(ctx.config, provider);
         if (apiKey === undefined) {
-          const held = batchWorkCounts(ctx.db, substrateId, provider).submitted;
           const key = PROVIDER_KEY_ENV_VARS[provider];
-          unread.push(`${String(held)} outstanding at ${provider} stay unread without ${key}`);
+          if (outstanding > 0) {
+            const held = batchWorkCounts(ctx.db, substrateId, provider).submitted;
+            unread.push(`${String(held)} outstanding at ${provider} stay unread without ${key}`);
+          }
+          if (owedReleases.length > 0) {
+            unread.push(
+              `${String(owedReleases.length)} settled jobs' files at ${provider} stay ` +
+                `undeleted without ${key}`,
+            );
+          }
           continue;
         }
         consumed = addConsumeReports(
           consumed,
           await consumeBatchWork({ ...shared, provider, client: { apiKey } }),
         );
+        const stillOwed = new Set(pendingReleases(ctx.db, provider).map((entry) => entry.batchId));
+        released += owedReleases.filter((entry) => !stillOwed.has(entry.batchId)).length;
+        unreleased += stillOwed.size;
       }
 
       const selectedKey = keyOf(ctx.config, selected);
@@ -158,6 +176,12 @@ export function batchSettlementOperation(
 
       const counts = batchWorkCounts(ctx.db, substrateId);
       const notes = [...unread];
+      if (released > 0) {
+        notes.push(`${String(released)} settled jobs' files deleted at the vendor on a retry`);
+      }
+      if (unreleased > 0) {
+        notes.push(`${String(unreleased)} settled jobs' files still wait for deletion`);
+      }
       if (selectedKey === undefined) {
         notes.push(`nothing submitted: ${unavailableReason({ provider: selected })}`);
       }
@@ -179,8 +203,8 @@ export function batchSettlementOperation(
 
       const touched = consumed.applied + consumed.discarded + consumed.returned + consumed.failed;
       return {
-        status: touched === 0 && submitted.submitted === 0 ? 'noop' : 'applied',
-        itemsProcessed: touched + submitted.submitted,
+        status: touched === 0 && submitted.submitted === 0 && released === 0 ? 'noop' : 'applied',
+        itemsProcessed: touched + submitted.submitted + released,
         itemsAffected: consumed.applied,
         detail:
           `${String(consumed.applied)} applied, ${String(consumed.discarded)} discarded as stale, ` +
