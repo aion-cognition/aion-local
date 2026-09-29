@@ -1,5 +1,6 @@
 import {
   bootstrapBackbone,
+  INTEGRATE_JOB_TYPE,
   openSqliteHandle,
   runGraphMigrations,
   type SqliteHandle,
@@ -10,7 +11,14 @@ import {
   stopNeo4jHarness,
   type Neo4jHarness,
 } from '@aion/core/infrastructure/graph/test-support/neo4j-harness.fixture.js';
-import { listReflectionJobs } from '@aion/core/infrastructure/sqlite/reflection-queue.js';
+import {
+  testGenerationEnv,
+  testGenerationKey,
+} from '@aion/core/infrastructure/providers/test-support/generation-provider.js';
+import {
+  listReflectionJobs,
+  type ReflectionJob,
+} from '@aion/core/infrastructure/sqlite/reflection-queue.js';
 import { bootstrapService, MCP_PATH, type AionService } from '@aion/mcp';
 import { ReflectionOutputSchema } from '@aion/protocol';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -25,11 +33,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runLast } from './last.js';
 
 /**
- * The authorized key, read the way `testGenerationProvider` reads it. Passed only into the
- * service environment this fixture builds: the literal it used to build had no key field at
- * all, so a keyed run of this root generated nothing and discharged nothing.
+ * Whether this run can enrich at all. The service generates on the route the shell selected
+ * (`testGenerationEnv`), and with no key for that route its enrichment waits for one by design.
+ * The pack this file compares does not depend on enrichment, so a keyless run waits for the queue
+ * to go quiet rather than to empty.
  */
-const ANTHROPIC_API_KEY = (process.env.AION_ANTHROPIC_API_KEY ?? '').trim() || undefined;
+const KEYLESS = testGenerationKey() === '';
 
 /**
  * `aion last --json` must reproduce, byte-for-byte on content, the pack the MCP client
@@ -73,10 +82,25 @@ function pause(ms: number): Promise<void> {
 }
 
 /** Waits out the queue the reflection call filled, so nothing publishes during the recall. */
+/**
+ * With a key the queue empties. Without one it goes quiet instead: the worker gives back the
+ * enrichment it could not run, unspent, and no row is claimed.
+ */
+function quiet(jobs: readonly ReflectionJob[]): boolean {
+  if (!KEYLESS) {
+    return jobs.length === 0;
+  }
+  return (
+    jobs.every(
+      (job) => job.jobType === INTEGRATE_JOB_TYPE && job.claimedAt === null && job.attempts === 0,
+    ) && jobs.some((job) => (job.lastError ?? '').includes('has nowhere to run'))
+  );
+}
+
 async function settled(): Promise<void> {
   const deadline = Date.now() + 240_000;
   while (Date.now() < deadline) {
-    if (listReflectionJobs(migrationDb).length === 0) {
+    if (quiet(listReflectionJobs(migrationDb))) {
       // One more beat for the completion's own publication to land after the row goes.
       await pause(2_000);
       return;
@@ -103,7 +127,7 @@ beforeAll(async () => {
     AION_LOG_FILE: join(dir, 'aion-mcp.jsonl'),
     AION_LOG_LEVEL: 'debug',
     AION_MCP_PORT: String(port),
-    ...(ANTHROPIC_API_KEY === undefined ? {} : { AION_ANTHROPIC_API_KEY: ANTHROPIC_API_KEY }),
+    ...testGenerationEnv(),
   });
   await started.service.listen();
   const url = new URL(`http://127.0.0.1:${String(started.service.port)}${MCP_PATH}`);

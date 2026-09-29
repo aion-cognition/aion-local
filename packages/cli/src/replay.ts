@@ -10,6 +10,7 @@ import {
   appliedGraphSchemaVersion,
   PIPELINE_VERSION,
   ProviderRouter,
+  publishBackboneBirth,
   readMemberName,
   recordLifecycleEvent,
   ReflectionOrchestrator,
@@ -309,6 +310,13 @@ async function runReplay(substrate: Substrate, flags: ReplayFlags): Promise<numb
   }
 
   const backbone = await bootstrapBackbone(driver, { memberName });
+  // Two of the shipped stages write through the protocol and nowhere else: narration and the
+  // context-vector recomputation. Composed without a coordinator they refuse on every episode,
+  // and a replay would report a completed pass over a pipeline missing its last two stages.
+  const publications = await lifecyclePublications({ connection, db, logger });
+  // A replay can run on a substrate no service has started. The bootstrap cannot count the
+  // backbone it mints, so without this every replayed pair naming the backbone is withheld.
+  await publishBackboneBirth({ driver, db, publications });
   const provider = new ProviderRouter({
     config,
     recordApiCall: new ApiUsageRecorder(db, logger).recordApiCall,
@@ -329,11 +337,7 @@ async function runReplay(substrate: Substrate, flags: ReplayFlags): Promise<numb
         db,
         provider,
         logger,
-        // Two of the shipped stages write through the protocol and nowhere else: narration and
-        // the context-vector recomputation. Composed without a coordinator they refuse on every
-        // episode, and a replay would report a completed pass over a pipeline missing its last
-        // two stages.
-        publications: await lifecyclePublications({ connection, db, logger }),
+        publications,
       },
       reflectionStages(config),
     ),
