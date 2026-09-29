@@ -12,7 +12,7 @@ export { wouldAutoApply } from './domain/merge-shadow.js';
 export { observeHealth } from './application/observe.js';
 
 export { decide } from './domain/decide.js';
-export type { Decision, OperationCandidate } from './domain/decide.js';
+export type { OperationCandidate } from './domain/decide.js';
 
 export type { HealthSnapshot, OperationEffectiveness } from './domain/health.js';
 
