@@ -167,8 +167,9 @@ function recallDeps(): RecallDeps {
 }
 
 /**
- * Composed as the service composes it, publication coordinator included: each extraction stage
- * records its nodes' sources through it and fails the run without it.
+ * With the publication coordinator the service passes: each extraction stage records its nodes'
+ * sources through it and fails the run without it. The service also passes a judgment evidence
+ * seam, and this does not, so a judging stage here reads its evidence for itself.
  */
 function orchestrator(stages = reflectionStages(config)): ReflectionOrchestrator {
   return new ReflectionOrchestrator(
@@ -366,6 +367,12 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('gate item 3: a closed session leaves a nar
  * here. The shipped read is held to what the host owns: retrieval reached what reflection built,
  * and nothing was served that retrieval did not offer. The bucket and rendering checks run on the
  * no-model `raw` read, where the existing ranking decides and the same assembly renders the pack.
+ *
+ * The raw read is not asked to serve the session narrative. Its vector leg takes its k nearest
+ * before any predicate runs, and the narrative competes there with its own episode, turns and
+ * decision, which restate the same sentence. Outside the k it arrives by recency alone and is
+ * refused as unmeasured, so requiring it would gate on how near-duplicates split the slots. The
+ * default read's `retrieved` is the narrative check.
  */
 describe.skipIf(REMOTE_JUDGE_ABSENT)('gate item 4: recall serves what reflection built', () => {
   let pack: MemoryPack;
@@ -373,9 +380,9 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('gate item 4: recall serves what reflection
   let ranked: MemoryPack;
 
   beforeAll(async () => {
-    // A chunk revision is published without a vector and embedded by the backfill the service's
-    // worker and maintenance run. Until then the ranking drops it as unmeasured, so the backfill
-    // runs here before either read, as it would have on a running service.
+    // A chunk revision is published without a vector. The service embeds it at the next
+    // maintenance `vector_backfill` tick or worker start, and until then the ranking refuses it as
+    // unmeasured. Both reads drain first, so they read the settled state rather than that window.
     await drainAcceptedVectors(harness.driver, provider);
     pack = await handleRecall(
       {
@@ -403,18 +410,14 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('gate item 4: recall serves what reflection
     expect(flatten(pack).filter((item) => !retrieved.has(item.id))).toEqual([]);
   });
 
-  it('fills the facts and narratives buckets from the ranking', async () => {
+  it('fills the facts bucket from the ranking', async () => {
     const extracted = await extractedIds();
     const factIds = (ranked.facts ?? []).map((item) => item.id);
-    const narrativeIds = (ranked.narratives ?? []).map((item) => item.id);
-    const [narrativeId] = await narrativeIdsInSession(harness.driver, WORK_SESSION);
 
     expect(factIds.some((id) => extracted.has(id))).toBe(true);
-    expect(narrativeIds).toContain(narrativeId);
 
-    // The pack the agent reads carries them too, not only the structured buckets.
+    // The pack the agent reads carries them too, not only the structured bucket.
     expect(ranked.rendered_text).toContain('## Facts');
-    expect(ranked.rendered_text).toContain('## Narratives');
   });
 
   it('renders an entity as its name and the claim the episode made about it', () => {
