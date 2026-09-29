@@ -28,9 +28,8 @@ export type AnthropicClientOptions = {
 };
 
 /**
- * The test-side caller of the Anthropic Messages API: the extraction quality harness, which
- * compares this route against the local one, and the test-support provider integration tests
- * reach for. It keeps a model per request rather than pinning one, which is what the harness
+ * The test-side caller of the Anthropic Messages API, which Anthropic-route integration tests
+ * and the extraction faithfulness tests reach for. It keeps a model per request rather than pinning one, which is what the harness
  * needs to name the model it is measuring.
  *
  * The transport is the production provider's, so a fix to the parser or the retry reaches both.

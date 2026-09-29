@@ -14,15 +14,17 @@ import {
 /**
  * The daily spending backstop, consulted before a request leaves the machine.
  *
- * Both routes hold against the same day's ceiling: an ordinary Messages call and a batch
- * submission compete for the same dollars, so a substrate cannot stay under the number on each
+ * Both routes hold against the same day's ceiling: an ordinary call and a batch submission, on
+ * either provider, compete for the same dollars, so a substrate cannot stay under the number on each
  * route and over it in total. The hold is the most the dispatch can cost; what it actually cost
  * replaces that as soon as the answer is in hand, which is what keeps a bound from locking up
  * headroom it never spent. A model the price table does not carry is bounded at the fallback card
  * rather than let through, so an unlisted model cannot spend a ceiling it is never measured on.
  *
- * Exhaustion is not an error condition anything retries. It is generation being unavailable, the
- * same shape as a substrate with no key, so background work queues and cues go raw.
+ * Exhaustion is not an error condition that spends attempts. It is generation being unavailable,
+ * the same shape as a substrate with no key, so background work queues without spending an
+ * attempt and recall serves its ranking unassessed. The worker's deferred recheck resumes the
+ * work once the UTC day turns.
  */
 
 /**
