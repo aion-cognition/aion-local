@@ -435,7 +435,11 @@ describe('generation with no key', () => {
   it('puts the job back without spending an attempt, and pauses claiming', async () => {
     const runner = new StubRunner();
     runner.outcome = (): ReflectionRun => {
-      throw new GenerationUnavailableError('cognitive');
+      // The reason the routing layer gives when the selected provider has no key.
+      throw new GenerationUnavailableError(
+        'cognitive',
+        'AION_GENERATION_PROVIDER=openai needs AION_OPENAI_API_KEY',
+      );
     };
     const started = build(runner, { breakerCooldownMs: 60_000 });
 
@@ -448,7 +452,7 @@ describe('generation with no key', () => {
     const held = getReflectionJob(store.db, jobId);
     expect(held?.attempts).toBe(0);
     expect(held?.claimedBy).toBeNull();
-    expect(held?.lastError).toContain('AION_ANTHROPIC_API_KEY');
+    expect(held?.lastError).toContain('AION_OPENAI_API_KEY');
     // No backoff timer holds it either: the claim went straight back.
     expect(started.retrying).toBe(0);
     // Not paused: the breaker is for failures, and nothing here failed.

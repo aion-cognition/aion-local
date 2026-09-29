@@ -28,21 +28,23 @@ export function summarizeErrorBody(body: string): string {
 }
 
 /**
- * Generation was asked for with no Anthropic key set.
+ * Generation was asked for and has nowhere to run: the selected provider has no key, or the day's
+ * ceiling is spent (below).
  *
  * It is a distinct type because the callers answer it differently from a failure: the reflection
- * worker puts the job back without spending an attempt, and recall drops to the raw-query path.
+ * worker puts the job back without spending an attempt, and recall serves its ranking unassessed
+ * (the raw-query cues under the `cues` mode).
  * Nothing retries it on a timer. A key arrives by an operator editing `.env` and restarting, so
  * the honest report is a queue that is not draining and a status line that says why.
  *
- * `reason` is for the other way generation has nowhere to run, below. The default states the
- * missing key, which is what every caller that names only a surface means.
+ * `reason` says which: the routing layer names the selected provider's missing key, and the
+ * ceiling names the day's spend. The default is for a caller that names only a surface.
  */
 export class GenerationUnavailableError extends Error {
   constructor(surface: string, reason?: string) {
     super(
       reason ??
-        `generation for "${surface}" needs AION_ANTHROPIC_API_KEY; the work stays queued until one is set`,
+        `generation for "${surface}" has nowhere to run; the work stays queued until it does`,
     );
     this.name = 'GenerationUnavailableError';
   }
@@ -52,8 +54,8 @@ export class GenerationUnavailableError extends Error {
  * The day's generation spending ceiling is reached.
  *
  * The same type as a missing key, deliberately: every caller already answers that one correctly.
- * Background work goes back on the queue without spending an attempt, cues fall back to the raw
- * query, and nothing throws an ordinary failure into a pipeline that would retry it against the
+ * Background work goes back on the queue without spending an attempt, recall serves its ranking
+ * unassessed, and nothing throws an ordinary failure into a pipeline that would retry it against the
  * same exhausted ceiling. What clears it is a new UTC day or a higher ceiling, neither of which a
  * retry timer can bring about.
  */
