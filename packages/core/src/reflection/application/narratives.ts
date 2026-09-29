@@ -96,12 +96,9 @@ export type NarrativeSettings = {
 };
 
 /** Keeps the legacy renderer's route-specific input sizes. */
-function settingsOf(options: NarrativeOptions, provider: Provider): NarrativeSettings {
+function settingsOf(options: NarrativeOptions): NarrativeSettings {
   const now = options.now ?? new Date();
-  const scale = narrativeScale(
-    provider.route !== undefined,
-    options.reflection ?? DEFAULTS.reflection,
-  );
+  const scale = narrativeScale(options.reflection ?? DEFAULTS.reflection);
   return {
     ...(options.chunkPolicy === undefined ? {} : { chunkPolicy: options.chunkPolicy }),
     model: options.model ?? DEFAULTS.anthropic.model,
@@ -173,7 +170,7 @@ export async function closeSessionNarrative(
   sessionId: string,
   options: NarrativeOptions = {},
 ): Promise<NarrativeResult> {
-  return narrateSession(deps, sessionId, settingsOf(options, deps.provider), false);
+  return narrateSession(deps, sessionId, settingsOf(options), false);
 }
 
 /**
@@ -184,7 +181,7 @@ export async function sweepIdleSessions(
   deps: NarrativeDeps,
   options: IdleSweepOptions = {},
 ): Promise<readonly NarrativeResult[]> {
-  const settings = settingsOf(options, deps.provider);
+  const settings = settingsOf(options);
   const idle = await findIdleSessions(deps.driver, {
     idleBefore: new Date(settings.now.getTime() - settings.idleMs),
     limit: options.limit ?? DEFAULTS.reflection.narrativeSweepLimit,
@@ -232,15 +229,12 @@ export class SessionNarrativeStage implements ReflectionStage {
       db: ctx.db,
       ...(ctx.publications === undefined ? {} : { publications: ctx.publications }),
     };
-    const settings = settingsOf(
-      {
-        ...this.#options,
-        now: ctx.now,
-        occurredAt: ctx.occurredAt,
-        ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
-      },
-      ctx.provider,
-    );
+    const settings = settingsOf({
+      ...this.#options,
+      now: ctx.now,
+      occurredAt: ctx.occurredAt,
+      ...(ctx.signal === undefined ? {} : { signal: ctx.signal }),
+    });
     const result = await narrateSession(deps, ctx.episode.sessionId, settings, true);
 
     if (result.status === 'created') {

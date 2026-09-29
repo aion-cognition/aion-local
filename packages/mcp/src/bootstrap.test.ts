@@ -92,8 +92,6 @@ const configured: Config = {
     maxContradictionNeighbors: 4,
     maxContradictionJudgments: 9,
     narrativeIdleMinutes: 31,
-    maxNarrativeEpisodes: 41,
-    maxNarrativeEpisodeChars: 2_100,
     keyedNarrativeEpisodes: 121,
     keyedNarrativeSentences: 13,
     keyedNarrativeEpisodeChars: 4_100,

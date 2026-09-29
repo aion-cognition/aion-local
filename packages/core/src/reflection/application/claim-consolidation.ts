@@ -136,11 +136,8 @@ type ConsolidationSettings = {
 };
 
 /** Sized off the route the same way every other synthesis source is. */
-function settingsOf(options: ConsolidationOptions, provider: Provider): ConsolidationSettings {
-  const scale = narrativeScale(
-    provider.route !== undefined,
-    options.reflection ?? DEFAULTS.reflection,
-  );
+function settingsOf(options: ConsolidationOptions): ConsolidationSettings {
+  const scale = narrativeScale(options.reflection ?? DEFAULTS.reflection);
   return {
     model: options.model ?? DEFAULTS.anthropic.model,
     timeoutMs: options.timeoutMs ?? DEFAULTS.reflection.stageTimeoutMs,
@@ -409,7 +406,7 @@ export async function consolidateClaims(
   deps: ConsolidationDeps,
   options: ConsolidationOptions = {},
 ): Promise<ConsolidationReport> {
-  const settings = settingsOf(options, deps.provider);
+  const settings = settingsOf(options);
   const profiles = await readClaimCommunityProfiles(deps.driver);
   const floor = derivedDensityFloor(profiles.map((profile) => profile.size));
 

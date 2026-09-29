@@ -167,16 +167,11 @@ export const REFLECTION_KNOBS = {
   maxContradictionJudgments: ['AION_REFLECTION_MAX_CONTRADICTION_JUDGMENTS', positiveInt, 24],
   /** Minutes, because that is the unit the pinned trigger is stated in (30 min idle). */
   narrativeIdleMinutes: ['AION_REFLECTION_NARRATIVE_IDLE_MINUTES', positiveInt, 30],
-  maxNarrativeEpisodes: ['AION_REFLECTION_MAX_NARRATIVE_EPISODES', positiveInt, 40],
-  maxNarrativeEpisodeChars: ['AION_REFLECTION_MAX_NARRATIVE_EPISODE_CHARS', positiveInt, 2_000],
-  // The three above are what qwen3:8b was measured on, and these three are what the same
-  // synthesis reads and writes when generation routes to a hosted model. Inert on the local
-  // route: `narrativeScale` reads one set or the other off the resolved route, so a substrate
-  // with no key never sees these values whatever they are set to. Three times the episodes and
-  // twice the sentences, sized to Haiku rather than measured (GPT-6 Luna's window is larger
+  // How much of a session one synthesis reads and how long its answer runs, for every synthesis
+  // source (`narrativeScale`). Sized to Haiku rather than measured (GPT-6 Luna's window is larger
   // still): Haiku takes a 120-episode session in one call and answers at twelve sentences without
-  // strain, where the local model starts repeating itself. The character cap doubles with them,
-  // because a wider window that clips each episode harder trades one loss for another.
+  // strain. They were three times the episodes, twice the sentences and twice the characters of
+  // the local route's set, which went with that route.
   keyedNarrativeEpisodes: ['AION_KEYED_NARRATIVE_EPISODES', positiveInt, 120],
   keyedNarrativeSentences: ['AION_KEYED_NARRATIVE_SENTENCES', positiveInt, 12],
   keyedNarrativeEpisodeChars: ['AION_KEYED_NARRATIVE_EPISODE_CHARS', positiveInt, 4_000],

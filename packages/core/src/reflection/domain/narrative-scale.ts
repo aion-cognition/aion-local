@@ -1,11 +1,9 @@
-import { NARRATIVE_MAX_SENTENCES } from './narrative.js';
 import type { Config } from '../../infrastructure/config/schema.js';
 
 /**
- * How much of a session one synthesis reads and how long its answer runs. The local numbers are
- * what qwen3:8b was measured on; the keyed ones are sized for a hosted model (Haiku first, and
- * GPT-6 Luna's window is larger). Both sets come from the knob table, so a deployment moves
- * either without a second rule appearing here.
+ * How much of a session one synthesis reads and how long its answer runs. The numbers are sized
+ * for a hosted model (Haiku first, and GPT-6 Luna's window is larger) and come from the knob
+ * table, so a deployment moves them without a second rule appearing here.
  */
 export type NarrativeScale = {
   readonly maxSourceEpisodes: number;
@@ -15,22 +13,13 @@ export type NarrativeScale = {
 
 /**
  * One rule for every synthesis source: the session narrative, the day and week rollups, and the
- * subject consolidation all size themselves off the route their generation resolved to.
- * `remote` is whether the provider carries a route at all, which every hosted provider does. An
- * absent route reads as local, so a test fake and a bare `OllamaProvider` get the small-model
- * numbers.
+ * subject consolidation all read the same sizes. There used to be a second, smaller set for a
+ * local generation route; every provider the service builds is hosted now.
  */
-export function narrativeScale(remote: boolean, reflection: Config['reflection']): NarrativeScale {
-  if (remote) {
-    return {
-      maxSourceEpisodes: reflection.keyedNarrativeEpisodes,
-      episodeChars: reflection.keyedNarrativeEpisodeChars,
-      maxSentences: reflection.keyedNarrativeSentences,
-    };
-  }
+export function narrativeScale(reflection: Config['reflection']): NarrativeScale {
   return {
-    maxSourceEpisodes: reflection.maxNarrativeEpisodes,
-    episodeChars: reflection.maxNarrativeEpisodeChars,
-    maxSentences: NARRATIVE_MAX_SENTENCES,
+    maxSourceEpisodes: reflection.keyedNarrativeEpisodes,
+    episodeChars: reflection.keyedNarrativeEpisodeChars,
+    maxSentences: reflection.keyedNarrativeSentences,
   };
 }
