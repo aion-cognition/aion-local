@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULTS } from '../../config/defaults.js';
+import { loadConfig } from '../../config/load-config.js';
 import { openSqliteHandle } from '../../sqlite/database.js';
 import { GenerationCeilingReachedError } from '../errors.js';
 import { ProviderRouter } from '../role-provider.js';
@@ -52,18 +53,26 @@ function ledgerFile(): string {
 }
 
 describe('campaignLedgerPath', () => {
-  it('reads AION_F3_CAMPAIGN_LEDGER when the campaign runner set one', () => {
+  it('shares a ledger without adding test settings to product configuration', () => {
     const path = ledgerFile();
-    vi.stubEnv('AION_F3_CAMPAIGN_LEDGER', path);
+    const env = {
+      TEST_AION_CAMPAIGN_LEDGER: path,
+      TEST_AION_FRAME_OVERRIDE: 'none',
+    };
+    for (const [name, value] of Object.entries(env)) {
+      vi.stubEnv(name, value);
+    }
     try {
       expect(campaignLedgerPath()).toBe(path);
+      expect(campaignFrameOverride()).toEqual({ none: true });
+      expect(loadConfig(env)).toEqual(DEFAULTS);
     } finally {
       vi.unstubAllEnvs();
     }
   });
 
   it('falls back to a unique, file-backed path rather than :memory: when unset', () => {
-    vi.stubEnv('AION_F3_CAMPAIGN_LEDGER', '');
+    vi.stubEnv('TEST_AION_CAMPAIGN_LEDGER', '');
     try {
       const first = campaignLedgerPath();
       const second = campaignLedgerPath();
@@ -77,7 +86,7 @@ describe('campaignLedgerPath', () => {
 
 describe('campaignFrameOverride', () => {
   it('selects the no-frame condition only on the literal value "none"', () => {
-    vi.stubEnv('AION_F3_FRAME_OVERRIDE', 'none');
+    vi.stubEnv('TEST_AION_FRAME_OVERRIDE', 'none');
     try {
       expect(campaignFrameOverride()).toEqual({ none: true });
     } finally {
@@ -87,7 +96,7 @@ describe('campaignFrameOverride', () => {
 
   it('leaves the shipped condition (frameOverride undefined) unset or on any other value', () => {
     expect(campaignFrameOverride()).toBeUndefined();
-    vi.stubEnv('AION_F3_FRAME_OVERRIDE', 'shipped');
+    vi.stubEnv('TEST_AION_FRAME_OVERRIDE', 'shipped');
     try {
       expect(campaignFrameOverride()).toBeUndefined();
     } finally {
@@ -324,7 +333,7 @@ describe('openCampaignProducer', () => {
    */
   it('binds a battery producer to the budget the coordinator declared on the shared ledger', () => {
     const path = ledgerFile();
-    vi.stubEnv('AION_F3_CAMPAIGN_LEDGER', path);
+    vi.stubEnv('TEST_AION_CAMPAIGN_LEDGER', path);
     try {
       const coordinator = openCampaignSpendingGuard(DEFAULTS.anthropic.dailyCeilingUsd, 0);
       const battery = openCampaignProducer({
@@ -353,7 +362,7 @@ describe('openCampaignProducer', () => {
    */
   it('records each response durably under its own experiment, condition and case', () => {
     const path = ledgerFile();
-    vi.stubEnv('AION_F3_CAMPAIGN_LEDGER', path);
+    vi.stubEnv('TEST_AION_CAMPAIGN_LEDGER', path);
     try {
       const producer = openCampaignProducer({
         experiment: 'advisor',
@@ -408,8 +417,8 @@ describe('openCampaignProducer', () => {
    */
   it('records a self-named arm under the frame that arm sends, not the process condition', () => {
     const path = ledgerFile();
-    vi.stubEnv('AION_F3_CAMPAIGN_LEDGER', path);
-    vi.stubEnv('AION_F3_FRAME_OVERRIDE', 'shipped');
+    vi.stubEnv('TEST_AION_CAMPAIGN_LEDGER', path);
+    vi.stubEnv('TEST_AION_FRAME_OVERRIDE', 'shipped');
     try {
       const producer = openCampaignProducer({
         experiment: 'extraction-faithfulness',
@@ -452,7 +461,7 @@ describe('openCampaignProducer', () => {
   /** Each arm carries its own case name: naming one must not rename rows the other buys. */
   it('keeps each arm’s case name to itself', () => {
     const path = ledgerFile();
-    vi.stubEnv('AION_F3_CAMPAIGN_LEDGER', path);
+    vi.stubEnv('TEST_AION_CAMPAIGN_LEDGER', path);
     try {
       const producer = openCampaignProducer({
         experiment: 'extraction-faithfulness',

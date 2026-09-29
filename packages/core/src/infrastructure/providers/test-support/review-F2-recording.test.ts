@@ -7,8 +7,8 @@ import { openCampaignProducer } from './campaign-guard.js';
 let dir: string;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'aion-Ffix1-record-'));
-  vi.stubEnv('AION_F3_CAMPAIGN_LEDGER', join(dir, 'campaign.sqlite'));
-  vi.stubEnv('AION_F3_FRAME_OVERRIDE', 'shipped');
+  vi.stubEnv('TEST_AION_CAMPAIGN_LEDGER', join(dir, 'campaign.sqlite'));
+  vi.stubEnv('TEST_AION_FRAME_OVERRIDE', 'shipped');
 });
 afterEach(() => {
   vi.unstubAllEnvs();

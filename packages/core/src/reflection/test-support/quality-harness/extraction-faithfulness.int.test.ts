@@ -26,7 +26,7 @@ import {
  *
  * This file runs BOTH frame conditions in ONE invocation. Each arm opens its own campaign
  * condition context, so the frame a request carries and the condition its usage row names come
- * off the same field. The runner invokes it once; it does not read `AION_F3_FRAME_OVERRIDE`.
+ * off the same field. The runner invokes it once; it does not read `TEST_AION_FRAME_OVERRIDE`.
  *
  * `quality-harness/run.ts`'s standalone `npm run quality:extraction` CLI constructs its own
  * unguarded client and is not an entry point this campaign invokes. Everything here holds against

@@ -14,7 +14,7 @@ import type { ApiCall } from '../types.js';
  * The one spending guard every F3 battery producer routes through, so a campaign that spans
  * several `.int.test.ts` files still holds one ceiling rather than one per file.
  *
- * `AION_F3_CAMPAIGN_LEDGER` names a durable sqlite file the campaign runner opens before the
+ * `TEST_AION_CAMPAIGN_LEDGER` names a durable sqlite file the campaign runner opens before the
  * suite starts and every battery file reads the same path from. Absent, this opens its own file
  * under the OS temp directory rather than `:memory:`: a standalone run of one battery file still
  * gets a real, file-backed ledger for the life of that process, which is what makes the guard a
@@ -36,7 +36,7 @@ export type CampaignGuardHandle = {
   close(): void;
 };
 
-const CAMPAIGN_LEDGER_ENV_VAR = 'AION_F3_CAMPAIGN_LEDGER';
+const CAMPAIGN_LEDGER_ENV_VAR = 'TEST_AION_CAMPAIGN_LEDGER';
 
 /**
  * The lifetime budget, stored on the ledger file rather than held by whichever handle happened
@@ -94,11 +94,11 @@ export function campaignLedgerPath(): string {
  * it from the environment, so a coordinated run drives every battery through the same two
  * conditions without a second, competing switch.
  *
- * `AION_F3_FRAME_OVERRIDE=none` selects the no-frame condition. Unset or any other value leaves
+ * `TEST_AION_FRAME_OVERRIDE=none` selects the no-frame condition. Unset or any other value leaves
  * `frameOverride` undefined, which is the shipped condition: the surface's own allocation
  * decides, exactly as a battery run outside this campaign already behaves.
  */
-const FRAME_OVERRIDE_ENV_VAR = 'AION_F3_FRAME_OVERRIDE';
+const FRAME_OVERRIDE_ENV_VAR = 'TEST_AION_FRAME_OVERRIDE';
 
 export function campaignFrameOverride(): FrameOverride | undefined {
   return campaignFrameFor(campaignCondition());

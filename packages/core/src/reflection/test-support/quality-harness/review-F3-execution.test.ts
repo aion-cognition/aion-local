@@ -11,8 +11,8 @@ import { openCampaignProducer } from '../../../infrastructure/providers/test-sup
 let dir: string;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'aion-F3-execution-review-'));
-  vi.stubEnv('AION_F3_CAMPAIGN_LEDGER', join(dir, 'campaign.sqlite'));
-  vi.stubEnv('AION_F3_FRAME_OVERRIDE', 'none');
+  vi.stubEnv('TEST_AION_CAMPAIGN_LEDGER', join(dir, 'campaign.sqlite'));
+  vi.stubEnv('TEST_AION_FRAME_OVERRIDE', 'none');
 });
 afterEach(() => {
   vi.unstubAllEnvs();

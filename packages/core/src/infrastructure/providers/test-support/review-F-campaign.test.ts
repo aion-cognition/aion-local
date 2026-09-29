@@ -7,7 +7,7 @@ import { openCampaignSpendingGuard, campaignCommittedUsd } from './campaign-guar
 let dir: string;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'aion-F-review-budget-'));
-  vi.stubEnv('AION_F3_CAMPAIGN_LEDGER', join(dir, 'shared.sqlite'));
+  vi.stubEnv('TEST_AION_CAMPAIGN_LEDGER', join(dir, 'shared.sqlite'));
 });
 afterEach(() => {
   vi.unstubAllEnvs();

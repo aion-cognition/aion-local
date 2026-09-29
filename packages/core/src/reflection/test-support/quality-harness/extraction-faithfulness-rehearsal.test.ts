@@ -71,7 +71,7 @@ afterEach(() => {
 function ledgerFile(): string {
   dataDir = mkdtempSync(join(tmpdir(), 'aion-extraction-faithfulness-'));
   const path = join(dataDir, 'campaign-ledger.sqlite');
-  vi.stubEnv('AION_F3_CAMPAIGN_LEDGER', path);
+  vi.stubEnv('TEST_AION_CAMPAIGN_LEDGER', path);
   return path;
 }
 
