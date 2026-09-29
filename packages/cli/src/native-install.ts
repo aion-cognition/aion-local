@@ -3,6 +3,7 @@ import {
   describePairing,
   GraphConnection,
   loadConfig,
+  envFileValue,
   Neo4jPairingError,
   parseEnvFile,
   seedEnvFromTemplate,
@@ -19,7 +20,7 @@ import { readMcpHealth, waitForMcpHealth } from './compose.js';
 import { buildDoctorChecks, runChecks, summarize } from './doctor.js';
 import { HOST_ACTIONS, NativeSetupError, type HostActions } from './host-actions.js';
 import { INSTALL_MANIFEST_VERSION, writeInstallManifest } from './install-manifest.js';
-import { applyNativeEnv, envFileEntry, planNativeEnv } from './install-profile.js';
+import { applyNativeEnv, planNativeEnv } from './install-profile.js';
 import {
   launchAgentPath,
   launchdCommands,
@@ -61,9 +62,7 @@ import {
  */
 
 /**
- * Records the profile and its addresses, then re-reads config through them. Both halves are
- * needed: the file is what the service and every later command read, and this process is what
- * the rest of this run reads, since nothing on the host loads `.env` on its own.
+ * Records host addresses in the file the service reads and in this setup process's config.
  *
  * An address the install chose for itself is kept rather than converted, and said so out loud.
  * Re-running init must not take back an external Neo4j or a data directory somebody moved.
@@ -74,13 +73,13 @@ export function prepareNativeProfile(write: Writer, repoDir: string): Config {
   seedEnvFromTemplate(envPath, templatePath);
   const plan = planNativeEnv({
     home: homedir(),
-    current: (key) => envFileEntry(envPath, key),
-    template: (key) => envFileEntry(templatePath, key),
+    current: (key) => envFileValue(envPath, key),
+    template: (key) => envFileValue(templatePath, key),
   });
   applyNativeEnv(envPath, plan, process.env);
   write(`native profile recorded in ${envPath}`);
   for (const step of plan) {
-    const value = step.action === 'wrote' ? step.value : (envFileEntry(envPath, step.key) ?? '');
+    const value = step.action === 'wrote' ? step.value : (envFileValue(envPath, step.key) ?? '');
     write(`  ${step.action === 'wrote' ? 'set ' : 'kept'} ${step.key}=${value}`);
   }
   return loadConfig(process.env);
