@@ -154,6 +154,38 @@ describe('the shared aion launcher', () => {
     expect(JSON.parse(result.stdout)).toHaveProperty('marker', 'from-shell');
   });
 
+  it('reads dotenv values literally, preserves spaces, and uses the last repeated entry', () => {
+    const sentinel = join(directory, 'must-not-exist');
+    const literal = `two words $(touch '${sentinel}') # literal`;
+    writeFileSync(
+      join(repo, '.env'),
+      [
+        ' AION_INSTALL_PROFILE = "native" ',
+        'AION_FIXTURE_MARKER=first',
+        `AION_FIXTURE_MARKER=${literal}`,
+        'REPO_DIR=/must-not-be-used',
+      ].join('\n'),
+    );
+    const result = launch(['status']);
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toHaveProperty('marker', literal);
+    expect(existsSync(sentinel)).toBe(false);
+    expect(calls()).toEqual([]);
+  });
+
+  it('removes matching value quotes without expanding a quoted shell expression', () => {
+    const literal = `\${HOME}/literal directory`;
+    writeFileSync(
+      join(repo, '.env'),
+      `AION_INSTALL_PROFILE='native'\nAION_FIXTURE_MARKER='${literal}'\n`,
+    );
+    const result = launch(['status']);
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toHaveProperty('marker', literal);
+  });
+
   it('dispatches a recorded Docker install through compose with arguments intact', () => {
     writeFileSync(join(repo, '.env'), 'AION_INSTALL_PROFILE=docker\n');
     const result = launch(['search', 'two words']);
