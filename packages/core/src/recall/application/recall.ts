@@ -159,7 +159,7 @@ export async function handleRecall(
   // walk and answers the same for an evicted source as for a resident one.
   const obligations = sessionObligations(deps, sessionId);
 
-  // Redacted before the cue model or the embedder sees any of it: both are inference calls over
+  // Redacted before the recall model or the embedder sees any of it: both are inference calls over
   // caller-supplied text, the same leak surface intake already closes for a stored payload.
   const { value: cueInput } = redactPayload(
     {

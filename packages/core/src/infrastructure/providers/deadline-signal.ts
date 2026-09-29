@@ -3,9 +3,9 @@
  * it, so a shutdown never waits out a model call with most of its timeout left. Every
  * reflection stage and every introspection judge composes the two this way.
  *
- * Two paths build a bare timeout with no caller signal, because neither has one to compose:
- * recall's cue call, which runs under a latency budget rather than under a shutdown, and
- * narrative compression, which the sweeper drives on its own clock.
+ * One path builds a bare timeout with no caller signal, because it has none to compose: recall's
+ * model call (the assessment, or cue extraction under `cues`), which runs under a latency budget
+ * rather than under a shutdown.
  *
  * `clear` is the other half of the contract, and every caller runs it on every path. It stops
  * the timer a call that answered early left running, and it takes the abort listener back off

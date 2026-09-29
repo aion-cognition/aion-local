@@ -198,9 +198,10 @@ export const KNOBS = {
     adjacencyTopK: ['AION_RECALL_ADJACENCY_TOP_K', positiveInt, 64],
     compressionThreshold: ['AION_RECALL_COMPRESSION_THRESHOLD', positiveInt, 512],
     // A hang guard, not a latency target: the failure it catches is a call that never returns,
-    // so it must not fire on ordinary calls. The cue model's cold-start round trip measured
-    // 2288ms on host Ollama against 527-937ms warm, and 2000 still fired on an ordinary recall
-    // at 2030ms, so the headroom a cold start needs is several multiples of the warm case.
+    // so it must not fire on ordinary calls. It guards recall's one model call in either mode that
+    // makes one: the assessment, or cue extraction. The earlier cue model's cold-start round trip
+    // measured 2288ms on host Ollama against 527-937ms warm, and 2000 still fired on an ordinary
+    // recall at 2030ms. Live GPT-6 Luna assessments measured p50 1.6s and p95 2.6s.
     cueBudgetMs: ['AION_CUE_BUDGET_MS', positiveInt, 8000],
     cueCacheTtlMinutes: ['AION_CUE_CACHE_TTL_MINUTES', nonNegativeInt, 30],
     tokenBudget: ['AION_RECALL_TOKEN_BUDGET', positiveInt, 1200],
@@ -267,9 +268,10 @@ export const KNOBS = {
     // `facts-calibration.int.test.ts` re-measures both and fails if they stop separating.
     restatementFloor: ['AION_FACTS_RESTATEMENT_FLOOR', proportion, 0.69],
     // `decisionBoost` multiplies the fused score of Decision and Insight when the cue model
-    // judged the query decision-shaped. At rrfConstant 60 a factor of 1.25 is worth about
-    // fifteen ranks, which is the facts cap: enough to bring a Decision any leg ranked into the
-    // bucket, not enough to let one no leg ranked displace the top hit.
+    // judged the query decision-shaped, which only the `cues` recall mode asks it to do. At
+    // rrfConstant 60 a factor of 1.25 is worth about fifteen ranks, which is the facts cap: enough
+    // to bring a Decision any leg ranked into the bucket, not enough to let one no leg ranked
+    // displace the top hit.
     decisionBoost: ['AION_DECISION_INTENT_BOOST', z.number().min(1), 1.25],
     // Cosine at or above which the current claim in a raw turn's subject family is printed
     // beside the turn. The family match has already established that the two name the same

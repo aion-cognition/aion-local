@@ -233,7 +233,9 @@ export const CueWeightSchema = z.union([z.literal(3), z.literal(2), z.literal(1)
 export type CueWeight = z.infer<typeof CueWeightSchema>;
 
 /**
- * What the caller is asking for, judged by the cue model rather than read off the words. One
+ * What the caller is asking for, judged by the cue model rather than read off the words. Only the
+ * `cues` recall mode extracts one; the query cues the default `assess` mode searches with carry
+ * none. One
  * member, because a decision-shaped query is the only intent with a measured ranking
  * failure: on an entirely decision-oriented workload the bucket meant to answer "what did
  * we decide" gave Decision nodes 3% of its slots. A second intent is an addition here,
@@ -272,15 +274,17 @@ export const StageTimingsMsSchema = z.strictObject({
 export type StageTimingsMs = z.infer<typeof StageTimingsMsSchema>;
 
 /**
- * Recall has four legs that can drop out without failing the call: the cue model, the embedding
- * call, the graph, and the model that assesses the candidates. A consumer cannot tell any of them from the items alone, because a pack
- * thinned by an outage reads exactly like a pack thinned by a query nothing matches. Each rung
- * that fired names itself here, and the field stays absent on a normal run.
+ * Recall has four legs that can drop out without failing the call: cue extraction (the `cues`
+ * mode), the embedding call, the graph, and the assessment (the default `assess` mode). A consumer
+ * cannot tell any of them from the items alone, because a pack thinned by an outage reads exactly
+ * like a pack thinned by a query nothing matches. Each rung that fired names itself here, and the
+ * field stays absent on a normal run.
  *
  * `timeout`, `model_error` and `invalid_output` are the inference stages' reasons. `unavailable`
- * means the leg could not run: no seed strategy reached the graph, or no key backs cue
- * extraction, which makes the pack a raw-query pack. A degraded assessment means the pack is the
- * existing ranking of the same candidates rather than the model's selection of them.
+ * means the leg could not run: no seed strategy reached the graph, or no key (or no ceiling left)
+ * backs the model call. A degraded cue extraction makes the pack a raw-query pack. A degraded
+ * assessment means the pack is the existing ranking of the same candidates rather than the
+ * model's selection of them.
  */
 export const DegradationSchema = z.strictObject({
   stage: z.enum(['cues', 'embed', 'graph', 'assessment']),

@@ -107,8 +107,9 @@ function digest(value: string): string {
 }
 
 /**
- * What the run's cue call could reach. A substrate with no key extracts no cues at all, so the
- * trace records that rather than a model name the call never sent anything to.
+ * What the run's model call could reach, on the recall role's route (`cue` in the routing
+ * table). With no key the call never runs, so the trace records that rather than a model name
+ * nothing was sent to.
  */
 function routeOf(config: Config): TraceRoute {
   const routing = resolveProviderRouting(config);

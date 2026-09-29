@@ -17,7 +17,8 @@ import type { Measurement } from './admission.js';
  *
  * Nothing here reads words. A restatement is judged by the cosine between the node's content
  * vector and the query's own cue, a measurement the vector leg already made, and the intent
- * behind the boost is the cue model's judgment, carried on the cue itself.
+ * behind the boost is the cue model's judgment, carried on the cue itself. Only the `cues` recall
+ * mode makes that judgment, so the boost never fires under the default `assess` mode.
  */
 
 /**

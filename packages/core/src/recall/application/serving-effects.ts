@@ -121,7 +121,7 @@ export function servingEffects(input: ServingEffectsInput): ServingEffects {
         input.now.toISOString(),
       );
     }
-    // The cue stage is 60-95% of recall wall time and the first thing contention takes; a
+    // The recall model call is recall's one remote call and the first thing an outage takes; a
     // degraded pack is otherwise indistinguishable from a healthy one at the item count.
     recordCueOutcome(db, input.cueDegraded);
     // Read off the assembled pack, not the stages that fed it: a bucket cap or the token budget

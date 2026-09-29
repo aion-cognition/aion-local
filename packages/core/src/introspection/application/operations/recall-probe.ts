@@ -69,7 +69,7 @@ import { sourceReadDeps } from '../source-wire.js';
  *   anything, and recall creates no Session node, so the probe never enters the graph's session
  *   machinery.
  *
- * One residue, deliberate and wanted: the cue call the recall pipeline makes counts in the
+ * One residue, deliberate and wanted: the model call the recall pipeline makes counts in the
  * generation counters like any other. Those measure whether the model routes answer, and a probe
  * call is a real call.
  */
@@ -99,7 +99,7 @@ export const RECALL_PROBE_STANDING_RELEVANCE = 0.1;
 
 /**
  * How much of a source becomes the query. Long enough to carry what it was about, short enough
- * that the cue model reads a question rather than a transcript.
+ * that the recall model reads a question rather than a transcript.
  */
 const QUERY_MAX_CHARS = 400;
 

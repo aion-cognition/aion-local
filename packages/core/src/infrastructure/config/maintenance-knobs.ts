@@ -330,7 +330,7 @@ export const MAINTENANCE_KNOBS = {
   // sampling, and both rates stand at whatever the last run measured.
   recallProbe: ['AION_MAINTENANCE_RECALL_PROBE', z.boolean(), true],
   // Archived experiences one run asks back for. Three on a day bucket: each one is a full
-  // recall, cue call included, and the hit rate is a lifetime total that a few trials a day
+  // recall, its model call included, and the hit rate is a lifetime total that a few trials a day
   // fill in without the probe becoming the substrate's busiest caller.
   recallProbeSample: ['AION_RECALL_PROBE_SAMPLE', positiveInt, 3],
 } as const;
