@@ -5,6 +5,7 @@ import {
   type OperationCandidate,
 } from '@aion/core';
 import { STRUCTURAL_DISCOVERY_OPERATION } from '@aion/core/introspection/application/operations/structural-discovery.js';
+import { NEUTRAL_BATCH_DEMAND } from '@aion/core/introspection/domain/batch-settlement.js';
 import {
   NEUTRAL_ENRICHMENT_HEALTH,
   NEUTRAL_ENTITY_HEALTH,
@@ -194,6 +195,9 @@ function snapshot(reading: Reading): HealthSnapshot {
     // Same reading of the same absence: no eviction census was taken, which scores zero and
     // says so, rather than standing for a substrate with nothing eligible.
     eviction: NEUTRAL_EVICTION_DEMAND,
+    // No batch census was taken either, so the pump keeps its standing claim: the reading it had
+    // before the lane was observed, which is what these corpus answers were written against.
+    batch: NEUTRAL_BATCH_DEMAND,
     plasticity: reading.plasticity ?? plasticity(),
     generation: NEUTRAL_GENERATION_HEALTH,
     effectiveness: reading.effectiveness,

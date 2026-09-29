@@ -21,6 +21,10 @@ import {
   outstandingBatchIds,
 } from '../../../infrastructure/sqlite/batch-work.js';
 import { readSubstratePairing } from '../../../infrastructure/sqlite/publication-control.js';
+import {
+  batchSettlementRelevance,
+  type BatchRelevanceScales,
+} from '../../domain/batch-settlement.js';
 import type {
   IntrospectionOperation,
   OperationContext,
@@ -34,9 +38,11 @@ import type {
  * the work was batched for. A batch takes minutes to hours, so polling it faster buys nothing
  * and polling it slower is the only cost of missing a tick. What that means in practice is the
  * engine's own policy and not a promise of a quarter-hour: one operation runs per tick, chosen
- * from the whole catalog by tier, urgency and waiting time, and this one carries a standing
- * relevance it reaches the threshold on through starvation rather than through demand. The
- * quarter-hour bucket is a ceiling on how often it may be chosen, not a floor on how often it is.
+ * from the whole catalog by tier, urgency and waiting time. Its relevance is the lane's census
+ * (`batch-census.ts`): zero when nothing a run could move is waiting, so an empty lane yields its
+ * tick, and rising with how long actionable work has waited since it was owed, sent or last
+ * checked, so owed work reaches full relevance and then competes through starvation like any
+ * other demand. The quarter-hour bucket is a ceiling on how often it may be chosen, not a floor.
  *
  * Both halves are bounded and neither waits: submission sends one batch and returns, and
  * consumption reads the jobs that have ended and leaves the rest outstanding. Nothing here holds
@@ -63,11 +69,17 @@ export type BatchWorkHandlerFactory = (ctx: OperationContext) => BatchWorkHandle
 
 export const BATCH_SETTLEMENT_OPERATION = 'batch_settlement';
 
+const MINUTE_MS = 60 * 1000;
+
 /**
- * A floor, not a reading. Outstanding batch work has no gauge in the health snapshot, so this
- * never reaches the urgency threshold on its own and the engine's starvation boost carries it.
+ * Owed work reaches full relevance after one starvation span of wall time: the ticks over which
+ * the engine doubles the claim of anything it keeps passing over, at the deployment's tick length.
  */
-export const BATCH_SETTLEMENT_STANDING_RELEVANCE = 0.15;
+export function batchRelevanceScales(config: Config): BatchRelevanceScales {
+  return {
+    fullWaitMs: config.maintenance.tickMinutes * MINUTE_MS * config.maintenance.starvationCycles,
+  };
+}
 
 /** A provider's key, trimmed the way its transport sends it, or undefined where none is set. */
 function keyOf(config: Config, provider: GenerationProvider): string | undefined {
@@ -77,11 +89,15 @@ function keyOf(config: Config, provider: GenerationProvider): string | undefined
 
 export function batchSettlementOperation(
   handlers: readonly BatchWorkHandlerFactory[],
+  scales: BatchRelevanceScales,
 ): IntrospectionOperation {
   return {
     name: BATCH_SETTLEMENT_OPERATION,
     bucket: 'quarter-hour',
-    relevance: () => BATCH_SETTLEMENT_STANDING_RELEVANCE,
+    // No `measure`. A run that finds every job still working at the vendor did what it could and
+    // moved nothing, and scoring it on the lane's backlog would weight the pump down for the
+    // vendor's turnaround.
+    relevance: (health) => batchSettlementRelevance(health.batch, scales),
     run: async (ctx): Promise<OperationOutcome> => {
       const substrate = readSubstratePairing(ctx.db);
       if (substrate === undefined) {
@@ -169,8 +185,9 @@ export function batchSettlementOperation(
         detail:
           `${String(consumed.applied)} applied, ${String(consumed.discarded)} discarded as stale, ` +
           `${String(consumed.returned)} owed again, ${String(consumed.failed)} failed, ` +
-          `${String(consumed.unrecognized)} unrecognized; ${String(submitted.submitted)} submitted ` +
-          `to ${selected}; ${String(counts.pending)} pending and ${String(counts.submitted)} ` +
+          `${String(consumed.unrecognized)} unrecognized, ${String(consumed.waiting)} jobs still ` +
+          `working at the vendor; ${String(submitted.submitted)} submitted to ${selected}; ` +
+          `${String(counts.pending)} pending and ${String(counts.submitted)} ` +
           `outstanding${notes.map((note) => `; ${note}`).join('')}`,
       };
     },

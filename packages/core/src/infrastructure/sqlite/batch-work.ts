@@ -375,6 +375,42 @@ export function settleBatchWork(
   ).run(state, reason ?? null, now.toISOString(), workKey);
 }
 
+export type WaitingBatchWork = {
+  readonly provider: GenerationProvider;
+  readonly state: 'pending' | 'submitted';
+  readonly count: number;
+  /** When the oldest of them was owed (pending) or sent (submitted). */
+  readonly oldestAt: string;
+};
+
+/**
+ * The work this substrate is still waiting on, grouped by provider and by who holds it, with the
+ * oldest wait in each group. A submitted row is counted only where it names the job holding it,
+ * since that job id is the only thing a settlement run can read it by.
+ */
+export function waitingBatchWork(
+  db: SqliteHandle,
+  substrateId: string,
+): readonly WaitingBatchWork[] {
+  const rows = db
+    .prepare(
+      `SELECT provider, state, COUNT(*) AS count,
+              MIN(CASE WHEN state = 'pending' THEN enqueued_at ELSE submitted_at END) AS oldest_at
+       FROM batch_work
+       WHERE substrate_id = ?
+         AND (state = 'pending' OR (state = 'submitted' AND batch_id IS NOT NULL))
+       GROUP BY provider, state
+       ORDER BY provider, state`,
+    )
+    .all(substrateId) as { provider: string; state: string; count: number; oldest_at: string }[];
+  return rows.map((row) => ({
+    provider: row.provider as GenerationProvider,
+    state: row.state as 'pending' | 'submitted',
+    count: row.count,
+    oldestAt: row.oldest_at,
+  }));
+}
+
 export type BatchWorkCounts = Readonly<Record<BatchWorkState, number>>;
 
 const ZERO_COUNTS: BatchWorkCounts = {

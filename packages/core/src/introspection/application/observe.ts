@@ -1,5 +1,6 @@
 import type { Driver } from 'neo4j-driver';
 
+import { readBatchDemand } from './batch-census.js';
 import { readEvictionDemand } from './eviction-census.js';
 import { readOrphanCensus } from './orphan-census.js';
 import { readSealDemand } from './seal-census.js';
@@ -32,6 +33,7 @@ import { queueLagSnapshot } from '../../reflection/application/lag.js';
 import { reconcileEnrichment } from '../../reflection/application/reconcile.js';
 import { CHUNK_MAX_MEMBERS } from '../../reflection/domain/chunk-boundary.js';
 import { NARRATIVE_GROUNDING } from '../../reflection/domain/narrative.js';
+import { NEUTRAL_BATCH_DEMAND } from '../domain/batch-settlement.js';
 import {
   HEALTH_COLLECTORS,
   NEUTRAL_ENRICHMENT_HEALTH,
@@ -367,6 +369,7 @@ export async function observeHealth(
     entities,
     narrativeSeal,
     eviction,
+    batch,
     plasticity,
     generation,
     effectiveness,
@@ -395,6 +398,9 @@ export async function observeHealth(
     collect(HEALTH_COLLECTORS.eviction, deps.logger, degraded, NEUTRAL_EVICTION_DEMAND, () =>
       Promise.resolve(readEviction(deps.db, deps.config, now)),
     ),
+    collect(HEALTH_COLLECTORS.batch, deps.logger, degraded, NEUTRAL_BATCH_DEMAND, () =>
+      Promise.resolve(readBatchDemand(deps.db, deps.config, now)),
+    ),
     collect(HEALTH_COLLECTORS.plasticity, deps.logger, degraded, NEUTRAL_PLASTICITY_HEALTH, () =>
       Promise.resolve(readPlasticity(deps.db)),
     ),
@@ -421,6 +427,7 @@ export async function observeHealth(
     entities,
     narrativeSeal,
     eviction,
+    batch,
     plasticity,
     generation,
     effectiveness,

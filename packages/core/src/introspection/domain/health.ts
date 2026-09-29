@@ -1,3 +1,4 @@
+import { NEUTRAL_BATCH_DEMAND, type BatchDemand } from './batch-settlement.js';
 import {
   REFLECTION_LANES,
   type ReflectionLane,
@@ -253,6 +254,8 @@ export type HealthSnapshot = {
   readonly entities: EntityHealth;
   readonly narrativeSeal: SealDemand;
   readonly eviction: EvictionDemand;
+  /** What the batch lane owes, which is the batch pump's whole demand. */
+  readonly batch: BatchDemand;
   readonly plasticity: PlasticityHealth;
   readonly generation: GenerationHealth;
   readonly effectiveness: readonly OperationEffectiveness[];
@@ -273,6 +276,7 @@ export const HEALTH_COLLECTORS = {
   entities: 'entities',
   narrativeSeal: 'narrative_seal',
   eviction: 'eviction',
+  batch: 'batch',
   plasticity: 'plasticity',
   generation: 'generation',
   effectiveness: 'effectiveness',
@@ -388,6 +392,7 @@ export function neutralSnapshot(cycle: number, observedAt: string): HealthSnapsh
     entities: NEUTRAL_ENTITY_HEALTH,
     narrativeSeal: NEUTRAL_SEAL_DEMAND,
     eviction: NEUTRAL_EVICTION_DEMAND,
+    batch: NEUTRAL_BATCH_DEMAND,
     plasticity: NEUTRAL_PLASTICITY_HEALTH,
     generation: NEUTRAL_GENERATION_HEALTH,
     effectiveness: [],

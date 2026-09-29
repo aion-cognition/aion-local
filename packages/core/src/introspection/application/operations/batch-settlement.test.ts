@@ -141,7 +141,8 @@ function run(
     now: NOW,
     signal: new AbortController().signal,
   };
-  return batchSettlementOperation([() => handler()]).run(ctx);
+  // Only the run is exercised here; the scale shapes the relevance alone.
+  return batchSettlementOperation([() => handler()], { fullWaitMs: 0 }).run(ctx);
 }
 
 function anthropicCalls(): RecordedCall[] {

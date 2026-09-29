@@ -273,11 +273,21 @@ submitted batch is spend that has not been charged yet.
 
 Its cadence is the introspection engine's, not a timer of its own and not a promise of fifteen
 minutes. The engine wakes every `AION_MAINTENANCE_TICK_MINUTES` (15 by default) and runs **one**
-operation, chosen from the whole catalog by tier, urgency and waiting time. This one carries a
-standing relevance of 0.15 and no gauge in the health snapshot, so it reaches the threshold on
-starvation rather than on demand, and several ticks can pass between its turns. The `quarter-hour`
-bucket is a ceiling on how often it may be selected, not a floor on how often it is. What that
-costs is latency on an answer already hours old, which is the reason this work was batched.
+operation, chosen from the whole catalog by tier, urgency and waiting time. The health snapshot
+carries the lane's census (`batch`): never-sent rows the selected provider can take now, rows held
+back by a missing key or a spent day, never-sent rows encoded for the other provider, jobs a vendor
+still holds, and jobs whose provider key is gone. Every figure comes from durable state, so a
+restart does not reset it.
+
+The pump's relevance follows that census. An empty lane scores zero and yields its tick. Work a
+run can move scores at least 0.15 and rises to full relevance as it waits: never-sent work from
+when it was owed, a vendor's job from when it was sent, and either one at most from the pump's
+last run, so a check that could not help is not repeated on the next tick. Full relevance comes
+after one starvation span of wall time (`AION_MAINTENANCE_STARVATION_CYCLES` ticks), and from
+there the engine's starvation boost gives the pump its turn among everything else that has work.
+Work no run can move scores nothing, so a missing key or a spent ceiling costs neither ticks nor
+calls. A tier-1 condition still preempts it. The `quarter-hour` bucket is a ceiling on how often
+it may be selected, not a floor.
 
 `description_freshness` is the producer. It nominates entity glosses that fell behind their
 mentions, builds each request with the same prompt and result schema the inline call used, and

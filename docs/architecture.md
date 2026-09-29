@@ -535,7 +535,8 @@ does, and one tick runs four phases: observe, decide, act, learn.
    cue model, and the reinforcement rows the queue cap threw away), enrichment (episodes with
    no orchestrator ledger key), plasticity, proposals, entities (identities the deterministic
    tier-0 sweep could still absorb), redaction residue, the narrative-seal backlog, the eviction
-   census, generation health, and the per-operation effectiveness record tier 2 scores on. The
+   census, the batch lane (work owed, work a vendor holds, and how long the part a run can move
+   has waited), generation health, and the per-operation effectiveness record tier 2 scores on. The
    cue-degradation share reads as unmeasured rather than as healthy until the first recall
    lands. Every collector is caught
    independently; one that throws names itself in `degraded` and costs its own metrics rather
