@@ -229,6 +229,35 @@ describe('an input Ollama refuses as longer than its window', () => {
     await expect(provider.embed(['a', 'b'])).rejects.toBeInstanceOf(OllamaRequestError);
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
+
+  it('does not shorten an input whose one-at-a-time re-send fails for another reason', async () => {
+    const overflow = overflowServer(3_000);
+    let reloading = true;
+    // The runner reloads between the refused batch and the first re-send, which fits.
+    const fetchImpl = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const input = JSON.parse(init?.body as string).input as string[];
+      if (input.length === 1 && reloading) {
+        reloading = false;
+        overflow.sent.push(input);
+        return new Response('llama runner process has terminated', { status: 500 });
+      }
+      return overflow.fetchImpl(url, init);
+    });
+    const provider = new OllamaProvider({
+      baseUrl: 'http://localhost:11434',
+      embedModel: 'snowflake-arctic-embed2',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const err = await provider.embed(['first', 'x'.repeat(9_000)]).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(OllamaRequestError);
+    expect((err as OllamaRequestError).status).toBe(500);
+    expect(overflow.sent.map((input) => input.map((text) => text.length))).toEqual([
+      [5, 8_190],
+      [5],
+    ]);
+  });
 });
 
 /**

@@ -16,7 +16,7 @@ import { DEFAULTS } from '../config/defaults.js';
  * What the OpenAI route's cache policy does on the live API, for an operator to read rather than
  * for an ordinary run: two entity judgments sent exactly as the service sends them, and the usage
  * each answer reports. The body asks for explicit caching with no breakpoint, which the prompt
- * caching guide says writes nothing, so both calls should report no cache-write tokens.
+ * caching guide says writes nothing, so every answer should report no cache-write tokens.
  *
  * Opt-in on top of the key, because it spends money and nothing else in the suite needs it:
  * `AION_OPENAI_CACHE_CHECK=1` with `AION_GENERATION_PROVIDER=openai` and `AION_OPENAI_API_KEY`.
@@ -60,9 +60,13 @@ describe.skipIf(!ENABLED)('the OpenAI cache policy against the live API', () => 
     campaignProducer.beginCase('explicit-no-breakpoint');
     const reported: Reported[] = [];
     // The raw usage block rather than the recorded call, so the fields the operator reads are
-    // the API's own names and nothing this program derived from them.
+    // the API's own names and nothing this program derived from them. Only answers are read: a
+    // throttled or failed attempt bills nothing and its body need not be JSON.
     const fetchImpl: typeof fetch = async (url, init) => {
       const response = await fetch(url, init);
+      if (!response.ok) {
+        return response;
+      }
       const body = (await response.clone().json()) as { usage?: unknown };
       // The provider always sends its body as a JSON string.
       const sent = JSON.parse(init?.body as string) as { prompt_cache_options?: unknown };
@@ -88,11 +92,16 @@ describe.skipIf(!ENABLED)('the OpenAI cache policy against the live API', () => 
           `${JSON.stringify(entry.promptCacheOptions)} usage ${JSON.stringify(entry.usage)}`,
       );
     }
-    expect(reported).toHaveLength(PAIRS.length);
+    // At least one answer per pair; a judgment whose first answer would not parse is asked again
+    // in JSON mode, and that answer is billed and reported too.
+    expect(reported.length).toBeGreaterThanOrEqual(PAIRS.length);
     for (const entry of reported) {
-      const details = (entry.usage as { input_tokens_details?: { cache_write_tokens?: number } })
-        .input_tokens_details;
-      expect(details?.cache_write_tokens ?? 0).toBe(0);
+      expect(entry.promptCacheOptions).toEqual({ mode: 'explicit' });
+      const usage = entry.usage as
+        { input_tokens_details?: { cache_write_tokens?: number } } | undefined;
+      // An answer with no usage block says nothing about writes, so it cannot pass as zero.
+      expect(usage).toBeDefined();
+      expect(usage?.input_tokens_details?.cache_write_tokens ?? 0).toBe(0);
     }
   }, 180_000);
 });

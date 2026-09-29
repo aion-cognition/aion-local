@@ -124,6 +124,35 @@ describe('sending a job', () => {
       cacheWriteTtl: '5m',
     });
   });
+
+  it('bounds an explicit body that marks a breakpoint at the write rate, since the marked prefix is written', () => {
+    const transport = new OpenAiBatchTransport({ apiKey: KEY });
+    // The guide's placement: the end of a stable prefix, in a developer message's content block.
+    const marked: Record<string, unknown> = {
+      ...BODY,
+      input: [
+        {
+          role: 'developer',
+          content: [
+            {
+              type: 'input_text',
+              text: 'Stable instructions and shared reference material.',
+              prompt_cache_breakpoint: { mode: 'explicit' },
+            },
+          ],
+        },
+        ...(BODY.input as unknown[]),
+      ],
+    };
+
+    expect(marked.prompt_cache_options).toEqual({ mode: 'explicit' });
+    expect(transport.bound(marked)).toEqual({
+      model: 'gpt-6-luna',
+      outputTokens: 300,
+      cacheWrite: true,
+      cacheWriteTtl: '5m',
+    });
+  });
 });
 
 describe('reading where a job stands', () => {
