@@ -277,8 +277,10 @@ operation, chosen from the whole catalog by tier, urgency and waiting time. The 
 carries the lane's census (`batch`): never-sent rows the selected provider can take now, rows held
 back by a missing key or a spent day, never-sent rows encoded for the other provider, jobs a vendor
 still holds, jobs whose provider key is gone, and settled jobs whose files OpenAI would not delete
-(the `batch_release:` rows of the ops ledger). Every figure comes from durable state, so a restart
-does not reset it.
+(the `batch_release:` rows of the ops ledger). The census calls a day spent once the batch a run
+would send no longer fits under the ceiling, which is the test the submission's hold applies: a
+day that stopped short by less than that batch's bound is spent for the lane. Every figure comes
+from durable state, so a restart does not reset it.
 
 The pump's relevance follows that census. An empty lane scores zero and yields its tick. Work a
 run can move scores at least 0.15 and rises to full relevance as it waits: never-sent work from
@@ -288,7 +290,7 @@ on the next tick. A failed deletion is retried with its provider's key even when
 outstanding, because those files hold memory text until they are gone. Full relevance comes
 after one starvation span of wall time (`AION_MAINTENANCE_STARVATION_CYCLES` ticks), and from
 there the engine's starvation boost gives the pump its turn among everything else that has work.
-Work no run can move scores nothing, so a missing key or a spent ceiling costs neither ticks nor
+Work no run can move scores nothing, so a missing key or a spent day costs neither ticks nor
 calls. A tier-1 condition still preempts it. The `quarter-hour` bucket is a ceiling on how often
 it may be selected, not a floor.
 

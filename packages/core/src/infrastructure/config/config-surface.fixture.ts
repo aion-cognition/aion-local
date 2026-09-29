@@ -89,7 +89,9 @@ function encodeDefault(knob: Knob): string {
   return String(value);
 }
 
-/** An older spelling gets the same probes as the name it stands for, since it sets the same leaf. */
+/**
+ * An older spelling gets the same probes as the name it stands for, since it sets the same leaf.
+ */
 function envProbes(): Record<string, string> {
   const captured: Record<string, string> = {};
   for (const knob of sortedKnobs()) {

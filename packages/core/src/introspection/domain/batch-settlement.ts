@@ -12,8 +12,9 @@
  * deletion refused again) from being repeated on every tick.
  *
  * Work no run can move is counted and scores nothing: never-sent work for a provider with no key,
- * never-sent work on a day whose ceiling is spent, and remote work or a deletion whose provider
- * key is gone. Choosing the pump for any of those would take a tick and make no progress.
+ * never-sent work on a day whose ceiling cannot hold the batch a run would send, and remote work
+ * or a deletion whose provider key is gone. Choosing the pump for any of those would take a tick
+ * and make no progress.
  */
 
 export type BatchBlock = 'missing_key' | 'spent_ceiling';
@@ -23,7 +24,10 @@ export type BatchDemand = {
   readonly sendable: number;
   /** Never-sent rows for the selected provider that wait on something a run cannot change. */
   readonly blocked: number;
-  /** Why `blocked` is not sendable: no key for the selected provider, or the day is spent. */
+  /**
+   * Why `blocked` is not sendable: no key for the selected provider, or no room left under the
+   * day's ceiling for the batch a run would send.
+   */
   readonly blockedBy: BatchBlock | undefined;
   /**
    * Never-sent rows encoded for a provider the installation no longer selects. A run discards

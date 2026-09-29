@@ -124,11 +124,46 @@ function handlerFor(deps: BatchAdapterDeps, surface: string): BatchWorkHandler |
   return deps.handlers.find((handler) => handler.surface === surface);
 }
 
-/** The wire for this pass's provider. The key and the fetch are the caller's. */
-function transportFor(deps: BatchAdapterDeps): BatchTransport {
-  return deps.provider === 'openai'
-    ? new OpenAiBatchTransport(deps.client)
-    : new AnthropicBatchTransport(deps.client);
+/** One provider's wire, absent reading as Anthropic. Building it sends nothing. */
+export function batchTransport(
+  provider: GenerationProvider | undefined,
+  client: BatchClientOptions,
+): BatchTransport {
+  return provider === 'openai'
+    ? new OpenAiBatchTransport(client)
+    : new AnthropicBatchTransport(client);
+}
+
+export type NextSubmission = {
+  /** The rows the remote will take, oldest first. */
+  readonly owed: readonly BatchWorkItem[];
+  /** Rows whose work key the remote would refuse the whole job over. */
+  readonly illegal: readonly BatchWorkItem[];
+};
+
+/**
+ * The rows the next submission to this transport's provider carries: the oldest owed, as many as
+ * one job may hold, split by whether the remote accepts their id. The lane's census prices these
+ * same rows, so the scheduler and the day's ceiling judge one batch.
+ */
+export function nextSubmission(
+  db: SqliteHandle,
+  substrateId: string,
+  transport: BatchTransport,
+  limit: number = DEFAULT_SUBMIT_LIMIT,
+): NextSubmission {
+  // Clamped against the API's own ceiling, so a caller that passes a larger number gets a batch
+  // the remote will accept rather than a rejection it has to read the docs to understand.
+  const queued = pendingBatchWork(
+    db,
+    substrateId,
+    Math.min(limit, transport.maxRequests),
+    transport.provider,
+  );
+  return {
+    owed: queued.filter((item) => legalCustomId(item.workKey)),
+    illegal: queued.filter((item) => !legalCustomId(item.workKey)),
+  };
 }
 
 /**
@@ -146,21 +181,9 @@ export async function submitBatchWork(
   deps: BatchAdapterDeps,
   limit: number = DEFAULT_SUBMIT_LIMIT,
 ): Promise<SubmitReport> {
-  const transport = transportFor(deps);
-  // Clamped against the API's own ceiling, so a caller that passes a larger number gets a batch
-  // the remote will accept rather than a rejection it has to read the docs to understand.
-  const queued = pendingBatchWork(
-    deps.db,
-    deps.substrateId,
-    Math.min(limit, transport.maxRequests),
-    transport.provider,
-  );
-  const owed: BatchWorkItem[] = [];
-  for (const item of queued) {
-    if (legalCustomId(item.workKey)) {
-      owed.push(item);
-      continue;
-    }
+  const transport = batchTransport(deps.provider, deps.client);
+  const { owed, illegal } = nextSubmission(deps.db, deps.substrateId, transport, limit);
+  for (const item of illegal) {
     // The remote refuses a whole submission over one id it cannot accept, so a producer that
     // wrote an id outside the contract loses its own row rather than everyone else's batch. It
     // is terminal because the next pass would build the same id from the same inputs.
@@ -403,7 +426,7 @@ function oweAgain(
  * from "nothing is outstanding". Nothing here waits on a remote job.
  */
 export async function consumeBatchWork(deps: BatchAdapterDeps): Promise<ConsumeReport> {
-  const transport = transportFor(deps);
+  const transport = batchTransport(deps.provider, deps.client);
   await retryReleases(deps, transport);
   let report = EMPTY_CONSUME;
   for (const batchId of outstandingBatchIds(deps.db, deps.substrateId, transport.provider)) {

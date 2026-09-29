@@ -23,6 +23,7 @@ import { reserveGenerationSpend } from '../../infrastructure/sqlite/spend-ledger
 const OWED_AT = new Date('2026-09-28T17:33:00.000Z');
 const NOW = new Date('2026-09-29T04:00:00.000Z');
 const MINUTE_MS = 60 * 1000;
+const CEILING_USD = DEFAULTS.anthropic.dailyCeilingUsd;
 
 let dir: string;
 let path: string;
@@ -50,9 +51,20 @@ function owe(workKey: string, provider: GenerationProvider, at: Date = OWED_AT):
     substrateId,
     surface: 'judge',
     revalidation: {},
-    request: {},
+    request: { model: 'gpt-6-luna', max_output_tokens: 64, input: [] },
     provider,
     now: at,
+  });
+}
+
+function commit(usd: number): void {
+  reserveGenerationSpend(db, {
+    surface: 'test',
+    route: 'messages',
+    maxUsd: usd,
+    priced: true,
+    ceilingUsd: CEILING_USD,
+    now: NOW,
   });
 }
 
@@ -138,22 +150,28 @@ describe('the batch lane census', () => {
     });
   });
 
-  it('holds never-sent work back on a day whose ceiling is spent', () => {
+  it('holds never-sent work back on a day whose ceiling cannot hold the next batch', () => {
     owe('a', 'openai');
-    reserveGenerationSpend(db, {
-      surface: 'test',
-      route: 'messages',
-      maxUsd: DEFAULTS.anthropic.dailyCeilingUsd,
-      priced: true,
-      ceilingUsd: DEFAULTS.anthropic.dailyCeilingUsd,
-      now: NOW,
-    });
+    // A millionth of a dollar short, which is where a real day stops: the hold that would cross
+    // the ceiling is refused, so nothing ever fills it to the cent.
+    commit(CEILING_USD - 0.000001);
 
     expect(readBatchDemand(db, OPENAI_ONLY, NOW)).toMatchObject({
       sendable: 0,
       blocked: 1,
       blockedBy: 'spent_ceiling',
       localWaitMs: undefined,
+    });
+  });
+
+  it('reads the same work as sendable while the day has room for the batch', () => {
+    owe('a', 'openai');
+    commit(CEILING_USD - 1);
+
+    expect(readBatchDemand(db, OPENAI_ONLY, NOW)).toMatchObject({
+      sendable: 1,
+      blocked: 0,
+      blockedBy: undefined,
     });
   });
 

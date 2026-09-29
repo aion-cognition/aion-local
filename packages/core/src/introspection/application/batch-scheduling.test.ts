@@ -31,6 +31,7 @@ import {
 import { SqliteStore, type SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { getLedgerEntry } from '../../infrastructure/sqlite/ops-ledger.js';
 import { beginSubstratePairing } from '../../infrastructure/sqlite/publication-control.js';
+import { reserveGenerationSpend } from '../../infrastructure/sqlite/spend-ledger.js';
 import { NEUTRAL_GRAPH_HEALTH, type HealthSnapshot } from '../domain/health.js';
 import type { IntrospectionOperation, OperationOutcome } from '../domain/operation.js';
 import { healthFixture } from '../domain/test-support/health.fixture.js';
@@ -39,8 +40,8 @@ import { healthFixture } from '../domain/test-support/health.fixture.js';
  * The batch pump inside the real scheduler, one ordinary tick at a time, while other maintenance
  * keeps asking for every tick. Owed work has to be sent and later settled by ticks nobody forced,
  * within a bounded number of them, and so does the cleanup a settled job still owes the vendor; an
- * empty lane, and a lane no run can move, must never take one.
- * The lane is read by the same census a live tick takes; only the graph readings are a fixture.
+ * empty lane, and a lane no run can move, must never take one. The lane is read by the same census
+ * a live tick takes; only the graph readings are a fixture.
  */
 
 const START = new Date('2026-09-28T17:30:00.000Z');
@@ -55,7 +56,10 @@ const CONFIG: Config = {
   maintenance: { ...DEFAULTS.maintenance, tickMinutes: 15, tier3: false },
 };
 
-/** Ticks one starvation span holds, which is the wall time owed work takes to reach full relevance. */
+/**
+ * Ticks one starvation span holds, which is the wall time owed work takes to reach full
+ * relevance.
+ */
 const SPAN = CONFIG.maintenance.starvationCycles;
 
 let dir: string;
@@ -140,7 +144,10 @@ async function tick(introspector: Introspector, count: number): Promise<(string 
   return ran;
 }
 
-/** Ticks until the condition holds, at most `limit` of them, and returns which operation ran on each. */
+/**
+ * Ticks until the condition holds, at most `limit` of them, and returns which operation ran on
+ * each.
+ */
 async function tickUntil(
   introspector: Introspector,
   done: () => boolean,
@@ -228,9 +235,38 @@ describe('the batch pump under contested scheduling', () => {
     oweTen();
     const keyless: Config = { ...CONFIG, openai: { ...CONFIG.openai, apiKey: '' } };
 
-    const ran = await tick(engine([...BUSY, pump()], keyless), 3 * SPAN);
+    const contested = await tick(engine([...BUSY, pump()], keyless), 3 * SPAN);
+    // Alone in the catalog, any claim at all would win a tick within a few of them.
+    const quiet = await tick(engine([pump()], keyless), 3 * SPAN);
 
-    expect(ran).not.toContain(BATCH_SETTLEMENT_OPERATION);
+    expect(contested).not.toContain(BATCH_SETTLEMENT_OPERATION);
+    expect(quiet.every((name) => name === undefined)).toBe(true);
+    expect(calls).toEqual([]);
+    expect(states().every((state) => state === 'pending')).toBe(true);
+  });
+
+  it('takes no tick and makes no call on days whose ceiling cannot hold the next batch', async () => {
+    oweTen();
+    // A real day stops short of the ceiling rather than on it: the hold that would cross it is
+    // refused, so the last cent of headroom is never taken. Both UTC days the ticks cover are left
+    // a millionth of a dollar short, less than the ten rows' bound.
+    const ceilingUsd = CONFIG.anthropic.dailyCeilingUsd;
+    for (const day of [START, new Date(START.getTime() + 24 * 60 * 60 * 1000)]) {
+      reserveGenerationSpend(db, {
+        surface: 'judge',
+        route: 'messages',
+        maxUsd: ceilingUsd - 0.000001,
+        priced: true,
+        ceilingUsd,
+        now: day,
+      });
+    }
+
+    const quiet = await tick(engine([pump()]), 3 * SPAN);
+    const contested = await tick(engine([...BUSY, pump()]), 3 * SPAN);
+
+    expect(quiet.every((name) => name === undefined)).toBe(true);
+    expect(contested).not.toContain(BATCH_SETTLEMENT_OPERATION);
     expect(calls).toEqual([]);
     expect(states().every((state) => state === 'pending')).toBe(true);
   });

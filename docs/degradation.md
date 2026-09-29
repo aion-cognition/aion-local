@@ -559,11 +559,10 @@ through the same guarded write the inline call used. Every other generation stil
 Messages calls at full price. The stages whose judgments would also belong there are being
 restored, and each registers a handler when its judgment moves off the hot path.
 
-**A spent daily ceiling looks like a substrate with no key.** `AION_DAILY_CEILING_USD`
-($5) is held against before every dispatch, by both routes and either provider, from one durable
-book. When a day
-cannot cover the next request, background work goes back on the queue without spending an attempt,
-batch submissions are not sent and their work stays queued, and recall answers on the raw query
-text with `degraded: cues/unavailable`. The substrate keeps capturing, embedding, reading the graph
-and serving what it already holds. Nothing retries against it: the next UTC day clears it, and so
-does raising the number. `aion costs` prints the day against the ceiling.
+**A spent daily ceiling looks like a substrate with no key.** `AION_DAILY_CEILING_USD` ($5) is
+held against before every dispatch, by both routes and either provider, from one durable book.
+When a day cannot cover the next request, background work goes back on the queue without spending
+an attempt, batch submissions are not sent and their work stays queued, and recall answers on the
+raw query text with `degraded: cues/unavailable`. The substrate keeps capturing, embedding,
+reading the graph and serving what it already holds. Nothing retries against it: the next UTC day
+clears it, and so does raising the number. `aion costs` prints the day against the ceiling.

@@ -1,5 +1,7 @@
 import { BATCH_SETTLEMENT_OPERATION } from './operations/batch-settlement.js';
 import type { Config } from '../../infrastructure/config/schema.js';
+import { batchTransport, nextSubmission } from '../../infrastructure/providers/batch-adapter.js';
+import { batchBoundUsd } from '../../infrastructure/providers/batch-bounds.js';
 import { pendingReleases } from '../../infrastructure/providers/batch-release.js';
 import { providerKeyPresent } from '../../infrastructure/providers/routing.js';
 import { GENERATION_PROVIDERS } from '../../infrastructure/providers/types.js';
@@ -7,19 +9,19 @@ import { waitingBatchWork } from '../../infrastructure/sqlite/batch-work.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';
 import { operationStats } from '../../infrastructure/sqlite/introspection-counters.js';
 import { readSubstratePairing } from '../../infrastructure/sqlite/publication-control.js';
-import { readSpendDay } from '../../infrastructure/sqlite/spend-ledger.js';
+import { crossesCeiling, readSpendDay } from '../../infrastructure/sqlite/spend-ledger.js';
 import type { BatchBlock, BatchDemand } from '../domain/batch-settlement.js';
 
 /**
  * The batch lane's census, read from SQLite alone: the work rows, the deletions the ops ledger
- * records as failed, the pump's own run record, the day's spend and which keys are set. Every input is durable, so the waits it reports survive a
- * restart, and none of it reaches a vendor, so a tick learns what the lane owes without asking
- * anyone whether a job finished.
+ * records as failed, the pump's own run record, the day's spend and which keys are set. Every
+ * input is durable, so the waits it reports survive a restart, and none of it reaches a vendor,
+ * so a tick learns what the lane owes without asking anyone whether a job finished.
  *
  * The rule for who can act mirrors the pump's own. Submission needs the selected provider's key
- * and headroom under the day's ceiling. Reading a job needs the key of the provider that took it,
- * whatever is selected now, and so does retrying a deletion at that provider. Discarding
- * never-sent work for the other provider needs neither.
+ * and room under the day's ceiling for the batch it would send. Reading a job needs the key of
+ * the provider that took it, whatever is selected now, and so does retrying a deletion at that
+ * provider. Discarding never-sent work for the other provider needs neither.
  */
 
 function waitSince(oldestAt: string, checkedAt: number | undefined, now: Date): number {
@@ -29,6 +31,27 @@ function waitSince(oldestAt: string, checkedAt: number | undefined, now: Date): 
 
 function earlier(left: string | undefined, right: string): string {
   return left === undefined || right < left ? right : left;
+}
+
+/**
+ * Whether the day's ceiling refuses the batch a run would send now: the rows the pump would carry,
+ * priced at the bound its hold takes, under the rule the hold applies. Asking whether the day is
+ * full is not enough. A real day stops short of the ceiling, because the hold that would cross it
+ * is refused, and a day read as open there schedules a run the hold then turns away.
+ */
+function ceilingRefuses(db: SqliteHandle, substrateId: string, config: Config, now: Date): boolean {
+  // Pricing reads the stored bodies alone and nothing here reaches the wire, so the transport
+  // carries no key.
+  const transport = batchTransport(config.generation.provider, { apiKey: '' });
+  const { owed } = nextSubmission(db, substrateId, transport);
+  if (owed.length === 0) {
+    return false;
+  }
+  return crossesCeiling(
+    readSpendDay(db, now).committedUsd,
+    batchBoundUsd(transport, owed),
+    config.anthropic.dailyCeilingUsd,
+  );
 }
 
 export function readBatchDemand(db: SqliteHandle, config: Config, now: Date): BatchDemand {
@@ -57,7 +80,7 @@ export function readBatchDemand(db: SqliteHandle, config: Config, now: Date): Ba
   let blockedBy: BatchBlock | undefined;
   if (!providerKeyPresent(config, selected)) {
     blockedBy = 'missing_key';
-  } else if (readSpendDay(db, now).committedUsd >= config.anthropic.dailyCeilingUsd) {
+  } else if (ceilingRefuses(db, substrate.substrateId, config, now)) {
     blockedBy = 'spent_ceiling';
   }
 
