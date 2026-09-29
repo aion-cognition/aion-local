@@ -2,20 +2,18 @@
  * What each embed model can take, and how it wants a query spelled. One row per model, so a
  * model swap is a knob plus a row rather than a hunt through call sites.
  *
- * Ollama rejects an over-length embed input with a 400 and does not truncate it; `truncate:
- * true` does not save it, and one rejected input fails its whole batch. The cap therefore has
- * to hold for every input rather than on average, which is why it is derived from the window
- * instead of guessed from average token density.
+ * The character cap is derived from the model's window: a subword token spans at least one
+ * character, and the encoder spends two positions on its own start and end tokens. Measured
+ * against Ollama 0.24.0, nomic-embed-text took 2046 single-token characters and rejected 2047.
  *
- * The derivation: a subword token spans at least one character, and the encoder spends two
- * positions of the window on its own start and end tokens. Measured against Ollama 0.24.0,
- * nomic-embed-text takes 2046 single-token characters and rejects 2047.
- *
- * The cap is a guarantee for text that costs at most one token per character, which covers the
- * Latin text this pipeline embeds. A multilingual tokenizer can spend more than one token on
- * one character: snowflake-arctic-embed2 filled its 8192-token window with 4566 Devanagari
- * characters. Dense non-Latin content can still draw the 400, and sizing content where it is
- * generated is what closes that, not a smaller cap here.
+ * The window Ollama runs the model at can be narrower than the model's own, so the cap does not
+ * guarantee an input fits. Measured on the local Ollama 0.33.3 (2026-09-29), the runner embeds
+ * at most 2,048 tokens of snowflake-arctic-embed2's 8,192, and its default truncation cuts
+ * longer text to that. The cut text is re-tokenized after each out-of-vocabulary character has
+ * come back as the literal `<unk>`, which can re-tokenize to more tokens than the character did,
+ * so text such as `deploy🐆🚚done` repeated is still refused with a 400, and one refused input
+ * fails its whole request. `OllamaProvider.embed` answers that refusal by shortening the input
+ * that drew it.
  */
 export type EmbedModelProfile = {
   /** The model's context window, in tokens. */
@@ -73,6 +71,20 @@ function profileFor(model: string): EmbedModelProfile {
 
 export function maxEmbedInputChars(model: string): number {
   return profileFor(model).contextTokens - SPECIAL_TOKENS;
+}
+
+/**
+ * The first `maxChars` UTF-16 units of `text`, one fewer where the cut would split a surrogate
+ * pair: a lone half reaches Ollama as a replacement character the text never held.
+ */
+export function embedPrefix(text: string, maxChars: number): string {
+  if (text.length <= maxChars) {
+    return text;
+  }
+  const end = Math.max(0, maxChars);
+  const last = text.charCodeAt(end - 1);
+  const splitsPair = last >= 0xd800 && last <= 0xdbff;
+  return text.slice(0, splitsPair ? end - 1 : end);
 }
 
 export function embedQueryPrefix(model: string): string {
