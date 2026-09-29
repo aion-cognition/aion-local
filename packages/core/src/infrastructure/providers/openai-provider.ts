@@ -5,7 +5,7 @@ import { CircuitBreaker } from './circuit-breaker.js';
 import { abortRequested } from './deadline-signal.js';
 import { summarizeErrorBody } from './errors.js';
 import { readOpenAiUsage } from './openai-usage.js';
-import { composeSystemBlocks, type FrameOverride } from './request-blocks.js';
+import { composeSystemBlocks, type CacheWriteClass, type FrameOverride } from './request-blocks.js';
 import { backoff, MAX_ATTEMPTS, retryWaitMs, throttled } from './request-retry.js';
 import { boundedTokens, type SpendingGuard } from './spending.js';
 import type { ApiCall, GenerationBackend, StructuredRequest } from './types.js';
@@ -99,7 +99,8 @@ function instructionsOf(req: StructuredRequest, frameOverride: FrameOverride | u
     surface: req.surface,
     instructions: system,
     schema: req.schema,
-    // OpenAI caches a long enough prefix on its own; there is no marker to place.
+    // No Anthropic marker: the body below turns OpenAI's cache writes off, and a top-level
+    // `instructions` string cannot carry an OpenAI breakpoint in any case.
     promptCache: false,
     ...(frameOverride === undefined ? {} : { frameOverride }),
   })
@@ -133,9 +134,42 @@ export function responsesRequestBody(
     // Accepted only at effort `none`; the reasoning efforts refuse it outright.
     ...(effort !== 'none' || req.temperature === undefined ? {} : { temperature: req.temperature }),
     ...(options.constrained === true ? { text: { format: { type: 'json_object' } } } : {}),
+    // Explicit mode with no breakpoint writes nothing to the cache. Left implicit, the API
+    // marks the end of the last message, so every call wrote its whole prompt at 1.25x input
+    // and none read it back: the evidence differs on every call. No breakpoint is placed,
+    // because the fixed instructions on the busiest surfaces are shorter than the 1,024 tokens
+    // a cached prefix needs.
+    prompt_cache_options: { mode: 'explicit' },
     // Nothing here needs a stored response, and the input is memory content.
     store: false,
   };
+}
+
+function carriesBreakpoint(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some(carriesBreakpoint);
+  }
+  if (value !== null && typeof value === 'object') {
+    return 'prompt_cache_breakpoint' in value || Object.values(value).some(carriesBreakpoint);
+  }
+  return false;
+}
+
+/**
+ * Whether a Responses body can be billed a cache write, read off the body itself so a batch row
+ * stored under an older builder is held at the class it will actually be sent as. A body with no
+ * mode is implicit and can write; an explicit one writes only at a block it marks. OpenAI's card
+ * has one write rate, which the five-minute class names.
+ */
+export function responsesCacheWriteClass(body: unknown): CacheWriteClass {
+  const { prompt_cache_options: cache, input } = (body ?? {}) as {
+    prompt_cache_options?: { mode?: unknown };
+    input?: unknown;
+  };
+  if (cache?.mode === 'explicit' && !carriesBreakpoint(input)) {
+    return { cacheWrite: false };
+  }
+  return { cacheWrite: true, cacheWriteTtl: '5m' };
 }
 
 /** The answer text, or the error that says why there is none. */
@@ -193,18 +227,17 @@ async function askOpenAi(
   const fetchImpl = options.fetchImpl ?? fetch;
   const maxTokens = req.maxTokens ?? options.maxTokens ?? DEFAULT_MAX_TOKENS;
 
-  const requestBody = JSON.stringify(
-    responsesRequestBody(
-      { ...req, maxTokens },
-      {
-        constrained,
-        ...(options.reasoningEffort === undefined
-          ? {}
-          : { reasoningEffort: options.reasoningEffort }),
-        ...(options.frameOverride === undefined ? {} : { frameOverride: options.frameOverride }),
-      },
-    ),
+  const payload = responsesRequestBody(
+    { ...req, maxTokens },
+    {
+      constrained,
+      ...(options.reasoningEffort === undefined
+        ? {}
+        : { reasoningEffort: options.reasoningEffort }),
+      ...(options.frameOverride === undefined ? {} : { frameOverride: options.frameOverride }),
+    },
   );
+  const requestBody = JSON.stringify(payload);
 
   const surface = req.surface ?? 'unlabeled';
   const held = options.spending?.hold({
@@ -214,10 +247,7 @@ async function askOpenAi(
     // a second provider.
     route: 'messages',
     ...boundedTokens(Buffer.byteLength(requestBody, 'utf8'), maxTokens),
-    // OpenAI caches automatically and bills a write at 1.25x ordinary input, which is the
-    // five-minute write rate on the price card. Any request can incur it, so every one is held there.
-    cacheWrite: true,
-    cacheWriteTtl: '5m',
+    ...responsesCacheWriteClass(payload),
     provider: 'openai',
     now: new Date(started),
   });

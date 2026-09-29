@@ -101,10 +101,23 @@ describe('sending a job', () => {
     expect(calls).toHaveLength(1);
   });
 
-  it('bounds a request by the output ceiling it names, at the cache-write rate', () => {
+  it('bounds a request by the output ceiling it names, at the ordinary rate its body asks for', () => {
     const transport = new OpenAiBatchTransport({ apiKey: KEY });
 
+    expect(BODY.prompt_cache_options).toEqual({ mode: 'explicit' });
     expect(transport.bound(BODY)).toEqual({
+      model: 'gpt-6-luna',
+      outputTokens: 300,
+      cacheWrite: false,
+    });
+  });
+
+  it('bounds a body stored before cache writes were turned off at the write rate it can still bill', () => {
+    const transport = new OpenAiBatchTransport({ apiKey: KEY });
+    const stored: Record<string, unknown> = { ...BODY };
+    delete stored.prompt_cache_options;
+
+    expect(transport.bound(stored)).toEqual({
       model: 'gpt-6-luna',
       outputTokens: 300,
       cacheWrite: true,

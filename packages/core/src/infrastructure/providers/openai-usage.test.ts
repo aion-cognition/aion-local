@@ -75,7 +75,7 @@ describe('pricing GPT-6 Luna', () => {
     expect(estimateApiCost(request)).toBeCloseTo((300_000 * 0.1 + 1_000 * 0.5) / 1_000_000, 12);
   });
 
-  it('bounds a dispatch at the write rate, since OpenAI can bill any prompt as a cache write', () => {
+  it('bounds a dispatch whose body can write the cache at the write rate', () => {
     const bound = (inputTokens: number): number =>
       boundApiCost({
         model: 'gpt-6-luna',

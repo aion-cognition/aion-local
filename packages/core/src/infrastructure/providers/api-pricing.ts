@@ -48,8 +48,8 @@ const HAIKU_45_PRICES: TokenPrices = {
   cacheRead: 0.1,
 };
 // USD per million tokens, read 2026-09-27 from https://developers.openai.com/api/docs/pricing
-// (Standard tier) and the model page. OpenAI caches automatically and bills a write at 1.25x
-// ordinary input with no hour-long class, so both write rates are the one write price. The long
+// (Standard tier) and the model page. OpenAI bills a cache write at 1.25x ordinary input with no
+// hour-long class, so both write rates are the one write price. The long
 // card applies to the whole request past 272K input tokens: the pricing table lists the long-context
 // rates, and the Luna family's model pages state the threshold.
 const GPT_6_LUNA_PRICES: TokenPrices = {
