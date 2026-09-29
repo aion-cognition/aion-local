@@ -24,7 +24,11 @@ import {
   type Neo4jHarness,
 } from '../../../infrastructure/graph/test-support/neo4j-harness.fixture.js';
 import { openLogger, type Logger } from '../../../infrastructure/logging/logger.js';
-import type { Provider, Vector } from '../../../infrastructure/providers/types.js';
+import type {
+  Provider,
+  StructuredRequest,
+  Vector,
+} from '../../../infrastructure/providers/types.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
 import {
   spreadActivation,
@@ -96,16 +100,47 @@ const PROPOSED_SUMMARY = 'The pool exhaustion and the checkout outage are one in
 const PROPOSED_RATIONALE = 'One cluster holds the cause and the other holds what users saw.';
 const PROPOSED_PREMISES = ['body of left-1', 'body of right-2'];
 
+/**
+ * The pair reaches the model lower community id first, and which community holds the lower id
+ * depends on the ids the graph assigned, so a pool container that held other files can offer the
+ * right-hand cluster as A. A model names its source from cluster A and its target from cluster B,
+ * whichever that is; so does this script, and it records which way round it answered.
+ */
+let chosenLeftInA = true;
+
+function offeredLeftFirst(request: StructuredRequest): boolean {
+  const text = request.messages.map((message) => message.content).join('\n');
+  return text.indexOf(CHOSEN_LEFT) < text.indexOf(CHOSEN_RIGHT);
+}
+
+/** The chosen pair oriented to the clusters offered, each member keeping its own role. */
+function orientedBridge(
+  request: StructuredRequest,
+  roles: { readonly left: string; readonly right: string },
+): Record<string, string> {
+  chosenLeftInA = offeredLeftFirst(request);
+  return chosenLeftInA
+    ? {
+        sourceId: CHOSEN_LEFT,
+        targetId: CHOSEN_RIGHT,
+        sourceRole: roles.left,
+        targetRole: roles.right,
+      }
+    : {
+        sourceId: CHOSEN_RIGHT,
+        targetId: CHOSEN_LEFT,
+        sourceRole: roles.right,
+        targetRole: roles.left,
+      };
+}
+
 /** A model that finds the relation and names the two members it runs between. */
 const proposingProvider: Provider = {
   embed,
-  generate: (): Promise<unknown> =>
+  generate: (request: StructuredRequest): Promise<unknown> =>
     Promise.resolve({
       decision: 'bridge',
-      sourceId: CHOSEN_LEFT,
-      targetId: CHOSEN_RIGHT,
-      sourceRole: 'the cause',
-      targetRole: 'the symptom',
+      ...orientedBridge(request, { left: 'the cause', right: 'the symptom' }),
       summary: PROPOSED_SUMMARY,
       rationale: PROPOSED_RATIONALE,
       premises: PROPOSED_PREMISES,
@@ -128,13 +163,10 @@ const decliningProvider: Provider = {
 /** A model that proposes a bridge and scores it as one nobody should believe. */
 const incompatibleProvider: Provider = {
   embed,
-  generate: (): Promise<unknown> =>
+  generate: (request: StructuredRequest): Promise<unknown> =>
     Promise.resolve({
       decision: 'bridge',
-      sourceId: CHOSEN_LEFT,
-      targetId: CHOSEN_RIGHT,
-      sourceRole: 'a memory',
-      targetRole: 'another memory',
+      ...orientedBridge(request, { left: 'a memory', right: 'another memory' }),
       summary: 'Both of these are memories.',
       rationale: 'They have nothing else in common.',
       premises: [],
@@ -310,12 +342,13 @@ describe('community refresh and the symbiosis bridge', () => {
   it('writes what the bridge rests on and that it is an inference', async () => {
     const [bridge] = await standingBridges(harness.driver);
 
+    // The cause is left-1 and the symptom right-2, whichever end the offered order made source.
     expect(bridge).toMatchObject({
       text: PROPOSED_SUMMARY,
       author: 'model',
       inferred: true,
-      sourceRole: 'the cause',
-      targetRole: 'the symptom',
+      sourceRole: chosenLeftInA ? 'the cause' : 'the symptom',
+      targetRole: chosenLeftInA ? 'the symptom' : 'the cause',
       compatibility: 0.82,
     });
     expect(bridge?.premises).toEqual(PROPOSED_PREMISES);
