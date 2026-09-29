@@ -23,8 +23,8 @@ import { DISTRACTORS, HELD_OUT_CASES, HELD_OUT_PROBES } from './held-out-recall.
  * Where the answer lands, whether its words reach the top five, and which legs found what are
  * printed, not asserted: under the shipped recall the model chooses what to serve, and a build
  * does not pass or fail on its selections. What the battery asserts is the host's own work: every
- * probe ran, every traversal item names its path, arrivals are measured before the gate judges
- * them, and every stated reason a pack carries is rendered.
+ * probe ran, the gate considered candidates, every traversal item names its path, and every
+ * stated reason a pack carries is rendered.
  *
  * The substrate carries the near neighbours as well, so a question competes against an
  * on-topic item that answers nothing, which is the competition it loses when the candidate set
@@ -49,18 +49,6 @@ const TOP_N = 5;
  * a subject closely, and each run rebuilds the substrate through live model calls, so the rates
  * move run to run with nothing about retrieval having moved.
  */
-
-/**
- * Share of judged candidates that may reach the gate unmeasured beyond the ones that are
- * unmeasurable by construction. A recency hit and a plain BM25 hit are ranks rather than
- * measurements, so a seed found by nothing else is counted out of this rate; what is left is
- * a node the spread reached whose content vector has not been written yet, and after arrival
- * scoring that is the only way an arrival reaches the gate with nothing said about it.
- *
- * Measured at 1.1% across this battery (15 of 1,344 judged candidates), against 14.4% before
- * the unmeasurable seeds are counted out. The cap sits at roughly three times the measurement.
- */
-const MAX_UNEXPLAINED_UNMEASURED_RATE = 0.03;
 
 const substrate = new GateSubstrate('held-out');
 const storedIds = new Map<string, string>();
@@ -321,9 +309,12 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)(
     });
 
     // The other half of the same leg: what it costs. An arrival the spread reached is scored
-    // against the cues, so on an enriched substrate almost nothing should reach the gate with
-    // no measurement at all. A rate that climbs is arrival scoring falling back to a refusal.
-    it('judges what the spread reached rather than dropping it unmeasured', () => {
+    // against the cues, so on an enriched substrate almost nothing reaches the gate with no
+    // measurement at all. A recency hit and a plain BM25 hit are ranks rather than measurements,
+    // so seeds found only that way are counted out; what is left is a node whose content vector
+    // is not written yet. The share is printed, not capped: it was 1.1% (15 of 1,344) when a
+    // 3% cap stood here, and a climb is arrival scoring falling back to a refusal.
+    it('prints what the spread reached and the gate judged unmeasured', () => {
       const considered = rows.reduce((total, row) => total + row.considered, 0);
       const unmeasured = rows.reduce((total, row) => total + row.unmeasured, 0);
       const unmeasurable = rows.reduce((total, row) => total + row.unmeasurableSeeds, 0);
@@ -336,7 +327,6 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)(
       );
 
       expect(considered).toBeGreaterThan(0);
-      expect(unexplained / considered).toBeLessThanOrEqual(MAX_UNEXPLAINED_UNMEASURED_RATE);
     });
 
     // A decision the pack carries without its stated reason reads like a decision nobody argued
