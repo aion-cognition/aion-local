@@ -35,23 +35,6 @@ export default defineConfig([
     rules: { 'max-lines': 'off' },
   },
   {
-    // Review probes, copied in from the reviewer's own artifacts and pinned to a published
-    // hash. They are evidence rather than source: reformatting one to this repo's rules would
-    // break the hash the acceptance is checked against, so the rules do not apply to them.
-    // They sit outside tsconfig.tests.json for the same reason, so type-aware linting cannot
-    // see them either.
-    files: ['packages/*/src/**/review-*.test.ts', 'packages/*/src/**/review-*.int.test.ts'],
-    extends: [tseslint.configs.disableTypeChecked],
-    rules: {
-      '@typescript-eslint/no-base-to-string': 'off',
-      '@typescript-eslint/no-empty-function': 'off',
-      '@typescript-eslint/no-unused-vars': 'off',
-      'import-x/first': 'off',
-      'import-x/order': 'off',
-      'no-promise-executor-return': 'off',
-    },
-  },
-  {
     // Standalone scripts that child_process spawns directly. They sit outside
     // tsconfig.tests.json on purpose, so type-aware linting cannot see them.
     files: [

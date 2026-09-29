@@ -1,27 +1,17 @@
-import * as selectedReading from '../../../infrastructure/graph/selected-reading.js';
-import { writeRedactedProperties } from '../../../infrastructure/graph/redaction-residue-writes.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { PreferenceInferenceStage } from './preferences.js';
-import { supersede } from '../../../infrastructure/graph/bitemporal.js';
-import { withCurrency } from '../../../infrastructure/graph/read-modes.js';
-import { nodeCandidates } from '../../../infrastructure/graph/seed-queries.js';
-import {
-  writePreference,
-  readPreference,
-  findStandingPreferences,
-} from '../../../infrastructure/graph/preference-queries.js';
-import { readMemberId, bootstrapBackbone } from '../../../infrastructure/graph/backbone.js';
-import { assemble, item } from '../../../recall/domain/test-support/pack.fixture.js';
 import { ReflectiveSynthesisStage } from './synthesis.js';
 import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
+import { bootstrapBackbone } from '../../../infrastructure/graph/backbone.js';
+import { supersede } from '../../../infrastructure/graph/bitemporal.js';
 import { writeCognitiveNode } from '../../../infrastructure/graph/cognitive-queries.js';
 import { loadEpisodeContext } from '../../../infrastructure/graph/episode-context.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
-import { readSynthesis, writeSynthesis } from '../../../infrastructure/graph/synthesis-queries.js';
+import { writeRedactedProperties } from '../../../infrastructure/graph/redaction-residue-writes.js';
+import * as selectedReading from '../../../infrastructure/graph/selected-reading.js';
 import { synthesisDrawnOver } from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   startNeo4jHarness,
@@ -206,8 +196,8 @@ describe('the selected reading survives through publication', () => {
     const fresh = await seedClaim(second, 'new requests wait for a connection', basis);
     const third = await newEpisode('E2-late-correction', 'a correction to the pool size');
     const replacement = await seedClaim(third, 'a correction to the pool size', basisVector(78));
-    let announce: () => void = () => {};
-    let release: () => void = () => {};
+    let announce: () => void = () => undefined;
+    let release: () => void = () => undefined;
     const read = new Promise<void>((resolve) => {
       announce = resolve;
     });
@@ -244,7 +234,9 @@ describe('the selected reading survives through publication', () => {
       const retiredBeforeRelease = await Promise.race([
         retiring.then(() => true),
         new Promise<boolean>((resolve) => {
-          setTimeout(() => resolve(false), 300);
+          setTimeout(() => {
+            resolve(false);
+          }, 300);
         }),
       ]);
       release();

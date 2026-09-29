@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import { resonantItem } from './resonance.js';
 import { assemble } from './test-support/pack.fixture.js';
 import type { SeedCandidate } from '../../infrastructure/graph/seed-queries.js';

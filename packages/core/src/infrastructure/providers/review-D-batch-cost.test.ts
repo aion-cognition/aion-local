@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import pino from 'pino';
 import { expect, it } from 'vitest';
 
 import { consumeBatchWork, submitBatchWork, type BatchAdapterDeps } from './batch-adapter.js';
@@ -19,7 +20,8 @@ it.each([true, false])('accounts for the paid response even when current=%s', as
     client: {
       apiKey: 'injected-test-key',
       fetchImpl: async (url) => {
-        if (String(url).endsWith('/results')) {
+        const address = url instanceof Request ? url.url : url.toString();
+        if (address.endsWith('/results')) {
           return new Response(
             JSON.stringify({
               custom_id: 'ready-item',
@@ -43,7 +45,7 @@ it.each([true, false])('accounts for the paid response even when current=%s', as
         return new Response(
           JSON.stringify({
             id: 'batch-one',
-            processing_status: String(url).endsWith('/batches') ? 'in_progress' : 'ended',
+            processing_status: address.endsWith('/batches') ? 'in_progress' : 'ended',
             results_url: 'https://api.anthropic.com/v1/messages/batches/batch-one/results',
           }),
         );
@@ -58,12 +60,7 @@ it.each([true, false])('accounts for the paid response even when current=%s', as
         },
       },
     ],
-    logger: {
-      debug: () => {},
-      info: () => {},
-      warn: () => {},
-      error: () => {},
-    } as unknown as BatchAdapterDeps['logger'],
+    logger: pino({ enabled: false }),
     now: () => now,
   };
   try {

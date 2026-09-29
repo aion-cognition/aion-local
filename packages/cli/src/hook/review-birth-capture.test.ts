@@ -2,9 +2,10 @@ import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
+
+import type { Harness, HookOptions } from './options.js';
 import { runHook } from './run.js';
 import { readHookState } from './state.js';
-import type { Harness, HookOptions } from './options.js';
 import { FALLBACK_TAIL_BYTES } from './transcript.js';
 
 const dirs: string[] = [];

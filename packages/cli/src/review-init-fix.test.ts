@@ -52,7 +52,7 @@ function scripted(calls: string[]): HostActions {
 it('does not prescribe a first-boot seed as an initialized server password reset', async () => {
   const installed = layout();
   mkdirSync(join(installed.home, 'data', 'databases', 'system'), { recursive: true });
-  const refusal = await passwordRefusal('bolt://localhost:7687', installed, scripted([]), {});
+  const refusal = passwordRefusal('bolt://localhost:7687', installed, scripted([]), {});
   console.log(JSON.stringify({ case: 'initialized-remedy', commands: refusal.commands }));
   expect(refusal.commands.join('\n')).toContain('AION_NEO4J_PASSWORD');
   expect(refusal.commands.join('\n')).not.toContain('set-initial-password');

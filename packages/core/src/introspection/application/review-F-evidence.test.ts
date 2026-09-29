@@ -1,21 +1,22 @@
 import { expect, it } from 'vitest';
-import { openSqliteHandle } from '../../infrastructure/sqlite/database.js';
-import { appendBridgeTraversalEvent } from '../../infrastructure/sqlite/sense-usage-events.js';
-import {
-  appendModelLesson,
-  recentModelLessons,
-} from '../../infrastructure/sqlite/introspection-model-lessons.js';
-import { appendApiCall } from '../../infrastructure/sqlite/api-usage.js';
-import { summarizeBridgeTraversal } from './senses/bridge-traversal-sense.js';
-import {
-  summarizeCompatibilityCalibration,
-  describeCompatibilityCalibration,
-} from '../domain/compatibility-calibration.js';
-import { summarizeCoOccursDensity } from '../domain/co-occurs-density.js';
+
 import {
   buildBatchCadenceReport,
   describeBatchCadenceReport,
 } from './reports/batch-cadence-report.js';
+import { summarizeBridgeTraversal } from './senses/bridge-traversal-sense.js';
+import { appendApiCall } from '../../infrastructure/sqlite/api-usage.js';
+import { openSqliteHandle } from '../../infrastructure/sqlite/database.js';
+import {
+  appendModelLesson,
+  recentModelLessons,
+} from '../../infrastructure/sqlite/introspection-model-lessons.js';
+import { appendBridgeTraversalEvent } from '../../infrastructure/sqlite/sense-usage-events.js';
+import { summarizeCoOccursDensity } from '../domain/co-occurs-density.js';
+import {
+  summarizeCompatibilityCalibration,
+  describeCompatibilityCalibration,
+} from '../domain/compatibility-calibration.js';
 
 const NOW = new Date('2026-09-13T12:00:00Z');
 it('lets new observations enter a bounded sense after its first page fills', () => {

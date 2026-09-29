@@ -141,16 +141,26 @@ it.each(['headers', 'body'] as const)(
     vi.useFakeTimers();
     vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
       const controller = new AbortController();
-      setTimeout(() => controller.abort(), ms);
+      setTimeout(() => {
+        controller.abort();
+      }, ms);
       return controller.signal;
     });
     let release: (() => void) | undefined;
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const pending = new Promise<never>((_resolve, reject) => {
-        release = () => reject(new Error('test cleanup'));
-        init?.signal?.addEventListener('abort', () => reject(new Error('deadline reached')), {
-          once: true,
-        });
+        release = () => {
+          reject(new Error('test cleanup'));
+        };
+        init?.signal?.addEventListener(
+          'abort',
+          () => {
+            reject(new Error('deadline reached'));
+          },
+          {
+            once: true,
+          },
+        );
       });
       if (phase === 'headers') {
         return pending;

@@ -13,9 +13,12 @@ import {
   unforgetNodeInTransaction,
   writeStampedNode,
 } from '../../../infrastructure/graph/bitemporal.js';
+import { GraphTransaction, inWriteTransaction } from '../../../infrastructure/graph/connection.js';
 import { refreshEntityDescription } from '../../../infrastructure/graph/entity-description-queries.js';
 import { linkEntityMentions, mergeEntities } from '../../../infrastructure/graph/entity-queries.js';
+import { lockNodeInTransaction } from '../../../infrastructure/graph/locks.js';
 import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
+import { writeRedactedProperties } from '../../../infrastructure/graph/redaction-residue-writes.js';
 import { storedEntity } from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   startNeo4jHarness,
@@ -149,15 +152,19 @@ async function nominate(id: string, ctx = context()): Promise<BatchWorkItem> {
 }
 function api(item: BatchWorkItem, description: string, enforceId = false): typeof fetch {
   return async (url, init) => {
-    if (String(url).endsWith('/batches')) {
-      const body = JSON.parse(String(init?.body)) as { requests: { custom_id: string }[] };
+    const address = url instanceof Request ? url.url : url.toString();
+    if (address.endsWith('/batches')) {
+      if (typeof init?.body !== 'string') {
+        throw new Error('expected a JSON request body');
+      }
+      const body = JSON.parse(init.body) as { requests: { custom_id: string }[] };
       if (enforceId && body.requests.some((row) => !/^[a-zA-Z0-9_-]{1,64}$/.test(row.custom_id))) {
         console.log(JSON.stringify({ refusedIds: body.requests.map((row) => row.custom_id) }));
         return new Response('custom_id does not meet the API contract', { status: 400 });
       }
     }
     // Except in the format case, accept the submitted IDs to isolate downstream binding defects.
-    if (String(url).endsWith('/results')) {
+    if (address.endsWith('/results')) {
       return new Response(
         JSON.stringify({
           custom_id: item.workKey,
@@ -175,7 +182,7 @@ function api(item: BatchWorkItem, description: string, enforceId = false): typeo
     return new Response(
       JSON.stringify({
         id: `batch-${serial}`,
-        processing_status: String(url).endsWith('/batches') ? 'in_progress' : 'ended',
+        processing_status: address.endsWith('/batches') ? 'in_progress' : 'ended',
         results_url: `https://api.anthropic.com/v1/messages/batches/batch-${serial}/results`,
       }),
     );
@@ -191,10 +198,6 @@ function adapter(ctx: OperationContext, fetchImpl: typeof fetch): BatchAdapterDe
     now: () => NOW,
   };
 }
-
-import { GraphTransaction, inWriteTransaction } from '../../../infrastructure/graph/connection.js';
-import { lockNodeInTransaction } from '../../../infrastructure/graph/locks.js';
-import { writeRedactedProperties } from '../../../infrastructure/graph/redaction-residue-writes.js';
 
 it('reconsiders discarded work when its temporarily forgotten premise is restored', async () => {
   const subject = await seed();
@@ -261,7 +264,9 @@ it('allows only one writer to replace the same expected description under conten
       ...options,
       text: 'second candidate',
     });
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
     await tx.commit();
     released = true;
     const outcomes = await Promise.all([first, second]);

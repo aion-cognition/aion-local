@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, expect, it } from 'vitest';
+
 import { adjacencyFetchFor } from './adjacency.js';
 import { writeStampedNode } from './bitemporal.js';
 import { writeBridge } from './bridge-queries.js';
@@ -11,9 +12,9 @@ import {
   stopNeo4jHarness,
   type Neo4jHarness,
 } from './test-support/neo4j-harness.fixture.js';
+import { spreadActivation } from '../../recall/domain/activation.js';
 import { DEFAULTS } from '../config/defaults.js';
 import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
-import { spreadActivation } from '../../recall/domain/activation.js';
 
 let harness: Neo4jHarness;
 let db: SqliteHandle;

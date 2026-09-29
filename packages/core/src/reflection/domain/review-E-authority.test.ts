@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import { plannedConclusions } from './synthesis.js';
 
 describe('the model owns the conclusion within the evidence it was shown', () => {

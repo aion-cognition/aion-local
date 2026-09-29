@@ -23,14 +23,13 @@ import {
 } from '@aion/core/infrastructure/providers/test-support/campaign-guard.js';
 import { testGenerationConfig } from '@aion/core/infrastructure/providers/test-support/generation-provider.js';
 import type { StructuredRequest, Vector } from '@aion/core/infrastructure/providers/types.js';
+import { REVIEW_PROMPT as ENTITY_REVIEW_PROMPT } from '@aion/core/prompts/entity-merge-judge.js';
 import { normalizeEntityName } from '@aion/core/reflection/domain/entity-extraction.js';
 import {
   entityNameVectorText,
   vectorInputHash,
 } from '@aion/core/reflection/domain/vector-input.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-
-import { REVIEW_PROMPT as ENTITY_REVIEW_PROMPT } from '@aion/core/prompts/entity-merge-judge.js';
 
 import { CASCADE_BATTERY, type CascadeCase } from './entity-cascade-precision.fixture.js';
 import { GateSubstrate, REMOTE_JUDGE_ABSENT } from './gate-substrate.fixture.js';
@@ -437,7 +436,8 @@ function reviewVariants(): readonly { readonly name: string; readonly prompt: st
 }
 
 function asReview(request: StructuredRequest, prompt: string): StructuredRequest {
-  const { signal: _signal, ...rest } = request;
+  const rest = { ...request };
+  delete rest.signal;
   return {
     ...rest,
     messages: request.messages.map((message) =>

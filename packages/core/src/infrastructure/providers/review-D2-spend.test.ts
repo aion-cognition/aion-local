@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import pino from 'pino';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 
 import { requestAnthropicJson } from './anthropic-provider.js';
@@ -48,13 +49,8 @@ function deps(fetchImpl: typeof fetch): BatchAdapterDeps {
     spending,
     now: () => NOW,
     client: { apiKey: 'injected', fetchImpl },
-    handlers: [{ surface: 'review', isCurrent: () => true, apply: async () => {} }],
-    logger: {
-      info: () => {},
-      warn: () => {},
-      debug: () => {},
-      error: () => {},
-    } as unknown as BatchAdapterDeps['logger'],
+    handlers: [{ surface: 'review', isCurrent: () => true, apply: () => Promise.resolve() }],
+    logger: pino({ enabled: false }),
   };
 }
 
@@ -123,7 +119,8 @@ it('keeps coverage for the unaccounted portion of a partially read results file'
   owe('one');
   owe('two');
   const api: typeof fetch = async (url) => {
-    if (String(url).endsWith('/results')) {
+    const address = url instanceof Request ? url.url : url.toString();
+    if (address.endsWith('/results')) {
       return new Response(
         JSON.stringify({
           custom_id: 'one',
@@ -141,7 +138,7 @@ it('keeps coverage for the unaccounted portion of a partially read results file'
     return new Response(
       JSON.stringify({
         id: 'batch-one',
-        processing_status: String(url).endsWith('/batches') ? 'in_progress' : 'ended',
+        processing_status: address.endsWith('/batches') ? 'in_progress' : 'ended',
         results_url: 'https://api.anthropic.com/v1/messages/batches/batch-one/results',
       }),
     );

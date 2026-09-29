@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
-import { summarizeEntities } from './scorer.js';
+
 import { extractEntitiesViaProvider } from './provider-extractor.js';
+import { summarizeEntities } from './scorer.js';
 import { GenerationCeilingReachedError } from '../../../infrastructure/providers/errors.js';
 
 it('shows why counts and schema validity cannot establish extraction faithfulness', () => {

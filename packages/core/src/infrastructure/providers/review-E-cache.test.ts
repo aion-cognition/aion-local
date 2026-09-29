@@ -1,7 +1,9 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import pino from 'pino';
 import { afterEach, beforeEach, expect, it } from 'vitest';
+
 import { batchMessagesBody } from './anthropic-provider.js';
 import { readUsage } from './anthropic-usage.js';
 import { estimateApiCost } from './api-pricing.js';
@@ -109,12 +111,7 @@ it('carries the marked frame write class into the batch reservation', async () =
       fetchImpl: async () =>
         new Response(JSON.stringify({ id: 'hourly-batch', processing_status: 'in_progress' })),
     },
-    logger: {
-      info: () => {},
-      warn: () => {},
-      debug: () => {},
-      error: () => {},
-    } as unknown as BatchAdapterDeps['logger'],
+    logger: pino({ enabled: false }),
   };
   expect((await submitBatchWork(deps)).submitted).toBe(1);
   console.log(JSON.stringify({ case: 'cache-hold', held }));

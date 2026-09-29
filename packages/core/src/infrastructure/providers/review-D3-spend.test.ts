@@ -1,9 +1,9 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import pino from 'pino';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 
-import { requestAnthropicJson } from './anthropic-provider.js';
 import { submitBatchWork, consumeBatchWork, type BatchAdapterDeps } from './batch-adapter.js';
 import { GenerationSpendGuard } from './spending.js';
 import { enqueueBatchWork, readBatchWork } from '../sqlite/batch-work.js';
@@ -48,13 +48,8 @@ function deps(fetchImpl: typeof fetch): BatchAdapterDeps {
     spending,
     now: () => NOW,
     client: { apiKey: 'injected', fetchImpl },
-    handlers: [{ surface: 'review', isCurrent: () => true, apply: async () => {} }],
-    logger: {
-      info: () => {},
-      warn: () => {},
-      debug: () => {},
-      error: () => {},
-    } as unknown as BatchAdapterDeps['logger'],
+    handlers: [{ surface: 'review', isCurrent: () => true, apply: () => Promise.resolve() }],
+    logger: pino({ enabled: false }),
   };
 }
 
@@ -63,7 +58,8 @@ it.each([false, true])(
   async (fail) => {
     owe('one');
     const api: typeof fetch = async (url) => {
-      if (String(url).endsWith('/results')) {
+      const address = url instanceof Request ? url.url : url.toString();
+      if (address.endsWith('/results')) {
         return new Response(
           JSON.stringify({
             custom_id: 'one',
@@ -81,7 +77,7 @@ it.each([false, true])(
       return new Response(
         JSON.stringify({
           id: 'batch-bill',
-          processing_status: String(url).endsWith('/batches') ? 'in_progress' : 'ended',
+          processing_status: address.endsWith('/batches') ? 'in_progress' : 'ended',
           results_url: 'https://api.anthropic.com/v1/messages/batches/batch-bill/results',
         }),
       );

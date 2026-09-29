@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+
 import { openCampaignSpendingGuard, campaignCommittedUsd } from './campaign-guard.js';
 
 let dir: string;

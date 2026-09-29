@@ -5,8 +5,8 @@ import { afterEach, beforeEach, expect, it } from 'vitest';
 
 import type { HostActions } from './host-actions.js';
 import type { InstallManifest } from './install-manifest.js';
-import { executeUninstall } from './uninstall.js';
 import { planUninstall } from './uninstall-plan.js';
+import { executeUninstall } from './uninstall.js';
 
 let dir: string;
 beforeEach(() => {

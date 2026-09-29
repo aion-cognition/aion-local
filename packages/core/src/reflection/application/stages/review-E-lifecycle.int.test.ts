@@ -4,21 +4,20 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { PreferenceInferenceStage } from './preferences.js';
+import { ReflectiveSynthesisStage } from './synthesis.js';
+import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
+import { readMemberId, bootstrapBackbone } from '../../../infrastructure/graph/backbone.js';
 import { supersede } from '../../../infrastructure/graph/bitemporal.js';
-import { withCurrency } from '../../../infrastructure/graph/read-modes.js';
-import { nodeCandidates } from '../../../infrastructure/graph/seed-queries.js';
+import { writeCognitiveNode } from '../../../infrastructure/graph/cognitive-queries.js';
+import { loadEpisodeContext } from '../../../infrastructure/graph/episode-context.js';
+import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
 import {
   writePreference,
   readPreference,
   findStandingPreferences,
 } from '../../../infrastructure/graph/preference-queries.js';
-import { readMemberId, bootstrapBackbone } from '../../../infrastructure/graph/backbone.js';
-import { assemble, item } from '../../../recall/domain/test-support/pack.fixture.js';
-import { ReflectiveSynthesisStage } from './synthesis.js';
-import { DEFAULTS } from '../../../infrastructure/config/defaults.js';
-import { writeCognitiveNode } from '../../../infrastructure/graph/cognitive-queries.js';
-import { loadEpisodeContext } from '../../../infrastructure/graph/episode-context.js';
-import { runGraphMigrations } from '../../../infrastructure/graph/migrations.js';
+import { withCurrency } from '../../../infrastructure/graph/read-modes.js';
+import { nodeCandidates } from '../../../infrastructure/graph/seed-queries.js';
 import { readSynthesis, writeSynthesis } from '../../../infrastructure/graph/synthesis-queries.js';
 import { synthesisDrawnOver } from '../../../infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
@@ -30,6 +29,7 @@ import { openLogger, type Logger } from '../../../infrastructure/logging/logger.
 import type { Provider, Vector } from '../../../infrastructure/providers/types.js';
 import type { PublicationCoordinator } from '../../../infrastructure/publication/coordinator.js';
 import { openSqliteHandle, type SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import { assemble, item } from '../../../recall/domain/test-support/pack.fixture.js';
 import { SessionManager } from '../../../session/session-manager.js';
 import type { StageContext } from '../../domain/stage.js';
 import { PIPELINE_VERSION } from '../../domain/version.js';

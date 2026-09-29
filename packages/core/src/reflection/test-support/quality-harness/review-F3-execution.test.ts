@@ -140,7 +140,7 @@ it('retains schema invalidity when an answer really was received', async () => {
   expect(result.run.refused).toBe(0);
   expect(
     result.run.records.every(
-      (record) => record.outcome.execution === 'dispatched' && record.outcome.valid === false,
+      (record) => record.outcome.execution === 'dispatched' && !record.outcome.valid,
     ),
   ).toBe(true);
 });
