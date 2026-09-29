@@ -160,6 +160,107 @@ describe('OllamaProvider.embed', () => {
 });
 
 /**
+ * Ollama's own refusal of an input its runner cannot fit, which fails every input in the request.
+ * The scripted server refuses any input longer than `fits` and embeds each other one as its length.
+ */
+function overflowServer(fits: number) {
+  const sent: string[][] = [];
+  const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => {
+    const input = JSON.parse(init?.body as string).input as string[];
+    sent.push(input);
+    if (input.some((text) => text.length > fits)) {
+      return jsonResponse(
+        { error: 'the input length exceeds the context length' },
+        { status: 400 },
+      );
+    }
+    return jsonResponse({ embeddings: input.map((text) => [text.length]) });
+  });
+  return { sent, fetchImpl: fetchImpl as unknown as typeof fetch };
+}
+
+describe('an input Ollama refuses as longer than its window', () => {
+  it('embeds the rest unchanged and the refused one from a prefix that fits', async () => {
+    const { sent, fetchImpl } = overflowServer(3_000);
+    const provider = new OllamaProvider({
+      baseUrl: 'http://localhost:11434',
+      embedModel: 'snowflake-arctic-embed2',
+      fetchImpl,
+    });
+
+    const vectors = await provider.embed(['first', 'x'.repeat(9_000), 'last']);
+
+    // The cap, then half of it, then half again: 8190, 4095, 2047.
+    expect(vectors).toEqual([[5], [2_047], [4]]);
+    expect(sent.map((input) => input.map((text) => text.length))).toEqual([
+      [5, 8_190, 4],
+      [5],
+      [8_190],
+      [4_095],
+      [2_047],
+      [4],
+    ]);
+  });
+
+  it('throws rather than answer for an input refused however short it gets', async () => {
+    const { fetchImpl } = overflowServer(0);
+    const provider = new OllamaProvider({
+      baseUrl: 'http://localhost:11434',
+      embedModel: 'nomic-embed-text',
+      fetchImpl,
+    });
+
+    const err = await provider.embed(['anything']).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(OllamaRequestError);
+    expect((err as OllamaRequestError).status).toBe(400);
+  });
+
+  it('does not retry a refusal that is not about length', async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ error: 'model "nope" not found, try pulling it first' }, { status: 400 }),
+    );
+    const provider = new OllamaProvider({
+      baseUrl: 'http://localhost:11434',
+      embedModel: 'nope',
+      fetchImpl,
+    });
+
+    await expect(provider.embed(['a', 'b'])).rejects.toBeInstanceOf(OllamaRequestError);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it('does not shorten an input whose one-at-a-time re-send fails for another reason', async () => {
+    const overflow = overflowServer(3_000);
+    let reloading = true;
+    // The runner reloads between the refused batch and the first re-send, which fits.
+    const fetchImpl = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const input = JSON.parse(init?.body as string).input as string[];
+      if (input.length === 1 && reloading) {
+        reloading = false;
+        overflow.sent.push(input);
+        return new Response('llama runner process has terminated', { status: 500 });
+      }
+      return overflow.fetchImpl(url, init);
+    });
+    const provider = new OllamaProvider({
+      baseUrl: 'http://localhost:11434',
+      embedModel: 'snowflake-arctic-embed2',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const err = await provider.embed(['first', 'x'.repeat(9_000)]).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(OllamaRequestError);
+    expect((err as OllamaRequestError).status).toBe(500);
+    expect(overflow.sent.map((input) => input.map((text) => text.length))).toEqual([
+      [5, 8_190],
+      [5],
+    ]);
+  });
+});
+
+/**
  * The error message is what roughly a dozen `{ err }` call sites write to the JSONL log, and the
  * text handed to the embedder is episode and claim text. A provider that echoes the request back
  * in its error body would put that content in every one of those lines.

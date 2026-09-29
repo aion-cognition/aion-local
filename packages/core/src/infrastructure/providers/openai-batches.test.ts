@@ -101,10 +101,52 @@ describe('sending a job', () => {
     expect(calls).toHaveLength(1);
   });
 
-  it('bounds a request by the output ceiling it names, at the cache-write rate', () => {
+  it('bounds a request by the output ceiling it names, at the ordinary rate its body asks for', () => {
     const transport = new OpenAiBatchTransport({ apiKey: KEY });
 
+    expect(BODY.prompt_cache_options).toEqual({ mode: 'explicit' });
     expect(transport.bound(BODY)).toEqual({
+      model: 'gpt-6-luna',
+      outputTokens: 300,
+      cacheWrite: false,
+    });
+  });
+
+  it('bounds a body stored before cache writes were turned off at the write rate it can still bill', () => {
+    const transport = new OpenAiBatchTransport({ apiKey: KEY });
+    const stored: Record<string, unknown> = { ...BODY };
+    delete stored.prompt_cache_options;
+
+    expect(transport.bound(stored)).toEqual({
+      model: 'gpt-6-luna',
+      outputTokens: 300,
+      cacheWrite: true,
+      cacheWriteTtl: '5m',
+    });
+  });
+
+  it('bounds an explicit body that marks a breakpoint at the write rate, since the marked prefix is written', () => {
+    const transport = new OpenAiBatchTransport({ apiKey: KEY });
+    // The guide's placement: the end of a stable prefix, in a developer message's content block.
+    const marked: Record<string, unknown> = {
+      ...BODY,
+      input: [
+        {
+          role: 'developer',
+          content: [
+            {
+              type: 'input_text',
+              text: 'Stable instructions and shared reference material.',
+              prompt_cache_breakpoint: { mode: 'explicit' },
+            },
+          ],
+        },
+        ...(BODY.input as unknown[]),
+      ],
+    };
+
+    expect(marked.prompt_cache_options).toEqual({ mode: 'explicit' });
+    expect(transport.bound(marked)).toEqual({
       model: 'gpt-6-luna',
       outputTokens: 300,
       cacheWrite: true,

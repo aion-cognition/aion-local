@@ -173,7 +173,7 @@ describe('submitting to OpenAI', () => {
     });
   });
 
-  it('holds the submission at the batch rate on the OpenAI card, cache writes included', async () => {
+  it('holds the submission at the batch rate on the OpenAI card, with no cache write to cover', async () => {
     owe('pair-a');
     const { impl } = openAiBatchApi();
 
@@ -185,8 +185,7 @@ describe('submitting to OpenAI', () => {
       inputTokens: bytes,
       outputTokens: 300,
       pricingTier: 'batch',
-      cacheWrite: true,
-      cacheWriteTtl: '5m',
+      cacheWrite: false,
       provider: 'openai',
     }).maxUsd;
     expect(spendRows()).toEqual([
@@ -206,8 +205,7 @@ describe('submitting to OpenAI', () => {
       inputTokens: Buffer.byteLength(JSON.stringify(unpriced), 'utf8'),
       outputTokens: 300,
       pricingTier: 'batch' as const,
-      cacheWrite: true,
-      cacheWriteTtl: '5m' as const,
+      cacheWrite: false,
     };
     const [held] = spendRows();
     expect(held?.reserved_usd).toBeCloseTo(

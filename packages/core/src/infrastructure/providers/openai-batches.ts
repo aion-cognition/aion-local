@@ -11,7 +11,12 @@ import {
   type BatchResult,
   type BatchTransport,
 } from './batch-transport.js';
-import { OpenAiRefusalError, OpenAiRequestError, readResponsesAnswer } from './openai-provider.js';
+import {
+  OpenAiRefusalError,
+  OpenAiRequestError,
+  readResponsesAnswer,
+  responsesCacheWriteClass,
+} from './openai-provider.js';
 import { readOpenAiUsage } from './openai-usage.js';
 import type { GenerationProvider } from './types.js';
 
@@ -115,16 +120,16 @@ export class OpenAiBatchTransport implements BatchTransport {
   }
 
   /**
-   * OpenAI caches a long enough prefix on its own and bills the write at the five-minute rate, so
-   * any request can reach that class. Every one is held there, as on the synchronous route.
+   * The write class is read off the stored body, as on the synchronous route: a body built with
+   * cache writes off holds at the ordinary input rate, and one stored before that holds at the
+   * write rate it can still be billed.
    */
   bound(request: unknown): BatchRequestBound {
     const body = (request ?? {}) as { model?: unknown; max_output_tokens?: unknown };
     return {
       model: typeof body.model === 'string' ? body.model : undefined,
       outputTokens: typeof body.max_output_tokens === 'number' ? body.max_output_tokens : 0,
-      cacheWrite: true,
-      cacheWriteTtl: '5m',
+      ...responsesCacheWriteClass(request),
     };
   }
 

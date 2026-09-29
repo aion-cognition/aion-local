@@ -18,47 +18,55 @@ import { GateSubstrate, REMOTE_JUDGE_ABSENT } from './gate-substrate.fixture.js'
  */
 
 const IDENTITY = 'judged-pair-liveness';
-const NOW = new Date('2026-09-13T09:00:00.000Z');
 
-const FIRST = {
-  summary: 'the payer sync job schedule, as settled',
-  turns: [
-    {
-      role: 'user',
-      text:
-        'for the payer sync job we settled on running it nightly at 2am so the overnight batch has ' +
-        'the full window. write that down as the decision.',
-      occurred_at: '2026-09-13T09:00:00Z',
+/**
+ * The two episodes, stamped from an instant taken after the substrate opened. A fresh substrate
+ * is born when it opens, and the birth fence refuses a push whose every turn reads before that,
+ * so a fixed calendar date would stop reaching the judge on the day it fell behind the run.
+ */
+function episodes(at: Date): { readonly first: unknown; readonly second: unknown } {
+  const after = (ms: number): string => new Date(at.getTime() + ms).toISOString();
+  return {
+    first: {
+      summary: 'the payer sync job schedule, as settled',
+      turns: [
+        {
+          role: 'user',
+          text:
+            'for the payer sync job we settled on running it nightly at 2am so the overnight batch ' +
+            'has the full window. write that down as the decision.',
+          occurred_at: after(0),
+        },
+        {
+          role: 'assistant',
+          text:
+            'recorded: the payer sync job runs nightly at 2am. the overnight batch depends on the ' +
+            'full window, so the schedule is nightly.',
+          occurred_at: after(30_000),
+        },
+      ],
     },
-    {
-      role: 'assistant',
-      text:
-        'recorded: the payer sync job runs nightly at 2am. the overnight batch depends on the full ' +
-        'window, so the schedule is nightly.',
-      occurred_at: '2026-09-13T09:00:30Z',
+    second: {
+      summary: 'the payer sync job schedule, changed',
+      turns: [
+        {
+          role: 'user',
+          text:
+            'change of plan on the payer sync job. it runs hourly now, not nightly at 2am. the ' +
+            'nightly schedule is wrong and should not be followed.',
+          occurred_at: after(300_000),
+        },
+        {
+          role: 'assistant',
+          text:
+            'recorded: the payer sync job runs hourly. that replaces the nightly 2am schedule, ' +
+            'which no longer holds.',
+          occurred_at: after(330_000),
+        },
+      ],
     },
-  ],
-};
-
-const SECOND = {
-  summary: 'the payer sync job schedule, changed',
-  turns: [
-    {
-      role: 'user',
-      text:
-        'change of plan on the payer sync job. it runs hourly now, not nightly at 2am. the nightly ' +
-        'schedule is wrong and should not be followed.',
-      occurred_at: '2026-09-13T09:05:00Z',
-    },
-    {
-      role: 'assistant',
-      text:
-        'recorded: the payer sync job runs hourly. that replaces the nightly 2am schedule, which no ' +
-        'longer holds.',
-      occurred_at: '2026-09-13T09:05:30Z',
-    },
-  ],
-};
+  };
+}
 
 const substrate = new GateSubstrate('judged-pair', { certifyJudgments: true });
 
@@ -73,10 +81,12 @@ afterAll(async () => {
 it.skipIf(REMOTE_JUDGE_ABSENT)(
   'a fresh contradicting pair reaches the judge and the judgment completes',
   async () => {
-    const first = await substrate.store(FIRST, { identity: IDENTITY, now: NOW });
-    const second = await substrate.store(SECOND, {
+    const now = new Date();
+    const { first: firstPush, second: secondPush } = episodes(now);
+    const first = await substrate.store(firstPush, { identity: IDENTITY, now });
+    const second = await substrate.store(secondPush, {
       identity: IDENTITY,
-      now: new Date(NOW.getTime() + 60_000),
+      now: new Date(now.getTime() + 60_000),
     });
 
     const orchestrator = substrate.orchestrator();
@@ -84,8 +94,8 @@ it.skipIf(REMOTE_JUDGE_ABSENT)(
     const run = await orchestrator.run(second.episode_id);
 
     // The pair as the stage nominates it, asked of the seam the service gives the stage.
-    const priorFacts = await findEpisodeFactNodes(substrate.driver, first.episode_id, NOW);
-    const currentFacts = await findEpisodeFactNodes(substrate.driver, second.episode_id, NOW);
+    const priorFacts = await findEpisodeFactNodes(substrate.driver, first.episode_id, now);
+    const currentFacts = await findEpisodeFactNodes(substrate.driver, second.episode_id, now);
     const prior = priorFacts[0];
     const current = currentFacts[0];
     expect(prior).toBeDefined();

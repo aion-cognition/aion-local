@@ -395,10 +395,14 @@ describe('SupersessionStage against a live graph', () => {
     const prompt = calls[0]!.messages.map((message) => message.content).join('\n');
     expect(prompt).toContain('The reconciliation job ran for four hours during the July close.');
     expect(prompt).toContain('Both statements name: reconciliation job');
+    // Judged, not failed: a judgment that errored also closes and proposes nothing.
+    expect(outcome.status).toBe('ok');
     expect(outcome.counts).toEqual({
       supersessions: 0,
       supersessionProposals: 0,
       supersessionStaleTargets: 0,
+      supersessionWithheld: 0,
+      supersessionBlocked: 0,
     });
     expect(listSupersessionProposals(db).some((row) => row.oldId === pair.priorId)).toBe(false);
   }, 180_000);

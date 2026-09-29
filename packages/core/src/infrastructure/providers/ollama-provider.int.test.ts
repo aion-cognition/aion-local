@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { maxEmbedInputChars } from './embed-models.js';
 import { OllamaProvider } from './ollama-provider.js';
 import type { Vector } from './types.js';
 import { DEFAULTS } from '../config/defaults.js';
@@ -83,4 +84,44 @@ describe('OllamaProvider.embed against the live embed model', () => {
       DEFAULTS.reflection.entityDedupThreshold,
     );
   }, 60_000);
+});
+
+/**
+ * A long capture whose out-of-vocabulary characters sit inside words. Ollama 0.33.3 refuses it
+ * whole even with its default truncation (`embed-models.ts` says why), and with it every other
+ * input sent in the same request: the content-vector drain's batch deferred on it every run.
+ */
+const OVERSIZE = 'deploy🐆🚚done '.repeat(700);
+
+describe('OllamaProvider.embed on an input Ollama cannot truncate for itself', () => {
+  // The shipped keep-alive, so this file leaves the shared daemon's model as the service keeps it.
+  const shipped = new OllamaProvider({
+    baseUrl: OLLAMA_URL,
+    embedModel: DEFAULTS.models.embed,
+    embedKeepAlive: DEFAULTS.ollama.embedKeepAlive,
+  });
+
+  it('returns a vector for it and leaves the other inputs of the request as they embed alone', async () => {
+    const statuses: number[] = [];
+    const recording = new OllamaProvider({
+      baseUrl: OLLAMA_URL,
+      embedModel: DEFAULTS.models.embed,
+      embedKeepAlive: DEFAULTS.ollama.embedKeepAlive,
+      fetchImpl: async (url, init) => {
+        const response = await fetch(url, init);
+        statuses.push(response.status);
+        return response;
+      },
+    });
+
+    const vectors = await recording.embed(['the payer sync job', OVERSIZE, 'numeric ids']);
+    const alone = await shipped.embed(['the payer sync job', 'numeric ids']);
+    console.log(`oversize input: embed request statuses ${statuses.join(', ')}`);
+
+    expect(OVERSIZE.length).toBeGreaterThan(maxEmbedInputChars(DEFAULTS.models.embed));
+    expect(vectors).toHaveLength(3);
+    expect(vectors[1]).toHaveLength(DEFAULTS.models.embedDimension);
+    expect(cosine(vectors[0]!, alone[0]!)).toBeCloseTo(1, 6);
+    expect(cosine(vectors[2]!, alone[1]!)).toBeCloseTo(1, 6);
+  }, 120_000);
 });

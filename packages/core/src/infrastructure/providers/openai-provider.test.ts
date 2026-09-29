@@ -12,7 +12,7 @@ import {
   OpenAiRequestError,
   OpenAiResponseError,
 } from './openai-provider.js';
-import { GenerationSpendGuard } from './spending.js';
+import { GenerationSpendGuard, type SpendHoldRequest, type SpendingGuard } from './spending.js';
 import type { ApiCall, StructuredRequest } from './types.js';
 import { openSqliteHandle, type SqliteHandle } from '../sqlite/database.js';
 import { readSpendDay } from '../sqlite/spend-ledger.js';
@@ -93,6 +93,16 @@ describe('the request the OpenAI route sends', () => {
     expect((init.headers as Record<string, string>).authorization).toBe('Bearer sk-test');
     expect(body.model).toBe('gpt-6-luna');
     expect(body.store).toBe(false);
+  });
+
+  it('asks for explicit caching with no breakpoint, which writes nothing to the cache', async () => {
+    const fetchImpl = vi.fn(() => Promise.resolve(text('{"ok": true}')));
+
+    await provider(fetchImpl).generate(REQUEST);
+
+    const { body } = sent(fetchImpl);
+    expect(body.prompt_cache_options).toEqual({ mode: 'explicit' });
+    expect(JSON.stringify(body)).not.toContain('prompt_cache_breakpoint');
   });
 
   it('carries the frame, the surface instructions and the schema as instructions, and only the conversation as input', async () => {
@@ -307,6 +317,33 @@ describe('what the OpenAI route records and holds', () => {
     expect(day.inFlight).toBe(0);
     expect(day.unpriced).toBe(0);
     expect(day.committedUsd).toBeCloseTo(estimateApiCost(call) ?? Number.NaN, 12);
+  });
+
+  it('holds at the ordinary input rate, since the body it sends cannot bill a cache write', async () => {
+    const held: SpendHoldRequest[] = [];
+    const spending: SpendingGuard = {
+      hold: (request) => {
+        held.push(request);
+        return {
+          hold: {
+            reservationId: 'r',
+            reservedUsd: 0,
+            settle: () => undefined,
+            release: () => undefined,
+          },
+        };
+      },
+      today: () => {
+        throw new Error('not read here');
+      },
+    };
+    const fetchImpl = vi.fn(() => Promise.resolve(text('{"ok": true}')));
+
+    await provider(fetchImpl, { spending }).generate(REQUEST);
+
+    expect(held).toHaveLength(1);
+    expect(held[0]?.cacheWrite).toBe(false);
+    expect(held[0]).not.toHaveProperty('cacheWriteTtl');
   });
 
   it('refuses before sending when the day cannot cover the bound, as generation being unavailable', async () => {

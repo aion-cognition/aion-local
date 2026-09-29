@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { embedQueryPrefix, maxEmbedInputChars, QUERY_PREFIX_SEAM_MODEL } from './embed-models.js';
+import {
+  embedPrefix,
+  embedQueryPrefix,
+  maxEmbedInputChars,
+  QUERY_PREFIX_SEAM_MODEL,
+} from './embed-models.js';
 import { DEFAULTS } from '../config/defaults.js';
 
 describe('embed input cap', () => {
@@ -23,6 +28,28 @@ describe('embed input cap', () => {
     // decision, and an unlisted default silently caps at 2046 instead.
     expect(DEFAULTS.models.embed).toBe('snowflake-arctic-embed2');
     expect(maxEmbedInputChars(DEFAULTS.models.embed)).toBe(8190);
+  });
+});
+
+describe('embedPrefix', () => {
+  it('leaves text within the bound untouched', () => {
+    expect(embedPrefix('short', 8)).toBe('short');
+    expect(embedPrefix('exact', 5)).toBe('exact');
+  });
+
+  it('keeps the first characters of text past the bound', () => {
+    expect(embedPrefix('abcdefgh', 3)).toBe('abc');
+  });
+
+  it('steps back rather than split a surrogate pair at the cut', () => {
+    // Two UTF-16 units: a cut after the first would leave half a character.
+    const text = 'ab🐆cd';
+    expect(embedPrefix(text, 3)).toBe('ab');
+    expect(embedPrefix(text, 4)).toBe('ab🐆');
+  });
+
+  it('returns nothing for a bound of nothing', () => {
+    expect(embedPrefix('abc', 0)).toBe('');
   });
 });
 
