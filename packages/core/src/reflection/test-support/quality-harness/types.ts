@@ -1,4 +1,5 @@
 import type { CognitiveNodeLabel } from '../../../infrastructure/graph/cognitive-queries.js';
+import type { GenerationProvider } from '../../../infrastructure/providers/types.js';
 import type { EntityType } from '../../domain/entity-extraction.js';
 
 /**
@@ -24,7 +25,7 @@ export type CognitiveExtractionResult = {
   readonly nodes: readonly ExtractedCognitiveNode[];
 };
 
-export type ExtractionRoute = 'anthropic';
+export type ExtractionRoute = GenerationProvider;
 
 /**
  * Why a call produced no usable answer, decided at the call boundary off the error's own type.
