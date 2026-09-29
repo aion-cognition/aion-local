@@ -22,10 +22,7 @@ import { ENTITY_EXTRACTION_JSON_SCHEMA, ENTITY_TYPES } from '../../domain/entity
  * than the folded, deduplicated form the graph stores.
  */
 
-/**
- * qwen3:8b with thinking on measured 10-44s with occasional non-returns; reflection's
- * latency regime is relaxed but not unbounded, so every call still carries a hang guard.
- */
+/** Each extraction call has a deadline even though background inference tolerates more latency. */
 export const DEFAULT_GENERATE_TIMEOUT_MS = 60_000;
 
 /**
@@ -97,12 +94,7 @@ function failureKindOf(error: unknown): ExtractionFailure {
   return isAbortError(error) ? 'timeout' : 'call_failed';
 }
 
-/**
- * One structured-output call, timed and guarded. Reasoning buys nothing for extraction and
- * costs the budget (mirrors `recall/application/cues.ts`'s cue-model call), so `think` stays
- * off for both routes; the Anthropic client ignores the field, since Haiku 4.5 has no
- * comparable toggle.
- */
+/** One structured-output call using the extraction stages' `think: false` setting. */
 async function runStructuredExtraction<T>(
   deps: ProviderGenerateDeps,
   messages: readonly ChatMessage[],

@@ -57,9 +57,7 @@ export async function runQualityHarness(options: QualityHarnessOptions): Promise
   const fixtures = options.fixtures ?? QUALITY_FIXTURES;
   const now = options.now ?? (() => new Date());
 
-  // Fixtures run one at a time: the local route's single Ollama instance already fields
-  // two concurrent calls per fixture (entities, cognitive), and piling fixtures on top would
-  // queue requests behind each other's own 60s abort clock instead of the model's.
+  // Fixtures run sequentially so only their two extraction calls compete for the request deadline.
   const fixtureReports: FixtureReport[] = [];
   for (const fixture of fixtures) {
     fixtureReports.push(await runFixture(fixture, options.routes));
