@@ -135,6 +135,41 @@ export function resolveLabels(primary: NodeLabel): readonly string[] {
   return [primary, ...COMPANION_LABELS[primary], BASE_NODE_LABEL];
 }
 
+/** The labels that wear `label` as a companion: the three backbone labels for `Entity`, none else. */
+function companionHosts(label: NodeLabel): readonly NodeLabel[] {
+  return NODE_LABELS.filter((host) => COMPANION_LABELS[host].includes(label));
+}
+
+export type MatchedCompanions = {
+  /** Labels any matched node takes, for the MERGE's own `ON MATCH SET`. */
+  readonly set: readonly string[];
+  /** A clause to follow the MERGE that applies the rest only where `primary` is the node's own. */
+  readonly guarded?: string;
+};
+
+/**
+ * The label writes for a node a MERGE on `primary` matched rather than created.
+ *
+ * A MERGE on `Entity` also matches the Member, the Workspace and the Substrate, which wear
+ * `Entity` as a companion, and `Entity`'s own companions are not theirs. Applying them to every
+ * match is how `Memory` reached a backbone node whenever an entity merge made it the canonical.
+ * So the base label goes on whatever matched, and the rest only onto a node that is not a host.
+ */
+export function matchedCompanionLabels(variable: string, primary: NodeLabel): MatchedCompanions {
+  const companions = COMPANION_LABELS[primary];
+  const hosts = companionHosts(primary);
+  if (hosts.length === 0 || companions.length === 0) {
+    return { set: [...companions, BASE_NODE_LABEL] };
+  }
+  const isHost = hosts.map((host) => `${variable}:${host}`).join(' OR ');
+  return {
+    set: [BASE_NODE_LABEL],
+    guarded:
+      `FOREACH (_ IN CASE WHEN ${isHost} THEN [] ELSE [1] END |` +
+      ` SET ${variable}:${companions.join(':')})`,
+  };
+}
+
 /** Reflection's provenance edge, which is what makes an episode enriched rather than pending. */
 export const EXTRACTION_TYPE: RelationshipType = 'EXTRACTED_FROM';
 

@@ -128,6 +128,16 @@ describe('buildEntityMerge reopening a maintenance-closed node', () => {
     const onMatch = clause(buildEntityMerge([ENTITY], NOW).cypher, 'ON MATCH SET');
     expect(onMatch.startsWith('ON MATCH SET n:')).toBe(true);
   });
+
+  it('gives Memory only to a matched node that is not a backbone identity', () => {
+    const { cypher } = buildEntityMerge([ENTITY], NOW);
+    expect(clause(cypher, 'ON CREATE SET')).toContain('n:Memory:');
+    expect(clause(cypher, 'ON MATCH SET')).not.toContain('Memory');
+    expect(clause(cypher, 'FOREACH')).toBe(
+      'FOREACH (_ IN CASE WHEN n:Member OR n:Workspace OR n:Substrate THEN [] ELSE [1] END |' +
+        ' SET n:Memory)',
+    );
+  });
 });
 
 describe('reconcileMergedEntities', () => {
