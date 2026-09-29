@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { DEFAULTS } from './defaults.js';
-import { ConfigError, loadConfig } from './load-config.js';
+import { ConfigError, configNotices, loadConfig } from './load-config.js';
 import { LOG_FILE_ENV_VAR, LOG_LEVEL_ENV_VAR } from '../logging/logger.js';
 
 describe('loadConfig defaults', () => {
@@ -320,6 +320,42 @@ describe('loadConfig unknown vars', () => {
     expect(() =>
       loadConfig({ AION_REPO_PATH: '/Users/x/aion-local', AION_GIT_USER_NAME: 'Ryan Huber' }),
     ).not.toThrow();
+  });
+});
+
+describe('the shared daily ceiling and its older name', () => {
+  const CURRENT = 'AION_DAILY_CEILING_USD';
+  const OLDER = 'AION_ANTHROPIC_DAILY_CEILING_USD';
+
+  it('keeps the shipped amount when neither name is set', () => {
+    expect(loadConfig({}).anthropic.dailyCeilingUsd).toBe(5);
+  });
+
+  it('takes the ceiling from the current name', () => {
+    expect(loadConfig({ [CURRENT]: '20' }).anthropic.dailyCeilingUsd).toBe(20);
+  });
+
+  it('still takes it from the older name alone, which an existing .env carries', () => {
+    expect(loadConfig({ [OLDER]: '20' }).anthropic.dailyCeilingUsd).toBe(20);
+    expect(configNotices({ [OLDER]: '20' })).toEqual([]);
+  });
+
+  it('lets the current name win where both are set, and says so when they differ', () => {
+    const env = { [CURRENT]: '12', [OLDER]: '20' };
+
+    expect(loadConfig(env).anthropic.dailyCeilingUsd).toBe(12);
+    expect(configNotices(env)).toEqual([
+      `${CURRENT}=12 and ${OLDER}=20 are both set; ${CURRENT} wins. ` +
+        `${OLDER} is its older name, so remove that line.`,
+    ]);
+  });
+
+  it('says nothing where both names carry the same amount', () => {
+    expect(configNotices({ [CURRENT]: '20', [OLDER]: '20.0' })).toEqual([]);
+  });
+
+  it('names the older variable when the value it set is invalid', () => {
+    expect(() => loadConfig({ [OLDER]: '0' })).toThrow(`${OLDER}: Too small`);
   });
 });
 

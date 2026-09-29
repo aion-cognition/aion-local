@@ -1,10 +1,10 @@
 /**
  * A layer barrel carries only what something outside core imports, and the infrastructure barrel
- * re-exports exactly these five. The registry, the schema, and the knob tables are reached by
+ * re-exports exactly these. The registry, the schema, and the knob tables are reached by
  * their own modules from inside this directory.
  */
 export type { Config } from './schema.js';
 export { DEFAULTS } from './defaults.js';
 export { envFileValue, parseEnvFile } from './env-file.js';
 export { hostDataDir, prepareSubstrateRoots, runningInContainer } from './host-roots.js';
-export { loadConfig, ConfigError } from './load-config.js';
+export { configNotices, loadConfig, ConfigError } from './load-config.js';

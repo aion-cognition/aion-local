@@ -63,6 +63,10 @@ function knobKind(knob: KnobDeclaration): KnobKind {
  * AION_SQLITE_REINFORCEMENT_QUEUE_CAP / AION_RECALL_CLUSTER_CAP, and AION_SEED_BUDGET_BASE /
  * AION_SEED_BUDGET_GROWTH are named for the budget they shape rather than for the group that
  * holds them alongside the cap.
+ *
+ * AION_DAILY_CEILING_USD names no provider because it bounds both providers' spend, while its
+ * leaf still sits at `anthropic.dailyCeilingUsd` where the readers outside this package reach it.
+ * The name it replaced still works through `ENV_VAR_ALIASES` below.
  */
 export function buildRegistry(table: KnobTable = KNOB_TABLE): readonly Knob[] {
   const registry: Knob[] = [];
@@ -124,6 +128,38 @@ export const RETIRED_ENV_VARS: ReadonlySet<string> = new Set([
 ]);
 
 const KNOWN_ENV_VARS: ReadonlySet<string> = new Set(KNOB_REGISTRY.map((knob) => knob.envVar));
+
+/**
+ * Older spellings that still set a live knob, each mapped to the name that replaced it. A `.env`
+ * written before a rename keeps the value it holds rather than silently falling back to a default.
+ * Where both spellings are set, the current name wins and `configNotices` says so when the two
+ * disagree. An alias is a setting and never a credential, since the notice prints both values.
+ */
+export const ENV_VAR_ALIASES: ReadonlyMap<string, string> = checkedAliases(
+  new Map([['AION_ANTHROPIC_DAILY_CEILING_USD', 'AION_DAILY_CEILING_USD']]),
+);
+
+function checkedAliases(aliases: ReadonlyMap<string, string>): ReadonlyMap<string, string> {
+  for (const [alias, current] of aliases) {
+    if (!KNOWN_ENV_VARS.has(current)) {
+      throw new Error(`${alias} is an alias for ${current}, which no knob declares`);
+    }
+    if (KNOWN_ENV_VARS.has(alias)) {
+      throw new Error(`${alias} is both an alias and a knob of its own`);
+    }
+  }
+  return aliases;
+}
+
+/** The older spelling that still sets this knob, where it has one. */
+export function aliasFor(envVar: string): string | undefined {
+  for (const [alias, current] of ENV_VAR_ALIASES) {
+    if (current === envVar) {
+      return alias;
+    }
+  }
+  return undefined;
+}
 
 const REGISTRY_BY_PATH: ReadonlyMap<string, Knob> = new Map(
   KNOB_REGISTRY.map((knob) => [knob.path.join('.'), knob]),

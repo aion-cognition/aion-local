@@ -3,6 +3,7 @@ import {
   ApiUsageRecorder,
   bootstrapBackbone,
   checkedRecallDeps,
+  configNotices,
   CueCache,
   deleteServedItems,
   GenerationSpendGuard,
@@ -116,6 +117,9 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
   // The service takes the fd 1 tee, which is what `docker logs` reads. The CLI does not: its
   // answers go to fd 1.
   const logger = openLogger({ ...config.logging, name: 'aion-mcp', stdout: true });
+  for (const notice of configNotices(env)) {
+    logger.warn(notice);
+  }
   const store = new SqliteStore({ filePath: config.sqlite.path });
   const connection = new GraphConnection(config.neo4j);
 

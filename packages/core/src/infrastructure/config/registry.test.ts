@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import type { KnobTable } from './knobs.js';
-import { buildRegistry, envVarForPath, KNOB_REGISTRY, knownEnvVars } from './registry.js';
+import {
+  aliasFor,
+  buildRegistry,
+  ENV_VAR_ALIASES,
+  envVarForPath,
+  KNOB_REGISTRY,
+  knownEnvVars,
+} from './registry.js';
 
 describe('knob registry', () => {
   it('refuses a table where two leaves claim one variable, naming both paths', () => {
@@ -18,6 +25,15 @@ describe('knob registry', () => {
 
   it('gives every shipped knob its own variable', () => {
     expect(knownEnvVars().size).toBe(KNOB_REGISTRY.length);
+  });
+
+  it('points every older spelling at a live knob that is not itself an alias', () => {
+    for (const [alias, current] of ENV_VAR_ALIASES) {
+      expect(knownEnvVars().has(current)).toBe(true);
+      expect(knownEnvVars().has(alias)).toBe(false);
+      expect(aliasFor(current)).toBe(alias);
+    }
+    expect(aliasFor('AION_RECALL_MAX_HOPS')).toBeUndefined();
   });
 
   it('resolves a path that points inside a subtree leaf to that leaf variable', () => {

@@ -80,8 +80,8 @@ cue=queued(<provider>) reflect=queued(<provider>)`, and `aion doctor` says the s
 `ollama-round-trip` and `hooks-route`. Put the key in `.env`, rerun `aion init`, and the queue
 drains. Nothing falls back to a local model or to the other provider.
 
-**Cost.** A daily dollar ceiling (`AION_ANTHROPIC_DAILY_CEILING_USD`, $5) is held against before
-anything is sent, by ordinary calls and batch submissions alike; past it, background work queues
+**Cost.** A daily dollar ceiling (`AION_DAILY_CEILING_USD`, $5) is held against before
+anything is sent, by ordinary calls and batch submissions on either provider alike; past it, background work queues
 and recall falls back to the raw query, the same way a missing key reads. The Message Batches path
 carries the background work that tolerates minutes to hours, at half price: entity-gloss refreshes
 go through it today, cues and anything a caller is waiting on stay on ordinary Messages calls.

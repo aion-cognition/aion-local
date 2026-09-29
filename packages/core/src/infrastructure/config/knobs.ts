@@ -121,15 +121,17 @@ export const KNOBS = {
     // thinking is billed and counted as output.
     thinkingBudgetTokens: ['AION_ANTHROPIC_THINKING_BUDGET_TOKENS', positiveInt, 2048],
     // Dollars of generation one UTC day may commit, across ordinary calls on either remote API
-    // and batch submissions together; the name predates the second provider. Every dispatch holds its own conservative maximum against it before
-    // it is sent and replaces that with what it cost when the answer lands, so the number bounds
-    // committed spend rather than reported spend. Past it, background work queues and recall
-    // falls back to the raw query: exhaustion is generation being unavailable, the same shape a
-    // substrate with no key already answers correctly, and not a failure anything retries.
-    // Five is the retained W4 figure and is a backstop rather than a budget: the whole 2026-09-13
-    // build round spent $5.12 across every chunk, so an ordinary day of use is nowhere near it
-    // and a runaway loop reaches it in minutes.
-    dailyCeilingUsd: ['AION_ANTHROPIC_DAILY_CEILING_USD', positive, 5],
+    // and batch submissions together. The variable names no provider for that reason, and the
+    // older AION_ANTHROPIC_DAILY_CEILING_USD still sets it (`ENV_VAR_ALIASES`). The leaf stays in
+    // this group because readers outside core reach it here. Every dispatch holds its own
+    // conservative maximum against it before it is sent and replaces that with what it cost when
+    // the answer lands, so the number bounds committed spend rather than reported spend. Past it,
+    // background work queues and recall falls back to the raw query: exhaustion is generation
+    // being unavailable, the same shape a substrate with no key already answers correctly, and
+    // not a failure anything retries. Five is the retained W4 figure and is a backstop rather
+    // than a budget: the whole 2026-09-13 build round spent $5.12 across every chunk, so an
+    // ordinary day of use is nowhere near it and a runaway loop reaches it in minutes.
+    dailyCeilingUsd: ['AION_DAILY_CEILING_USD', positive, 5],
   },
   generation: GENERATION_KNOBS,
   openai: OPENAI_KNOBS,

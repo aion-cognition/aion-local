@@ -188,7 +188,7 @@ requests as ordinary input.
 
 | Control | Default | Effect |
 |---|---|---|
-| `AION_ANTHROPIC_DAILY_CEILING_USD` | `5` | Dollars of generation one UTC day may commit, shared by ordinary Messages calls and batch submissions. Consulted before dispatch, never after. |
+| `AION_DAILY_CEILING_USD` | `5` | Dollars of generation one UTC day may commit, shared by ordinary calls and batch submissions on either provider. Consulted before dispatch, never after. The older name `AION_ANTHROPIC_DAILY_CEILING_USD` still sets it; where both are set the new name wins, and the service logs a warning at start if the two differ. |
 | `AION_ANTHROPIC_PROMPT_CACHE` | `true` | Allows the marker on the shared frame when it reaches the API's 4,096-token floor. Neither rendering does, so no shipped call carries it; the provider decides per call rather than marking unconditionally. `false` switches the marker off whatever the length. |
 | `AION_CUE_CACHE_TTL_MINUTES` | `30` | Reuses successful cue results in this process for identical generation requests. `0` disables it. The cache holds at most 256 entries. |
 
