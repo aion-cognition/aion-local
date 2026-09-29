@@ -116,6 +116,16 @@ function emptyOpening(repeats: number, own: number): string {
 }
 
 /**
+ * What a pack says above memories that reached it without matching the query: a resonant
+ * discovery or a triggered intention, and nothing the query matched beside them. Without it
+ * those items read as the answer, because the sentence that says the query went unanswered
+ * printed only on a pack with nothing in it.
+ */
+export function unansweredBody(emptyBody: string): string {
+  return `${emptyBody} What follows reached the pack another way, and each item names how.`;
+}
+
+/**
  * What an empty pack says about itself, in the rendered text rather than only in metadata.
  *
  * The sentence alone reads the same for three states that call for three different responses:

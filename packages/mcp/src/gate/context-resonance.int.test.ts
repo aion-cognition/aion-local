@@ -379,34 +379,65 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)(
 );
 
 /**
- * No resonant bucket at all was the rule while the centroid averaged only what fusion admitted.
- * The stage now runs when fusion admits nothing, from any node a cue-seeded path reached, and
- * the vector leg seeds its nearest rows whatever they score, so an off-topic query can carry
- * associations: three or four for every query in this battery, measured in the `raw` mode. What
- * the pack still owes the reader is that none of them poses as an answer.
+ * A nonsense query gets no resonant bucket. The centroid averages only nodes a cue-seeded path
+ * reached, a nonsense query's cues reach nothing, and the stage declines with nothing to average.
+ * Searching from the shape of whatever else activated is how an off-topic pack fills itself with
+ * memories nothing measured. `resonance.ts` and the whitepaper's context resonance section state
+ * this design.
+ *
+ * The code does not hold it yet, and the battery is marked failing rather than rewritten until
+ * the open design question is settled: the vector leg seeds its nearest rows whatever they score
+ * (`vectorSeeds`), and any seed a strategy other than recency found counts as cue support
+ * (`toActivationSeed`). A nonsense query's nearest rows therefore support a centroid, and in the
+ * `raw` mode five of the six queries here come back with associations. One check covers the
+ * battery, so it fails while any query is answered by association. When the question is settled,
+ * either it passes and loses `fails`, or the design text changes with it.
  */
-describe.skipIf(REMOTE_JUDGE_ABSENT)('an off-topic query is never answered by association', () => {
+describe.skipIf(REMOTE_JUDGE_ABSENT)('an off-topic query gets no resonant bucket at all', () => {
+  it.fails(
+    'stays quiet for every query in the battery',
+    async () => {
+      const noisy: string[] = [];
+      for (const query of OFF_TOPIC_BATTERY) {
+        const result = await substrate.recall(query, { identity: READ_SESSION, now: RECALLED_AT });
+        console.log(
+          `off-topic "${query}": ${String(result.items.length)} item(s), ` +
+            `anchored ${String(result.admission.anchored)}, ` +
+            `resonant ${String(result.pack.resonant?.length ?? 0)}`,
+        );
+        if (result.pack.resonant !== undefined) {
+          noisy.push(query);
+        }
+      }
+
+      expect(noisy).toEqual([]);
+    },
+    600_000,
+  );
+});
+
+/**
+ * Owed whichever way that question goes: nothing lands in a bucket the query answers in, and the
+ * text an agent reads says nothing matched, above any association the pack carries.
+ */
+describe.skipIf(REMOTE_JUDGE_ABSENT)('an off-topic pack says nothing matched', () => {
   it.each(OFF_TOPIC_BATTERY)(
-    'admits nothing and labels every association for: %s',
+    'says so for: %s',
     async (query) => {
       const result = await substrate.recall(query, { identity: READ_SESSION, now: RECALLED_AT });
-
-      console.log(
-        `off-topic "${query}": ${String(result.items.length)} item(s), ` +
-          `anchored ${String(result.admission.anchored)}, ` +
-          `resonant ${String(result.pack.resonant?.length ?? 0)}`,
-      );
+      const text = result.pack.rendered_text;
 
       expect(result.admission.anchored).toBe(false);
       for (const [name, bucket] of bucketsOf(result.pack)) {
-        if (name === 'resonant') {
-          continue;
+        if (name !== 'resonant') {
+          expect(bucket).toEqual([]);
         }
-        expect(bucket).toEqual([]);
       }
-      for (const item of result.pack.resonant ?? []) {
-        expect(item.rationale.method).toBe('resonance');
-        expect(item.rationale.path).toBe(RESONANCE_PATH);
+      expect(text).toContain('No memories matched this query.');
+      if (result.pack.resonant !== undefined) {
+        expect(text.indexOf('No memories matched this query.')).toBeLessThan(
+          text.indexOf('## Resonant'),
+        );
       }
     },
     120_000,

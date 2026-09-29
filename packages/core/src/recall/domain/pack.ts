@@ -17,6 +17,7 @@ import {
   BUCKET_HEADINGS,
   PACK_BUCKETS,
   bucketFor,
+  unansweredCharge,
   type BucketCaps,
   type PackBucket,
 } from './pack-buckets.js';
@@ -30,7 +31,7 @@ import {
   type ItemAnnotations,
   type PackEntry,
 } from './pack-item.js';
-import { emptyPackBody, honestyNote } from './pack-notes.js';
+import { emptyPackBody, honestyNote, unansweredBody } from './pack-notes.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 
 /**
@@ -188,7 +189,7 @@ type Assembled = {
  * so a direct answer always outranks what the substrate volunteered and takes the budget first.
  * The three scores are not on one scale, so there is no order to merge them into.
  */
-function select(input: AssemblePackInput, note: string | undefined): Assembled {
+function select(input: AssemblePackInput, note: string | undefined, lineCost: number): Assembled {
   const selection: Selection = new Map();
   let folded = 0;
   const packedEpisodes = new Set<string>();
@@ -303,7 +304,8 @@ function select(input: AssemblePackInput, note: string | undefined): Assembled {
     };
     const cost =
       estimateTokens(renderItem(entry)) +
-      (held.length === 0 ? estimateTokens(BUCKET_HEADINGS[bucket]) : 0);
+      (held.length === 0 ? estimateTokens(BUCKET_HEADINGS[bucket]) : 0) +
+      unansweredCharge(bucket, selection.keys(), lineCost);
     if (tokens + cost > input.tokenBudget) {
       decided(item.id, bucket, 'token_budget');
       return;
@@ -460,12 +462,11 @@ export function assemblePack(input: AssemblePackInput): MemoryPack {
   // one per eligible candidate, and the text printed is the note assembly actually earned. A
   // fold that came out smaller leaves the pack one memory short rather than one over.
   const charged = honestyNote({ ...signals, duplicates: input.foldable?.size ?? 0 });
-  const assembled = select(input, charged);
+  const emptyBody = emptyPackBody(input.admission, repeats, own, input.assessment);
+  const assembled = select(input, charged, estimateTokens(`${unansweredBody(emptyBody)}\n\n`));
   const duplicates = assembled.folded;
   const note = honestyNote({ ...signals, duplicates });
-  const renderedText = renderPack(assembled.selection, note, () =>
-    emptyPackBody(input.admission, repeats, own, input.assessment),
-  );
+  const renderedText = renderPack(assembled.selection, note, () => emptyBody);
 
   const buckets: Record<string, readonly MemoryPackItem[]> = {};
   for (const bucket of PACK_BUCKETS) {
