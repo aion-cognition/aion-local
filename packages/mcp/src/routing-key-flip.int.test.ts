@@ -4,7 +4,9 @@ import {
   listOllamaModels,
   listResidentModels,
   openSqliteHandle,
+  PROVIDER_KEY_ENV_VARS,
   runGraphMigrations,
+  type GenerationProvider,
   type SqliteHandle,
 } from '@aion/core';
 import {
@@ -12,6 +14,10 @@ import {
   stopNeo4jHarness,
   type Neo4jHarness,
 } from '@aion/core/infrastructure/graph/test-support/neo4j-harness.fixture.js';
+import {
+  testGenerationKey,
+  testRoutesToOpenAi,
+} from '@aion/core/infrastructure/providers/test-support/generation-provider.js';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -26,11 +32,16 @@ import { bootstrapService, type AionService } from './bootstrap.js';
  * when it is not, and Ollama's memory is untouched either way, because the only model this
  * substrate asks it for is the embedder.
  *
+ * Both boots run on the provider the shell selected, and the flip removes that provider's key.
  * The key is read from the environment. Nothing here writes `.env`, and the live stack is
  * untouched: this boots its own service against the test harness Neo4j and a throwaway SQLite.
  */
 
-const API_KEY = (process.env.AION_ANTHROPIC_API_KEY ?? '').trim();
+const PROVIDER: GenerationProvider = testRoutesToOpenAi() ? 'openai' : 'anthropic';
+const KEY_VARIABLE = PROVIDER_KEY_ENV_VARS[PROVIDER];
+/** The environment below names no model, so the service runs the provider's default. */
+const MODEL = PROVIDER === 'openai' ? DEFAULTS.openai.model : DEFAULTS.anthropic.model;
+const API_KEY = testGenerationKey();
 const OLLAMA_URL = process.env.AION_OLLAMA_URL ?? 'http://127.0.0.1:11434';
 const EMBED_MODEL = DEFAULTS.models.embed;
 const MEMBER_NAME = 'Key Flip Test';
@@ -49,7 +60,8 @@ function env(withKey: boolean): NodeJS.ProcessEnv {
     AION_LOG_FILE: logPath,
     AION_LOG_LEVEL: 'debug',
     AION_MCP_PORT: '8799',
-    ...(withKey ? { AION_ANTHROPIC_API_KEY: API_KEY } : {}),
+    AION_GENERATION_PROVIDER: PROVIDER,
+    ...(withKey ? { [KEY_VARIABLE]: API_KEY } : {}),
   };
 }
 
@@ -102,7 +114,7 @@ afterAll(async () => {
 
 describe('booting with the key and again without it', () => {
   it.skipIf(API_KEY === '')(
-    'routes every generation role to Anthropic and touches no resident model',
+    'routes every generation role to the selected provider and touches no resident model',
     async () => {
       const installedBefore = await installedModels();
       const residentBefore = await residentNames();
@@ -117,7 +129,7 @@ describe('booting with the key and again without it', () => {
 
       const messages = messagesSince(offset);
       expect(messages).toContain(
-        `provider routing: cue=anthropic:${DEFAULTS.anthropic.model} reflect=anthropic:${DEFAULTS.anthropic.model}`,
+        `provider routing: cue=${PROVIDER}:${MODEL} reflect=${PROVIDER}:${MODEL}`,
       );
       // The boot warms the embedder, so residency can grow by that one tag and nothing else.
       expect((await residentNames()).filter((name) => !name.startsWith(EMBED_MODEL))).toEqual(
@@ -140,10 +152,17 @@ describe('booting with the key and again without it', () => {
     }
 
     const messages = messagesSince(offset);
-    expect(messages).toContain('provider routing: cue=queued reflect=queued');
+    // The routing line names the provider whose key is missing, and the warning names the key.
+    expect(messages).toContain(
+      `provider routing: cue=queued(${PROVIDER}) reflect=queued(${PROVIDER})`,
+    );
     expect(
-      messages.some((message) => message.includes('every generation stays queued until a key')),
-    ).toBe(true);
+      messages.filter((message) =>
+        message.startsWith(
+          `generation has nowhere to run (AION_GENERATION_PROVIDER=${PROVIDER} needs ${KEY_VARIABLE})`,
+        ),
+      ),
+    ).toHaveLength(1);
     expect(await installedModels()).toEqual(installedBefore);
   }, 300_000);
 });
