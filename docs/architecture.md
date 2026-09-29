@@ -44,7 +44,8 @@ no notion of episodes, cues, or memory packs beyond those primitives.
   record, ops ledger, claim locking, and the two proposal
   queues, whose reads share one `proposal-table.ts` because both are an id, the pair the
   proposal is about, and a `resolved_at` that is null while the row is still undecided),
-  `providers/` (the Ollama and Anthropic clients, the circuit breaker, the
+  `providers/` (the Ollama, Anthropic and OpenAI clients, each provider's batch transport,
+  the retry rule and circuit breaker both remote routes share, the daily spending guard, the
   per-role routing layer and the model reconciliation that follows it), `publication/` (the
   coordinator every two-store write goes through: the guard a plan is prepared under, the
   precondition and evidence-revision check, the short SQLite transaction, the graph apply, the
@@ -63,11 +64,13 @@ no notion of episodes, cues, or memory packs beyond those primitives.
   centroid and the shape of a resonant item), `intention-triggers.ts` (whether a standing
   intention's condition is met by what the run already holds), `pack-buckets.ts` (which bucket a
   node label answers in), `pack.ts` (MemoryPack assembly).
-- **`recall/application/`**: `cues.ts` (cue extraction and its cache), `seeds.ts` (the
+- **`recall/application/`**: `cues.ts` (the query cues every mode searches with, and the
+  `cues` mode's extraction and its cache), `seeds.ts` (the
   five seed strategies' scoring and merge), `candidates.ts` (seeds plus activation into
   ranked lists), `stage-reads.ts` (the pipeline's batched graph reads), `resonance.ts` (the
-  second pass), `intentions.ts` (the third), `recall.ts` (the pipeline), `side-effects.ts`
-  (post-recall listeners).
+  second pass), `intentions.ts` (the third), `assessment-pool.ts` and `assessment.ts` (what the
+  `assess` mode's model call is shown and how its answer is served), `recall.ts` (the
+  pipeline), `side-effects.ts` (post-recall listeners).
 - **`plasticity/`**: `domain/` folds a window of co-activation signals into per-pair
   learning rates and computes the staleness curve; `application/` runs the two operations
   that apply them, `flush.ts` (bounded reinforcement of the nominated pairs) and `decay.ts`
@@ -117,9 +120,10 @@ no notion of episodes, cues, or memory packs beyond those primitives.
   family reaches, and the reading of the node the statement belongs to. Both are counted from
   birth. The write that mints a node establishes the censuses on it and records the relationship
   it made (`reflection/application/derived-node-evidence.ts`), which is honest because the id was
-  drawn by that write and nothing else can have recorded anything about it. Five producers reach
+  drawn by that write and nothing else can have recorded anything about it. Seven producers reach
   it: intake for an episode and its turns, the entity and cognitive stages for what they extract,
-  `curiosity` for the question it files, and claim consolidation for the claim it derives, which
+  the synthesis and preference stages for what they infer, `curiosity` for the question it files,
+  and claim consolidation for the claim it derives, which
   names every source its members already carry rather than a capture of its own. The backbone is
   minted before any coordinator stands: `aion init` bootstraps the Member, the Workspace and the
   Substrate with a creation mark, and the service start establishes their censuses
@@ -284,27 +288,28 @@ into first-in-first-out after the first claim.
 
 ## Read path: recall
 
-`handleRecall` (`recall/application/recall.ts`) runs these stages in order. Only the first six
-are timed into the pack's `stage_timings_ms`: `cues`, `embed`, `seeds`, `activation`, `fusion`
-and `resonance`, which this version always times even on a run that declines to search and which
-the schema keeps optional only so packs written before the stage existed still parse. The
-intention pass, assembly, and the three subtractions below it carry no timing.
+`handleRecall` (`recall/application/recall.ts`) runs these stages in order. Recall spends at
+most one generation call, and `AION_RECALL_MODE` says where: `assess`, the default, spends it
+after retrieval on choosing what helps; `cues` spends it before retrieval on extracting search
+cues; `raw` spends none. The stages timed into the pack's `stage_timings_ms` are `cues`,
+`embed`, `seeds`, `activation`, `fusion`, `resonance`, and `assessment` when the `assess` mode
+ran it. `resonance` is always timed, even on a run that declines to search; the schema keeps it
+optional only so packs written before the stage existed still parse. The intention pass,
+assembly, and the three subtractions below it carry no timing.
 
-1. **Cues.** One generation call (the cue model) turns the query, and optionally a summary
-   and recent turns, into weighted cues: query text weighs 3x, summary and recent-turn text
-   1x each. The summary was damped from 2x on a measurement: summary cues compete with query
-   cues for a seed budget that ran exactly full on all 1,480 logged recalls, and across four
-   summaries none improved on no summary at all while one lost the answer entirely. Nothing
-   rewrites or drops the caller's summary; it just stops outranking the question. If the call
-   times out, errors, or returns something unparseable, recall falls
-   back to a raw-query/raw-summary cue instead of failing, and the pack records that
-   degradation. `AION_CUE_BUDGET_MS` guards the call at 8000ms, a deliberate deviation from
-   PRD §14's 2000: the pinned cue model answers in 527-937ms warm and a measured 2030ms on
-   the run after an eviction, so the pinned value fires on ordinary recalls.
+1. **Cues.** Under `assess` and `raw`, the cues are the caller's own query at weight 3 and its
+   summary at weight 1, with no model in between (`queryCues`). Under `cues`, one generation
+   call turns the query, and optionally a summary and recent turns, into weighted cues at the
+   same weights, and the raw query always leads the list. The summary was damped from 2x on a
+   measurement: summary cues compete with query cues for a seed budget that ran exactly full on
+   all 1,480 logged recalls, and across four summaries none improved on no summary at all while
+   one lost the answer entirely. Nothing rewrites or drops the caller's summary; it just stops
+   outranking the question. A `cues` call that times out, errors, or returns something
+   unparseable falls back to the raw-query cues, and the pack records that degradation.
 2. **Embed.** Every cue is embedded in one batched call. A failure here costs recall its
    vector leg only; BM25 and exact entity resolution still run on cue text. The pack records
-   that rung too, so a full Ollama outage (cues and embeddings both gone) is legible as more
-   than a cue-model failure.
+   that rung too, so a full Ollama outage is legible as a thinner ranking rather than a model
+   failure.
 3. **Seeds.** Five strategies run together: `vector` (nearest neighbors in the content
    vector index), `context_vector` (nearest neighbors in the context vector index, the same
    cue embedding against a second index; it reports as a `vector` hit downstream, since it is
@@ -365,13 +370,25 @@ intention pass, assembly, and the three subtractions below it carry no timing.
    comparisons per row against what the run already holds: the subject entity in the activated
    set (`entity`), a named date the clock has passed (`temporal`), or the source episode's
    content vector against the centroid above `AION_RECALL_INTENTION_SITUATION_FLOOR`
-   (`situation`). No model call and no embedding, so the hot path keeps exactly one generation
+   (`situation`). No model call and no embedding, so the hot path keeps at most one generation
    call. A match lands in `intentions` with method `intention_trigger` and the path that fired
    it. Provenance decides the bucket, not the label: a Goal the query itself found stays in
    `facts`, and only a trigger moves one here. `AION_RECALL_INTENTIONS=false` turns the stage
    off, and a time-traveled read evaluates no trigger at all, since a trigger is the substrate
    acting now.
-8. **Pack assembly.** Fused items route to a bucket by node label (`pack-buckets.ts`):
+8. **Pack assembly.** Under `assess`, the evidence is read first, and then the recall model
+   is shown what retrieval found (`assessment-pool.ts`): the admitted candidates, then items the
+   floors refused, then the resonant associations and the triggered reminders in slots of their
+   own. The pool holds as many items as the pack has slots, and leaves out anything the session
+   already holds or wrote itself. The model answers with candidate numbers, most useful first,
+   and at most one short note. A valid selection is the pack, whatever it holds: its items keep
+   their buckets and their own standing, and a refused item it chose says in its admission that
+   the floors did not pass it. The host checks identity, never judgment, so a number that names
+   no candidate is dropped. A call that produces no usable answer serves the ranking assembly
+   below, marked `degraded: assessment`. Under `cues` and `raw`, that ranking assembly is the
+   pack.
+
+   Fused items route to a bucket by node label (`pack-buckets.ts`):
    `Episode`/`Turn` to `episodes`, `Narrative` to `narratives`, and `Entity`, `Bridge`, plus the
    nine cognitive types (`Goal`, `Plan`, `Decision`, `Insight`, `Concept`, `Context`, `Event`,
    `Pattern`, `Trend`) to `facts`, since a Decision carries a fact the same way an entity
@@ -535,13 +552,13 @@ does, and one tick runs four phases: observe, decide, act, learn.
 1. **Observe.** `observeHealth` assembles one `HealthSnapshot` from the surfaces `aion
    doctor` and `/health` already read: graph structure (node population, vector parity,
    orphan share, episodes with no session link), queue (depth per lane, oldest unclaimed,
-   exhausted attempts, enrichment lag, the share of recent recalls that answered without the
-   cue model, and the reinforcement rows the queue cap threw away), enrichment (episodes with
+   exhausted attempts, enrichment lag, the share of recent recalls that degraded on the recall
+   model call, and the reinforcement rows the queue cap threw away), enrichment (episodes with
    no orchestrator ledger key), plasticity, proposals, entities (identities the deterministic
    tier-0 sweep could still absorb), redaction residue, the narrative-seal backlog, the eviction
    census, the batch lane (work owed, work a vendor holds, and how long the part a run can move
    has waited), generation health, and the per-operation effectiveness record tier 2 scores on. The
-   cue-degradation share reads as unmeasured rather than as healthy until the first recall
+   recall-degradation share reads as unmeasured rather than as healthy until the first recall
    lands. Every collector is caught
    independently; one that throws names itself in `degraded` and costs its own metrics rather
    than the reading.
@@ -563,11 +580,11 @@ does, and one tick runs four phases: observe, decide, act, learn.
    model-guided seam: on by default (`AION_MAINTENANCE_TIER3`), and acting by default because
    `AION_MAINTENANCE_TIER3_MODE` ships `act`. `AION_MAINTENANCE_TIER3=false` is the kill
    switch, `propose` is the kill switch inside it; on any tick that reaches tier 3, the standing
-   cost is one advisor call, which reasons under a token budget
-   (`AION_ANTHROPIC_THINKING_BUDGET_TOKENS`) before it answers.
+   cost is one advisor call, which reasons before it answers under
+   `AION_ANTHROPIC_THINKING_BUDGET_TOKENS` or `AION_OPENAI_REASONING_EFFORT`.
 
    Ordinary reinforcement no longer waits on this loop. A quarter-hour bucket filled by whatever
-   scores highest across thirty-one operations is the wrong clock for a queue that fills on every
+   scores highest across thirty-two operations is the wrong clock for a queue that fills on every
    recall, so the drain has its own five-second cadence and `reinforcement_flush` stays in the
    catalog as the manual and maintenance route into the same owner. Measured against the real
    loop on a twelve-burst, six-hundred-signal offered load (`plasticity/application/drain.int.test.ts`,
@@ -608,7 +625,7 @@ does, and one tick runs four phases: observe, decide, act, learn.
    reads, and the same counts weight the strategic tier's acceptance. An operation with no
    metric in the snapshot records `unmeasured` instead: the run is on its record, and its
    effectiveness reads as unmeasured rather than as a number, which step 2's weight and the
-   preemption grace both leave alone. Twenty-one of the thirty-one operations declare no metric,
+   preemption grace both leave alone. Twenty-two of the thirty-two operations declare no metric,
    so the strategic tier weights those on the half of the record a metric is not needed to read:
    the share of their runs that did not fail (`executionWeight`, `introspection/domain/tier3.ts`).
    A run that threw did not do the work whatever the work was worth, and five recorded throws are
@@ -623,8 +640,8 @@ does, and one tick runs four phases: observe, decide, act, learn.
    later, which is the reading a recommendation can be argued against.
 
 The catalog is one ordered list (`introspection/application/catalog.ts`), which is the only
-place an operation joins maintenance. Thirty-one are registered, in eleven groups: substrate
-hygiene (`vector_backfill`, `reconcile_reenqueue`, `dead_letter`,
+place an operation joins maintenance. Thirty-two are registered, in eleven groups: substrate
+hygiene (`vector_backfill`, `reconcile_reenqueue`, `batch_settlement`, `dead_letter`,
 `redaction_residue_purge`), plasticity (`reinforcement_flush`, `memory_decay`, `edge_prune`,
 `identifier_decay`), the chunk lifecycle (`narrative_seal`), the raw projection's end
 (`episode_evict`), content maintenance (`narrative_cleanup`, `narrative_regrounding`,
@@ -638,8 +655,9 @@ hygiene (`vector_backfill`, `reconcile_reenqueue`, `dead_letter`,
 urgency, and ties break on waiting time and then on name.
 
 Ten declare a `measure`, the health-snapshot number their run is scored on moving. The
-other twenty-one record `unmeasured` instead. Seventeen of those wait on a gauge the snapshot
-does not carry yet; the last four decline one on purpose. `proposal_resolution` moves the
+other twenty-two record `unmeasured` instead. Seventeen of those wait on a gauge the snapshot
+does not carry yet; the last five decline one on purpose. `batch_settlement` would be scored on
+the lane's backlog, which weights the pump down for the vendor's turnaround. `proposal_resolution` moves the
 open-proposal count, and scoring it on lowering that would reward an applied correction and a
 dismissed one alike, which rewards emptying the queue rather than deciding it. `recall_probe`
 produces numbers instead of moving them, so a run that scored a miss did its job exactly as
@@ -648,7 +666,7 @@ one step further: each would be scored on lowering its own backlog, which credit
 blocked the same as one published, and rewards a destructive pass for removing more of the
 resident population.
 
-One of the thirty-one adds to memory rather than tidying it. `curiosity` files a question
+One of the thirty-two adds to memory rather than tidying it. `curiosity` files a question
 about an entity the substrate keeps meeting and cannot describe, as a Goal marked `origin_kind:
 substrate` keyed to that entity, which the entity itself brings back through the intention
 triggers above. It writes through reflection intake like any other experience, which is also
