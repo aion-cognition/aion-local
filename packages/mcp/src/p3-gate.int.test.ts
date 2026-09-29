@@ -7,7 +7,6 @@ import {
   findEpisodeCognitiveNodes,
   findEpisodeEntities,
   findPendingVectorNodes,
-  findSessionNarratives,
   handleRecall,
   handleReflection,
   INSTALLED_PUBLICATION_HANDLERS,
@@ -15,6 +14,7 @@ import {
   LaneAssigner,
   listReflectionJobs,
   listReinforcementSignals,
+  NARRATIVE_PROPERTIES,
   openLogger,
   openSqliteHandle,
   orchestratorLedgerKey,
@@ -30,11 +30,18 @@ import {
   type EpisodeEntity,
   type Logger,
   type Provider,
+  type RecallCompletion,
   type RecallDeps,
   type ReflectionIntakeDeps,
+  type ReflectionStage,
   type SqliteHandle,
   EvidenceResolver,
 } from '@aion/core';
+import { BITEMPORAL_PROPERTIES } from '@aion/core/infrastructure/graph/bitemporal.js';
+import {
+  narrativeIdsInSession,
+  nodeProperties,
+} from '@aion/core/infrastructure/graph/test-support/graph-queries.fixture.js';
 import {
   startNeo4jHarness,
   stopNeo4jHarness,
@@ -44,6 +51,7 @@ import { testGenerationProvider } from '@aion/core/infrastructure/providers/test
 import {
   directCompletionPublisher,
   directIntakePublisher,
+  drainAcceptedVectors,
 } from '@aion/core/reflection/test-support/direct-intake.fixture.js';
 import type { MemoryPack } from '@aion/protocol';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -52,7 +60,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { narrativeOptions, reflectionStages, workerOptions } from './bootstrap.js';
-import { waitFor, REMOTE_JUDGE_ABSENT } from './gate/gate-substrate.fixture.js';
+import { flatten, waitFor, REMOTE_JUDGE_ABSENT } from './gate/gate-substrate.fixture.js';
 
 /**
  * The reflection pipeline's exit gate, assembled the way the service assembles itself: the
@@ -69,11 +77,17 @@ const MEMBER_NAME = 'Ryan Huber';
 const WORK_SESSION = 'p3-gate-work';
 const OUTAGE_SESSION = 'p3-gate-outage';
 const READ_SESSION = 'p3-gate-read';
+/** Its own session, so the shipped dedup does not withhold what the first read served. */
+const RANKING_SESSION = 'p3-gate-read-ranking';
 
-const NOW = new Date('2026-08-28T12:00:00.000Z');
-const RECALLED_AT = new Date('2026-08-28T18:00:00.000Z');
-
-/** Named people, a project, tools, and a decision with a reason: entities and cognition in one episode. */
+/**
+ * Named people, a project, tools, and a decision with a reason: entities and cognition in one
+ * episode. Every clock in this file is the wall clock, as in the service, and the turns carry no
+ * timestamps of their own, so intake stamps the episode as it lands. A fixed date would fall
+ * before the substrate's birth, which the coordinator stamps as it initializes: intake would cut
+ * both turns, and the recall would judge currency at a moment before anything it reads was
+ * written.
+ */
 const WORK_PAYLOAD = {
   summary: 'settling the Aion reflection pipeline with Priya Raman',
   turns: [
@@ -82,14 +96,12 @@ const WORK_PAYLOAD = {
       text:
         'Priya Raman and I went through the Aion reflection pipeline this morning. We decided to keep Neo4j ' +
         'as the graph store instead of moving to Postgres, because the traversal queries are the whole point.',
-      occurred_at: '2026-08-28T09:00:00Z',
     },
     {
       role: 'assistant',
       text:
         'Understood. Aion extracts entities with Ollama running locally, Priya Raman owns the Neo4j migration, ' +
         'and the goal is to have the reflection pipeline enriching episodes before the end of the quarter.',
-      occurred_at: '2026-08-28T09:00:30Z',
     },
   ],
   observations: [
@@ -154,11 +166,35 @@ function recallDeps(): RecallDeps {
   };
 }
 
-function orchestrator(): ReflectionOrchestrator {
+/**
+ * Composed as the service composes it, publication coordinator included: each extraction stage
+ * records its nodes' sources through it and fails the run without it.
+ */
+function orchestrator(stages = reflectionStages(config)): ReflectionOrchestrator {
   return new ReflectionOrchestrator(
-    { driver: harness.driver, db, provider, logger },
-    reflectionStages(config),
+    { driver: harness.driver, db, provider, logger, publications },
+    stages,
   );
+}
+
+/** The shipped stage list, each stage noting its name in `entered` before it runs. */
+function recordingStages(entered: string[]): ReflectionStage[] {
+  return reflectionStages(config).map((stage) => ({
+    name: stage.name,
+    ...(stage.describe === undefined ? {} : { describe: () => stage.describe?.() ?? {} }),
+    run: (ctx) => {
+      entered.push(stage.name);
+      return stage.run(ctx);
+    },
+  }));
+}
+
+/** What reflection wrote for the work episode: its entities and its cognitive nodes. */
+async function extractedIds(): Promise<Set<string>> {
+  return new Set([
+    ...entitiesAfterRun.map((entity) => entity.id),
+    ...(await cognitiveNodeIds(workEpisodeId)),
+  ]);
 }
 
 async function cognitiveNodeIds(episodeId: string): Promise<string[]> {
@@ -234,8 +270,9 @@ beforeAll(async () => {
       },
     }),
     WORK_PAYLOAD,
-    { identity: WORK_SESSION, now: NOW },
+    { identity: WORK_SESSION },
   );
+  expect(stored.pre_birth_trim).toBeUndefined();
   workEpisodeId = stored.episode_id;
 
   await waitFor('the signalled reflection run to reach the ledger', LEDGER_DEADLINE_MS, () =>
@@ -283,15 +320,18 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('gate item 1: one reflection call, no manua
 });
 
 describe.skipIf(REMOTE_JUDGE_ABSENT)('gate item 2: the ledger blocks the re-run', () => {
-  it('returns already_applied and writes nothing a second time', async () => {
+  it('returns already_applied, enters no stage, and writes nothing a second time', async () => {
     const entitiesBefore = entitiesAfterRun.length;
     const cognitiveBefore = (await cognitiveNodeIds(workEpisodeId)).length;
+    const entered: string[] = [];
 
-    const rerun = await orchestrator().run(workEpisodeId);
+    const rerun = await orchestrator(recordingStages(entered)).run(workEpisodeId);
 
     expect(rerun.status).toBe('already_applied');
     expect(rerun.applied).toBe(false);
-    expect(rerun.summary.stages).toHaveLength(0);
+    // The answer hands back the outcomes the first run recorded, so its stage list is not empty.
+    // Whether a stage ran again is read off the stages themselves.
+    expect(entered).toEqual([]);
     expect((await findEpisodeEntities(harness.driver, workEpisodeId)).length).toBe(entitiesBefore);
     expect((await cognitiveNodeIds(workEpisodeId)).length).toBe(cognitiveBefore);
   });
@@ -307,51 +347,79 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('gate item 3: a closed session leaves a nar
     closer.onSessionClosed(WORK_SESSION);
     await closer.whenIdle();
 
-    const narratives = await findSessionNarratives(harness.driver, WORK_SESSION);
+    // The close seals the session's members into a chunk and publishes its first revision, which
+    // derives from the session. `findSessionNarratives` reads only the legacy session family.
+    const narratives = await narrativeIdsInSession(harness.driver, WORK_SESSION);
     expect(narratives).toHaveLength(1);
-    expect(narratives[0]?.version).toBe(1);
-    expect(narratives[0]?.open).toBe(true);
-    expect(narratives[0]?.coverageCount).toBeGreaterThan(0);
+    const narrative = await nodeProperties(harness.driver, narratives[0] ?? '');
+    expect(narrative[NARRATIVE_PROPERTIES.family]).toBe('chunk');
+    expect(narrative[NARRATIVE_PROPERTIES.revisionNo]).toBe(1);
+    expect(narrative[BITEMPORAL_PROPERTIES.validUntil]).toBeUndefined();
+    expect(narrative[NARRATIVE_PROPERTIES.coverageCount]).toBeGreaterThan(0);
   }, 180_000);
 });
 
+/**
+ * Under the shipped `assess` mode the recall model's selection is the pack, and a valid selection
+ * is honored whatever it holds, none included. Which buckets it fills, and whether it picks an
+ * entity over the decision that answers the question, is the model's judgment and gates nothing
+ * here. The shipped read is held to what the host owns: retrieval reached what reflection built,
+ * and nothing was served that retrieval did not offer. The bucket and rendering checks run on the
+ * no-model `raw` read, where the existing ranking decides and the same assembly renders the pack.
+ */
 describe.skipIf(REMOTE_JUDGE_ABSENT)('gate item 4: recall serves what reflection built', () => {
   let pack: MemoryPack;
+  let completion: RecallCompletion | undefined;
+  let ranked: MemoryPack;
 
-  // One recall, read by both assertions: the pack is what the agent gets, and asking twice
-  // would spend a second cue extraction proving nothing extra.
   beforeAll(async () => {
+    // A chunk revision is published without a vector and embedded by the backfill the service's
+    // worker and maintenance run. Until then the ranking drops it as unmeasured, so the backfill
+    // runs here before either read, as it would have on a running service.
+    await drainAcceptedVectors(harness.driver, provider);
     pack = await handleRecall(
-      recallDeps(),
-      { query: RECALL_QUERY },
       {
-        identity: READ_SESSION,
-        now: RECALLED_AT,
+        ...recallDeps(),
+        onRecalled: (served) => {
+          completion = served;
+        },
       },
+      { query: RECALL_QUERY },
+      { identity: READ_SESSION },
+    );
+    ranked = await handleRecall(
+      { ...recallDeps(), config: { ...config, recall: { ...config.recall, mode: 'raw' } } },
+      { query: RECALL_QUERY },
+      { identity: RANKING_SESSION },
     );
   }, 180_000);
 
-  it('fills the facts and narratives buckets on a real recall', async () => {
-    const factIds = (pack.facts ?? []).map((item) => item.id);
-    const narrativeIds = (pack.narratives ?? []).map((item) => item.id);
-    const extracted = new Set([
-      ...entitiesAfterRun.map((entity) => entity.id),
-      ...(await cognitiveNodeIds(workEpisodeId)),
-    ]);
-    const narratives = await findSessionNarratives(harness.driver, WORK_SESSION);
+  it('retrieves what reflection built, and serves nothing it did not retrieve', async () => {
+    const retrieved = new Set(completion?.retrieved ?? []);
+    const [narrativeId] = await narrativeIdsInSession(harness.driver, WORK_SESSION);
 
-    expect(factIds.length).toBeGreaterThan(0);
+    expect([...(await extractedIds())].some((id) => retrieved.has(id))).toBe(true);
+    expect(retrieved.has(narrativeId ?? '')).toBe(true);
+    expect(flatten(pack).filter((item) => !retrieved.has(item.id))).toEqual([]);
+  });
+
+  it('fills the facts and narratives buckets from the ranking', async () => {
+    const extracted = await extractedIds();
+    const factIds = (ranked.facts ?? []).map((item) => item.id);
+    const narrativeIds = (ranked.narratives ?? []).map((item) => item.id);
+    const [narrativeId] = await narrativeIdsInSession(harness.driver, WORK_SESSION);
+
     expect(factIds.some((id) => extracted.has(id))).toBe(true);
-    expect(narrativeIds).toContain(narratives[0]?.id);
+    expect(narrativeIds).toContain(narrativeId);
 
     // The pack the agent reads carries them too, not only the structured buckets.
-    expect(pack.rendered_text).toContain('## Facts');
-    expect(pack.rendered_text).toContain('## Narratives');
+    expect(ranked.rendered_text).toContain('## Facts');
+    expect(ranked.rendered_text).toContain('## Narratives');
   });
 
   it('renders an entity as its name and the claim the episode made about it', () => {
     const byId = new Map(entitiesAfterRun.map((entity) => [entity.id, entity]));
-    const entityItems = (pack.facts ?? []).filter((item) => byId.has(item.id));
+    const entityItems = (ranked.facts ?? []).filter((item) => byId.has(item.id));
     expect(entityItems.length).toBeGreaterThan(0);
     for (const item of entityItems) {
       const entity = byId.get(item.id);
@@ -371,10 +439,7 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)(
       const stored = await handleReflection(
         intakeDeps({ provider: outageProvider }),
         OUTAGE_PAYLOAD,
-        {
-          identity: OUTAGE_SESSION,
-          now: NOW,
-        },
+        { identity: OUTAGE_SESSION },
       );
       outageEpisodeId = stored.episode_id;
 
