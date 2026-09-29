@@ -73,7 +73,10 @@ function config(): Config {
   return {
     ...DEFAULTS,
     models: { ...DEFAULTS.models, embedDimension: EMBED_DIMENSION },
-    recall: { ...DEFAULTS.recall, sessionDedup: false, ownSessionFilter: false },
+    // The stub provider answers as the cue model, so this file runs the `cues` recall mode. Under
+    // `assess` its cues are never asked for, and nothing measures either event against the raw
+    // query, so neither is admitted.
+    recall: { ...DEFAULTS.recall, mode: 'cues', sessionDedup: false, ownSessionFilter: false },
   };
 }
 

@@ -10,7 +10,10 @@ import { ReflectionOrchestrator } from './orchestrator.js';
 import { publishPipelineReadinessPolicy } from './readiness.js';
 import { CognitiveExtractionStage } from './stages/cognitive.js';
 import { EntityExtractionStage } from './stages/entities.js';
-import { activatedCoordinator } from './test-support/publication-substrate.fixture.js';
+import {
+  activatedCoordinator,
+  backdateSubstrateBirth,
+} from './test-support/publication-substrate.fixture.js';
 import { durableRoleScope } from '../../evidence/domain/scopes.js';
 import { establishScope } from '../../evidence/test-support/evidence.fixture.js';
 import { DEFAULTS } from '../../infrastructure/config/defaults.js';
@@ -60,7 +63,14 @@ import { SessionManager } from '../../session/session-manager.js';
  * narrative below is dated to the experience only if every member carried the experience clock
  * through intake — the narrative's stamp is now derived from the episode's, not asserted beside
  * it.
+ *
+ * The substrate is born before the experience. A substrate stood up today refuses a turn from
+ * 2024 at the birth fence, so the only substrate that can take this experience late is one that
+ * already existed when it happened: its capture reached it long after, which is the gap measured
+ * here. Left on the day of the run, the fence drops both turns, and every stamp below falls back
+ * to the run's clock.
  */
+const BORN_AT = new Date('2024-01-01T00:00:00.000Z');
 const OCCURRED_AT = new Date('2024-11-05T09:15:00.000Z');
 const TODAY = new Date();
 
@@ -146,6 +156,7 @@ beforeAll(async () => {
     { driver: harness.driver, db, logger },
     'clock-threading',
   );
+  await backdateSubstrateBirth(harness.driver, db, BORN_AT);
 
   const stages = [new EntityExtractionStage(), new CognitiveExtractionStage()];
   publishPipelineReadinessPolicy(

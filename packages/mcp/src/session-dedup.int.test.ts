@@ -122,7 +122,10 @@ async function push(observation: string, now: Date): Promise<string> {
       entropyThreshold: DEFAULTS.redaction.entropyThreshold,
       lanes: new LaneAssigner(DEFAULTS.lanes),
       workerMaxAttempts: DEFAULTS.operational.workerMaxAttempts,
-      publications: directIntakePublisher(harness.driver, db),
+      // Published on the fixture's clock rather than the wall clock, so the system time the
+      // substrate records for each memory is the June it was stored in, and a `knew_at` read
+      // pinned inside that June has something the substrate knew by then.
+      publications: directIntakePublisher(harness.driver, db, () => now),
     },
     { observations: [observation] },
     { identity: WRITE_SESSION, now },

@@ -1,9 +1,15 @@
 import type { Driver } from 'neo4j-driver';
 
+import {
+  PUBLICATION_GUARD_ID_PROPERTY,
+  PUBLICATION_GUARD_LABEL,
+  readPublicationGuardBirth,
+} from '../../../infrastructure/graph/publication-guard.js';
 import type { Logger } from '../../../infrastructure/logging/logger.js';
 import { PublicationCoordinator } from '../../../infrastructure/publication/coordinator.js';
 import { readCurrentCoverageContract } from '../../../infrastructure/sqlite/coverage-contract.js';
 import type { SqliteHandle } from '../../../infrastructure/sqlite/database.js';
+import { readSubstratePairing } from '../../../infrastructure/sqlite/publication-control.js';
 import { INSTALLED_PUBLICATION_HANDLERS } from '../installed-publications.js';
 
 /**
@@ -62,4 +68,39 @@ export async function activatedCoordinator(
     throw new Error(`coverage activation ${outcome.status}: ${outcome.reason}`);
   }
   return publications;
+}
+
+/**
+ * Moves the substrate's birth back to `at`, for a fixture whose history is older than the run.
+ *
+ * The guard takes the wall clock at initialization whatever clock the coordinator was handed, and
+ * the birth fence at intake drops every turn stamped before it. A fixture dated to a fixed day, or
+ * a coordinator on a fixed clock, loses its turns at the fence once the run passes that day. This
+ * stands the fixture on a substrate that already existed when its history happened.
+ *
+ * Earlier only: a birth moved forward would fence out turns the substrate already accepted.
+ */
+export async function backdateSubstrateBirth(
+  driver: Driver,
+  db: SqliteHandle,
+  at: Date,
+): Promise<void> {
+  const pairing = readSubstratePairing(db);
+  const born =
+    pairing === undefined
+      ? undefined
+      : await readPublicationGuardBirth(driver, pairing.substrateId);
+  if (pairing === undefined || born === undefined) {
+    throw new Error('the substrate has no birth to move: initialize its coordinator first');
+  }
+  if (at.getTime() > born.getTime()) {
+    throw new Error(
+      `a birth moves earlier only: ${at.toISOString()} is after ${born.toISOString()}`,
+    );
+  }
+  await driver.executeQuery(
+    `MATCH (g:${PUBLICATION_GUARD_LABEL} {${PUBLICATION_GUARD_ID_PROPERTY}: $substrateId})
+     SET g.created_at = $at`,
+    { substrateId: pairing.substrateId, at: at.toISOString() },
+  );
 }

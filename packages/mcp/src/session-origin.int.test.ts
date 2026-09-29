@@ -39,8 +39,8 @@ const ENRICH_DEADLINE_MS = 300_000;
 const QUERY = 'why did ingestion move off polling';
 
 const OBSERVATIONS = [
-  'we moved the ingestion service off polling and onto webhooks, because polling added ninety ' +
-    'seconds of lag to every delivery and the on-call rotation kept paging on stale orders',
+  'we moved the Conveyor ingestion service off polling and onto webhooks, because polling added ' +
+    'ninety seconds of lag to every delivery and the on-call rotation kept paging on stale orders',
   'the webhooks cutover shipped behind a flag so ingestion could roll back to polling in one ' +
     'deploy if signature verification misbehaved',
 ];
@@ -49,10 +49,15 @@ const OBSERVATIONS = [
  * The other session correcting the record, which is what makes the corrected item outside news.
  * It names the same subjects the first episode did, so the two sessions end up sharing entities
  * as well as a topic, which is the other half of what this file checks.
+ *
+ * The service carries a name in both. The extraction prompt tells the model to skip a generic
+ * noun that identifies nothing in particular, and on the OpenAI route the correction's unnamed
+ * "ingestion service" was repeatedly read that way, which left the sessions no entity in common.
  */
 const CORRECTION = [
-  'the ingestion service still runs polling for the payments source, because webhooks from that ' +
-    'vendor are never signed and the on-call rotation had no way to tell a replay from an order',
+  'the Conveyor ingestion service still runs polling for the payments source, because webhooks ' +
+    'from that vendor are never signed and the on-call rotation had no way to tell a replay from ' +
+    'an order',
 ];
 
 const substrate = new GateSubstrate('session-origin', {
@@ -68,6 +73,12 @@ const substrate = new GateSubstrate('session-origin', {
 let episodeId = '';
 let ownIds: readonly string[] = [];
 let entityIds: readonly string[] = [];
+/**
+ * When the substrate had recorded all of it. Intake and the pipeline publish on the wall clock
+ * whatever the fixture says about when the session spoke, so this is the earliest system time a
+ * read can pin and find the write session's memories.
+ */
+let recordedAt = new Date(0);
 
 type Read = {
   readonly pack: MemoryPack;
@@ -136,6 +147,7 @@ beforeAll(async () => {
 
   ownIds = (await findEpisodeCognitiveNodes(substrate.driver, episodeId)).map((node) => node.id);
   entityIds = (await findEpisodeEntities(substrate.driver, episodeId)).map((entity) => entity.id);
+  recordedAt = new Date();
 }, 900_000);
 
 afterAll(async () => {
@@ -200,12 +212,16 @@ describe('a session that asks about what it just said', () => {
   /**
    * Inspecting the past is a question about the record rather than a re-serve, and a session
    * asking what it wrote is the most ordinary form that question takes.
+   *
+   * Pinned to `recordedAt` and asked after it. `RECALLED_AT` is in June, and the substrate
+   * recorded nothing before the day of the run, so a read pinned there finds nothing to serve and
+   * nothing to withhold, and proves neither.
    */
   it('serves everything again on a read that inspects the past', async () => {
     const historical = await handleRecall(
       recallDeps({}),
-      { query: QUERY, knew_at: RECALLED_AT.toISOString() },
-      { identity: WRITE_SESSION, now: RECALLED_AT },
+      { query: QUERY, knew_at: recordedAt.toISOString() },
+      { identity: WRITE_SESSION, now: new Date() },
     );
 
     const source = new Set(fromWriteSession());
