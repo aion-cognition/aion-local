@@ -45,7 +45,7 @@ every fire on a machine that never ran `npm install`. `hook/imports.test.ts` fai
 
 ```
 init        set up the selected installation and generation provider
-hooks       install the Claude Code harness hooks: install | uninstall | status
+hooks       install the Claude Code or Codex harness hooks: install | uninstall | status
 status      services, models, routing, and graph counts
 doctor      check every substrate invariant and name what is broken
 last        the last MemoryPack served per session, with rationale

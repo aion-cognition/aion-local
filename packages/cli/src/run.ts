@@ -38,7 +38,7 @@ const commands: Record<string, Command> = {
     run: (argv) => runInit(argv),
   },
   hooks: {
-    summary: 'install the Claude Code harness hooks: install | uninstall | status',
+    summary: 'install the Claude Code or Codex harness hooks: install | uninstall | status',
     run: (argv) => runHooks(argv),
   },
   status: {

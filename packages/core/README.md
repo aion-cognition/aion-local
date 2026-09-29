@@ -14,13 +14,13 @@ Imported by `mcp` and `cli`, both through the barrels below.
 
 ## Layout
 
-Every context with both pure logic and orchestration splits in two. `domain/` does no I/O,
-reads no config, and holds no logger. `application/` is everything that touches the graph,
-SQLite, or a model.
+Every context with both pure logic and orchestration splits in two. `domain/` is the pure
+logic, with two exceptions `docs/architecture.md` names: `proposal-hygiene.ts` reads `DEFAULTS`
+and `tier3.ts` logs. `application/` is everything that touches the graph, SQLite, or a model.
 
 ```
 recall/          domain: activation, admission, fusion, ranking, pack assembly
-                 application: cues, seed strategies, the pipeline, side effects
+                 application: cues, seed strategies, assessment, the pipeline, side effects
 reflection/      domain: episode and turn shaping, content hashing, the stage contract
                  application: intake, orchestrator, stages/, worker, narratives, proposals
 introspection/   domain: the health snapshot, the tiered decision, the operation contract
@@ -30,18 +30,18 @@ plasticity/      domain: the Hebbian fold and the staleness curve
 redaction/       deterministic secret detection, no domain and application split
 session/         identity to session-id resolution, cached per process
 infrastructure/  graph/, sqlite/, providers/, config/, logging/
-prompts/         every generation system prompt, one file per surface, LOCAL and KEYED
+prompts/         every generation system prompt, one file per surface, plus the shared frame
 ```
 
 The layering rule: `domain/` never imports `application/`; `application/` imports `domain/`
 and `infrastructure/`. `reflection/domain/` is the one context the other two draw pure value
 primitives from, and nothing draws back. `recall/domain/` takes `hashContent` from
 `content.js` and `weightedMeanVector` from `context-vector.js`; `introspection/domain/` takes
-`entity-cascade.js`'s relation checks. `infrastructure/` takes nineteen files' worth of the
+`entity-cascade.js`'s relation checks. `infrastructure/` takes twenty-two files' worth of the
 same kind of primitive (name folding, claim keys, vector-input hashing, entity-extraction and
-entity-reconciliation helpers, the `ReflectionContent` and `ComputedContextVector` types) and
-nothing else: no application code, no I/O, no Cypher that reflection/ itself doesn't already
-own.
+entity-reconciliation helpers, the `ReflectionContent` and `ComputedContextVector` types), plus
+one ownership-scope constant from `evidence/domain/ownership.ts`, and nothing else: no
+application code, no I/O, no Cypher that reflection/ itself doesn't already own.
 
 ## The public surface
 
@@ -68,13 +68,12 @@ sibling's `test-support/` fixtures and is not a production import route.
   the defaults and the `AION_*` registry all fold out of that table. Recapture
   `config-surface.json` when a knob is added, renamed or retuned, and let
   `config-surface.test.ts` be the diff.
-- Every generation system prompt lives in `prompts/`, one file per surface, exported as
-  `LOCAL` and `KEYED`. `prompts/no-stray-system-prompt.test.ts` scans `packages/` and fails on
-  a prompt declared anywhere else. `prompts/fork-registry.test.ts` names the three surfaces
-  whose routes read different text and proves every other surface exports one constant under
-  both names.
-- No regex or keyword machinery in the cognitive path: cue extraction, ranking and activation
-  are model-driven or graph-structural. `redaction/` is the deliberate exception, because a
+- Every generation system prompt lives in `prompts/`, one file per surface, each exported once
+  under a name for what it asks. `prompts/no-stray-system-prompt.test.ts` scans `packages/` and
+  fails on a prompt declared anywhere else. `prompts/prompt-surfaces.test.ts` fails if a
+  route-specific name such as `LOCAL` or `KEYED` comes back.
+- No regex or keyword machinery in the cognitive path: the recall assessment, cue extraction,
+  ranking and activation are model-driven or graph-structural. `redaction/` is the deliberate exception, because a
   credential leak cannot wait on a model's judgment.
 
 ## Checks

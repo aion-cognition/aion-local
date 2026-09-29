@@ -1,7 +1,8 @@
 # @aion/mcp
 
 The long-lived service. One process holds one Neo4j driver, one SQLite handle, one session
-cache and one cue cache for its whole life, and multiplexes every connected agent over
+cache and one cue cache (read only under `AION_RECALL_MODE=cues`) for its whole life, and
+multiplexes every connected agent over
 streamable HTTP. This package is transport and wiring; the memory operations themselves are
 `@aion/core`.
 
@@ -57,11 +58,13 @@ a probe on every interval stays cheap.
 
 ## The gate
 
-`gate/` holds eleven int test files. Seven scripted batteries, each run against
-`bootstrap.ts`'s own stage list, live Ollama, and the run's throwaway Neo4j, are split across
-three of them. The other eight gate one behavior each, four of them the batteries that pin a
-mode knob (`AION_SUPERSEDE_MODE`, `AION_ENTITY_MERGE_MODE`, `AION_KEYED_CLOSE_MODE`,
-`AION_MAINTENANCE_TIER3_MODE`).
+`gate/` holds fourteen int test files. Seven scripted batteries, each run against
+`bootstrap.ts`'s own stage list, a live generation key, host Ollama for embeddings, and the
+run's throwaway Neo4j, are split across the three `re-exercise-gate-*` files. Nine others gate
+one behavior each, four of them the batteries that pin a mode knob (`AION_SUPERSEDE_MODE`,
+`AION_ENTITY_MERGE_MODE`, `AION_KEYED_CLOSE_MODE`, `AION_MAINTENANCE_TIER3_MODE`). The last two
+are opt-in live checks that spend real calls: `provider-activation` runs only under
+`TEST_AION_PROVIDER_CHECK=1`, and `review-transcripts` only under `TEST_AION_REVIEW_TRANSCRIPTS=1`.
 
 ```
 npx vitest run --project integration --reporter=verbose re-exercise-gate
