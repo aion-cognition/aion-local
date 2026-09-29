@@ -11,7 +11,12 @@ import {
 } from './connection.js';
 import { upsertEdgeInTransaction, type UpsertedEdge } from './edges.js';
 import { GraphNodeNotFoundError } from './errors.js';
-import { BASE_NODE_LABEL, resolveLabels, type NodeLabel } from './labels.js';
+import {
+  BASE_NODE_LABEL,
+  matchedCompanionLabels,
+  resolveLabels,
+  type NodeLabel,
+} from './labels.js';
 import { SUPERSEDES_TYPE } from './relationships.js';
 import { toGraphDateTime, toGraphParameters, type GraphProperties, type Row } from './values.js';
 
@@ -137,19 +142,22 @@ export type StampedNodeResult = {
  * MERGE on the primary label and id, and never rewrite the stamp on match: a second
  * identical write is a no-op, and a changed fact is a supersession rather than an
  * overwrite. Companion labels are applied on both branches so a node written before a
- * label rule existed picks it up on the next write.
+ * label rule existed picks it up on the next write, except onto a node that wears the
+ * primary label as a companion of its own (`matchedCompanionLabels`).
  */
 export function buildStampedNodeWrite(input: StampedNodeWrite): GraphStatement {
   const stamped = stampNew(input);
   const companions = stamped.labels.filter((label) => label !== input.label);
   const labelClause = companions.length > 0 ? [`n:${companions.join(':')}`] : [];
+  const matched = matchedCompanionLabels('n', input.label);
   const mergeClause = input.mergeProperties === undefined ? [] : ['n += $mergeProperties'];
-  const onMatch = [...labelClause, ...mergeClause];
+  const onMatch = [`n:${matched.set.join(':')}`, ...mergeClause];
 
   const cypher = [
     `MERGE (n:${input.label} { id: $id })`,
     `ON CREATE SET ${[...labelClause, 'n += $properties', ...mergeClause].join(', ')}`,
-    ...(onMatch.length > 0 ? [`ON MATCH SET ${onMatch.join(', ')}`] : []),
+    `ON MATCH SET ${onMatch.join(', ')}`,
+    ...(matched.guarded === undefined ? [] : [matched.guarded]),
     'RETURN n.id AS id, labels(n) AS labels',
   ].join('\n');
 

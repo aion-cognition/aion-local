@@ -120,7 +120,11 @@ no notion of episodes, cues, or memory packs beyond those primitives.
   drawn by that write and nothing else can have recorded anything about it. Five producers reach
   it: intake for an episode and its turns, the entity and cognitive stages for what they extract,
   `curiosity` for the question it files, and claim consolidation for the claim it derives, which
-  names every source its members already carry rather than a capture of its own. `node-state.ts`
+  names every source its members already carry rather than a capture of its own. The backbone is
+  minted before any coordinator stands: `aion init` bootstraps the Member, the Workspace and the
+  Substrate with a creation mark, and the service start establishes their censuses
+  (`reflection/application/backbone-evidence.ts`). A backbone node an older build minted carries
+  no mark and keeps the gap it has. `node-state.ts`
   owns the second half: the same write establishes `graph.node_state` and its mirror, and every
   later writer that changes the node's semantic state advances the same counter in the
   acknowledgment that made the change — a forget, an orphan suppression, a family repair, and an

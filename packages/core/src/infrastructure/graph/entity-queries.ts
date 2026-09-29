@@ -26,7 +26,7 @@ import {
   type MergedEntity,
 } from './entity-identity-queries.js';
 import { MEMORY_PROPERTIES } from './episodes.js';
-import { BASE_NODE_LABEL, ENTITY_LABEL, resolveLabels } from './labels.js';
+import { BASE_NODE_LABEL, ENTITY_LABEL, matchedCompanionLabels, resolveLabels } from './labels.js';
 import { LOCK_PROPERTY } from './locks.js';
 import { SUPERSEDES_TYPE } from './relationships.js';
 import {
@@ -97,7 +97,10 @@ export {
 } from './entity-mention-queries.js';
 export { ENTITY_ALIASES_NORM_PROPERTY } from './seed-queries.js';
 
-/** Companions are applied on both MERGE branches, so an entity written before a label rule picks it up. */
+/**
+ * Companions are applied on both MERGE branches, so an entity written before a label rule picks
+ * them up. A match on a backbone node takes only the base label (`matchedCompanionLabels`).
+ */
 function companionLabels(): string {
   return resolveLabels(ENTITY_LABEL)
     .filter((label) => label !== ENTITY_LABEL)
@@ -188,11 +191,12 @@ export function prepareEntityMerge(
   now: Date,
 ): PreparedEntityMerge {
   const companions = companionLabels();
+  const matched = matchedCompanionLabels('n', ENTITY_LABEL);
   const reopenCondition =
     `n.${BITEMPORAL_PROPERTIES.validUntil} IS NOT NULL` +
     ` AND n.${CLOSURE_PROVENANCE_PROPERTY} IS NOT NULL`;
   const onMatch = [
-    `n:${companions}`,
+    `n:${matched.set.join(':')}`,
     `n.${BITEMPORAL_PROPERTIES.validUntil} = CASE WHEN ${reopenCondition} THEN null` +
       ` ELSE n.${BITEMPORAL_PROPERTIES.validUntil} END`,
     `n.${BITEMPORAL_PROPERTIES.txUntil} = CASE WHEN ${reopenCondition} THEN null` +
@@ -207,6 +211,7 @@ export function prepareEntityMerge(
     `MERGE (n:${ENTITY_LABEL} { ${ENTITY_NAME_NORM_PROPERTY}: entity.name_norm })`,
     `ON CREATE SET n:${companions}, n += entity.properties`,
     `ON MATCH SET ${onMatch.join(', ')}`,
+    ...(matched.guarded === undefined ? [] : [matched.guarded]),
     'WITH entity.name_norm AS name_norm, entity.id AS proposed_id, n',
     `OPTIONAL MATCH (head:${ENTITY_LABEL})-[:${SUPERSEDES_TYPE}*1..${String(MERGE_CHAIN_DEPTH)}]->(n)`,
     `WHERE n.${BITEMPORAL_PROPERTIES.validUntil} IS NOT NULL`,

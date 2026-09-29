@@ -26,6 +26,12 @@ export { SOURCE_INDEX_JOB_TYPE, VECTOR_JOB_TYPE } from './application/intake-que
 export { INSTALLED_PUBLICATION_HANDLERS } from './application/installed-publications.js';
 
 /**
+ * The census the backbone is born with, exported because the service start is where a coordinator
+ * first stands after the bootstrap minted it.
+ */
+export { publishBackboneBirth } from './application/backbone-evidence.js';
+
+/**
  * The suppression writer's identity, exported because `aion forget` and `aion unforget` are the
  * two callers: a command states the act and the coordinator does the writing.
  */

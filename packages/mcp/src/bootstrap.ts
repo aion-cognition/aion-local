@@ -23,6 +23,7 @@ import {
   plasticityCounters,
   prepareSubstrateRoots,
   probeRecall,
+  publishBackboneBirth,
   publishPipelineReadinessPolicy,
   ProviderRouter,
   PublicationCoordinator,
@@ -197,6 +198,10 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
     // asking for the guard at boot, and a no-op on every start after the first.
     const coverage = await activateCoverageOnStart(publications, store.db);
     logger.info({ coverage }, `coverage contract ${coverage.state}`);
+    // Ahead of the worker, which reads the backbone as soon as an episode names it. The bootstrap
+    // above cannot count what it mints because it runs before this coordinator exists.
+    const backboneBirth = await publishBackboneBirth({ driver, db: store.db, publications });
+    logger.info({ backboneBirth }, `backbone birth census ${backboneBirth.status}`);
     publicationRecovery = new PublicationRecoveryLoop(publications, logger, {
       retryBaseMs: config.operational.workerRetryBaseMs,
       retryCapMs: config.operational.workerRetryCapMs,

@@ -121,6 +121,30 @@ export function testGenerationConfig(
   };
 }
 
+/** The route settings `testGenerationEnv` carries into a service environment when the shell set them. */
+const CARRIED_GENERATION_VARIABLES = [
+  'AION_ANTHROPIC_API_KEY',
+  'AION_ANTHROPIC_MODEL',
+  'AION_OPENAI_API_KEY',
+  'AION_OPENAI_MODEL',
+] as const;
+
+/**
+ * The same selection as `testGenerationConfig`, spelled as the environment a battery hands
+ * `bootstrapService`, which reads its config from one rather than taking a router. A variable the
+ * shell left unset stays out, so the service falls back to its own default for it.
+ */
+export function testGenerationEnv(): Record<string, string> {
+  const carried = CARRIED_GENERATION_VARIABLES.flatMap((name) => {
+    const value = (process.env[name] ?? '').trim();
+    return value === '' ? [] : [[name, value] as const];
+  });
+  return {
+    AION_GENERATION_PROVIDER: testRoutesToOpenAi() ? 'openai' : 'anthropic',
+    ...Object.fromEntries(carried),
+  };
+}
+
 /**
  * The provider a test drives when there is no key: it embeds, and refuses to generate with the
  * same error the service raises. A file that needs enrichment skips on the missing key rather

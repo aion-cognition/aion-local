@@ -8,6 +8,7 @@ import {
 } from './bitemporal.js';
 import { inWriteTransaction, runRead, type GraphTransaction } from './connection.js';
 import { upsertEdgeInTransaction } from './edges.js';
+import { MEMORY_PROPERTIES } from './episodes.js';
 import { foldName } from '../../reflection/domain/name-fold.js';
 
 /** The workspace is a fixed singleton, not a user-supplied name. */
@@ -23,6 +24,18 @@ export const SUBSTRATE_NAME = 'Aion';
 const MEMBER_ENTITY_TYPE = 'member';
 const WORKSPACE_ENTITY_TYPE = 'workspace';
 const SUBSTRATE_ENTITY_TYPE = 'substrate';
+
+/**
+ * The provenance a backbone identity is minted with, in the property every pipeline writer names
+ * itself in. Written on creation only, so it is also the node's own record that this bootstrap
+ * drew its id. The bootstrap runs before anything can publish, so the census that id is entitled
+ * to is established afterwards by `publishBackboneBirth`, which counts only identities carrying
+ * this mark. A backbone node an older build minted carries none, and nothing claims to count it.
+ */
+export const BACKBONE_EXTRACTION_METHOD = 'backbone';
+
+/** Create-only, beside the type, so a match never marks an identity some other build drew. */
+const BIRTH = { [MEMORY_PROPERTIES.extractionMethod]: BACKBONE_EXTRACTION_METHOD };
 
 /** The substrate's link to the global workspace: written once, never reinforced by observation. */
 const STRUCTURAL_SIGNALS = ['structural'];
@@ -84,6 +97,28 @@ export async function readSubstrateIdInTransaction(
   return resolveSingletonIdInTransaction(tx, 'Substrate');
 }
 
+const BACKBONE_BIRTHS = [
+  'MATCH (n:Member|Workspace|Substrate)',
+  `WHERE n.${MEMORY_PROPERTIES.extractionMethod} = $method`,
+  'RETURN n.id AS id',
+  'ORDER BY n.id',
+].join('\n');
+
+/** Every backbone identity this bootstrap minted, whatever its census says. */
+export async function readBackboneBirthIds(driver: Driver): Promise<string[]> {
+  return runRead(
+    driver,
+    BACKBONE_BIRTHS,
+    { method: BACKBONE_EXTRACTION_METHOD },
+    (row) => row.id as string,
+  );
+}
+
+/** The same read, beside a publication's own write under the guard. */
+export async function readBackboneBirthIdsInTransaction(tx: GraphTransaction): Promise<string[]> {
+  return tx.run(BACKBONE_BIRTHS, { method: BACKBONE_EXTRACTION_METHOD }, (row) => row.id as string);
+}
+
 /**
  * The Member's id, undefined before the backbone exists.
  *
@@ -141,7 +176,7 @@ export async function bootstrapBackbone(
       label: 'Member',
       id: memberId,
       now,
-      properties: { type: MEMBER_ENTITY_TYPE },
+      properties: { type: MEMBER_ENTITY_TYPE, ...BIRTH },
       mergeProperties: {
         is_structural: true,
         name: memberName,
@@ -154,7 +189,7 @@ export async function bootstrapBackbone(
       label: 'Workspace',
       id: workspaceId,
       now,
-      properties: { type: WORKSPACE_ENTITY_TYPE },
+      properties: { type: WORKSPACE_ENTITY_TYPE, ...BIRTH },
       mergeProperties: {
         is_structural: true,
         name: GLOBAL_WORKSPACE_NAME,
@@ -191,7 +226,7 @@ export async function bootstrapBackbone(
       label: 'Substrate',
       id: substrateId,
       now,
-      properties: { type: SUBSTRATE_ENTITY_TYPE },
+      properties: { type: SUBSTRATE_ENTITY_TYPE, ...BIRTH },
       mergeProperties: {
         is_structural: true,
         name: SUBSTRATE_NAME,

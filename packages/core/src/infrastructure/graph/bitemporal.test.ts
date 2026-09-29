@@ -8,7 +8,7 @@ import {
   closeRelationshipFragment,
   stampNew,
 } from './bitemporal.js';
-import { BASE_NODE_LABEL, NODE_LABELS, resolveLabels } from './labels.js';
+import { BASE_NODE_LABEL, matchedCompanionLabels, NODE_LABELS, resolveLabels } from './labels.js';
 import { fromGraphDateTime } from './values.js';
 
 const NOW = new Date('2026-02-03T04:05:06.000Z');
@@ -68,6 +68,16 @@ describe('labels', () => {
     expect(resolveLabels('Substrate')).toEqual(['Substrate', 'Entity', BASE_NODE_LABEL]);
   });
 
+  it('guards only the label something else wears as a companion', () => {
+    expect(matchedCompanionLabels('n', 'Episode')).toEqual({ set: ['Memory', BASE_NODE_LABEL] });
+    expect(matchedCompanionLabels('n', 'Member')).toEqual({ set: ['Entity', BASE_NODE_LABEL] });
+    const entity = matchedCompanionLabels('n', 'Entity');
+    expect(entity.set).toEqual([BASE_NODE_LABEL]);
+    for (const host of ['Member', 'Workspace', 'Substrate']) {
+      expect(entity.guarded).toContain(`n:${host}`);
+    }
+  });
+
   it('lists the primary label first for every known label', () => {
     for (const label of NODE_LABELS) {
       expect(resolveLabels(label)[0]).toBe(label);
@@ -100,6 +110,21 @@ describe('buildStampedNodeWrite', () => {
     const { cypher } = buildStampedNodeWrite({ label: 'Session', id: 's1', now: NOW });
     expect(cypher).toContain(`ON MATCH SET n:${BASE_NODE_LABEL}`);
     expect(cypher.slice(cypher.indexOf('ON MATCH SET'))).not.toContain('$properties');
+  });
+
+  it('keeps a matched backbone node out of the companions Entity gives its own nodes', () => {
+    const { cypher } = buildStampedNodeWrite({
+      label: 'Entity',
+      id: 'canonical',
+      now: NOW,
+      mergeProperties: { aliases: ['Aion memory'] },
+    });
+    expect(cypher).toContain(`ON CREATE SET n:Memory:${BASE_NODE_LABEL}, n += $properties`);
+    expect(cypher).toContain(`ON MATCH SET n:${BASE_NODE_LABEL}, n += $mergeProperties`);
+    expect(cypher).toContain(
+      'FOREACH (_ IN CASE WHEN n:Member OR n:Workspace OR n:Substrate THEN [] ELSE [1] END |' +
+        ' SET n:Memory)',
+    );
   });
 
   it('applies merge properties on both branches for the structural upgrade path', () => {

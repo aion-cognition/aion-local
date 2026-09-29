@@ -4,7 +4,11 @@ import {
   ensureGraphSession,
   fetchAdjacency,
   getLastPack,
+  INTEGRATE_JOB_TYPE,
+  isLedgerApplied,
   openSqliteHandle,
+  orchestratorLedgerKey,
+  PIPELINE_VERSION,
   readMemberName,
   runGraphMigrations,
   withCurrency,
@@ -15,7 +19,14 @@ import {
   stopNeo4jHarness,
   type Neo4jHarness,
 } from '@aion/core/infrastructure/graph/test-support/neo4j-harness.fixture.js';
-import { listReflectionJobs } from '@aion/core/infrastructure/sqlite/reflection-queue.js';
+import {
+  testGenerationEnv,
+  testGenerationKey,
+} from '@aion/core/infrastructure/providers/test-support/generation-provider.js';
+import {
+  listReflectionJobs,
+  type ReflectionJob,
+} from '@aion/core/infrastructure/sqlite/reflection-queue.js';
 import { MemoryPackSchema, ReflectionOutputSchema } from '@aion/protocol';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -31,11 +42,12 @@ import { bootstrapService, type AionService } from './bootstrap.js';
 import { HEALTH_PATH, MCP_PATH } from './http.js';
 
 /**
- * The authorized key, read the way `testGenerationProvider` reads it. Passed only into the
- * service environment this fixture builds: the literal it used to build had no key field at
- * all, so a keyed run of this root generated nothing and discharged nothing.
+ * Whether this run can enrich at all. The service generates on the route the shell selected
+ * (`testGenerationEnv`), and with no key for that route its enrichment waits for one by design.
+ * Nothing this file asserts about sessions, packs or the wire depends on enrichment, so a keyless
+ * run asserts the wait rather than timing out on it.
  */
-const ANTHROPIC_API_KEY = (process.env.AION_ANTHROPIC_API_KEY ?? '').trim() || undefined;
+const KEYLESS = testGenerationKey() === '';
 
 /**
  * The whole surface at once: the real assembly from `bootstrapService`, a throwaway Neo4j,
@@ -105,6 +117,31 @@ function pause(ms: number): Promise<void> {
   });
 }
 
+/** An enrichment row the worker gave back unspent because generation had nowhere to run. */
+function deferredForKey(job: ReflectionJob): boolean {
+  return (
+    job.jobType === INTEGRATE_JOB_TYPE &&
+    job.attempts === 0 &&
+    (job.lastError ?? '').includes('has nowhere to run')
+  );
+}
+
+/**
+ * With a key the queue empties. Without one it goes quiet instead: embedding and indexing finish,
+ * the worker releases the enrichment it could not run and holds further enrichment claims for a
+ * cooldown, and no row is claimed.
+ */
+function quiet(jobs: readonly ReflectionJob[]): boolean {
+  if (!KEYLESS) {
+    return jobs.length === 0;
+  }
+  return (
+    jobs.every(
+      (job) => job.jobType === INTEGRATE_JOB_TYPE && job.claimedAt === null && job.attempts === 0,
+    ) && jobs.some(deferredForKey)
+  );
+}
+
 /**
  * Waits out the reflection queue. A recall's effects are fenced on the publication position it
  * read under, so one taken while a pipeline is publishing is served and records nothing, and the
@@ -113,7 +150,7 @@ function pause(ms: number): Promise<void> {
 async function settled(): Promise<void> {
   const deadline = Date.now() + 240_000;
   while (Date.now() < deadline) {
-    if (listReflectionJobs(db).length === 0) {
+    if (quiet(listReflectionJobs(db))) {
       await pause(2_000);
       return;
     }
@@ -162,7 +199,7 @@ beforeAll(async () => {
     AION_LOG_FILE: join(dir, 'aion.jsonl'),
     AION_LOG_LEVEL: 'debug',
     AION_MCP_PORT: String(port),
-    ...(ANTHROPIC_API_KEY === undefined ? {} : { AION_ANTHROPIC_API_KEY: ANTHROPIC_API_KEY }),
+    ...testGenerationEnv(),
   });
   await started.service.listen();
   url = new URL(`http://127.0.0.1:${String(started.service.port)}${MCP_PATH}`);
@@ -272,6 +309,29 @@ describe('tool results over the wire', () => {
     expect(getLastPack(db, exchangeA.sessionId)?.pack).toEqual(exchangeA.pack);
     expect(getLastPack(db, exchangeB.sessionId)?.pack).toEqual(exchangeB.pack);
     expect(getLastPack(db, exchangeA.sessionId)?.pack).not.toEqual(exchangeB.pack);
+  });
+});
+
+describe('enrichment on the selected route', () => {
+  it.skipIf(KEYLESS)('enriches both episodes and empties the queue', () => {
+    expect(listReflectionJobs(db)).toEqual([]);
+    for (const exchange of [exchangeA, exchangeB]) {
+      expect(isLedgerApplied(db, orchestratorLedgerKey(PIPELINE_VERSION, exchange.episodeId))).toBe(
+        true,
+      );
+    }
+  });
+
+  it.runIf(KEYLESS)('keeps both episodes queued for a key without spending an attempt', () => {
+    const jobs = listReflectionJobs(db);
+    expect(jobs.map((job) => job.episodeId).sort()).toEqual(
+      [exchangeA.episodeId, exchangeB.episodeId].sort(),
+    );
+    for (const job of jobs) {
+      expect(job.jobType).toBe(INTEGRATE_JOB_TYPE);
+      expect(job.attempts).toBe(0);
+    }
+    expect(jobs.some(deferredForKey)).toBe(true);
   });
 });
 
