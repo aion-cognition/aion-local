@@ -30,8 +30,8 @@ import type { SqliteHandle } from '../sqlite/database.js';
  * Batched generation, from the substrate's side.
  *
  * Background work that tolerates minutes to hours goes through the selected vendor's batch API at
- * half price. Cues and anything a caller is waiting on do not: they run on ordinary calls, because
- * a batch is not a latency budget. The vendor's wire is its transport (`batch-transport.ts`); what
+ * half price. Recall's model call and anything else a caller is waiting on do not: they run on
+ * ordinary calls, because a batch is not a latency budget. The vendor's wire is its transport (`batch-transport.ts`); what
  * follows is the same on either.
  *
  * Four rules hold this together, and each of them is a case that has gone wrong in systems like
