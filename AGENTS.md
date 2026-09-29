@@ -37,8 +37,8 @@ Conventions and commands for agents working in this repo.
 - Every graph write is idempotent and bitemporal, with one deliberate exception: see
   "no node hard-deletes" below and `docs/architecture.md`'s note on access-tracking.
 - No node hard-deletes, ever. Correcting or removing a fact supersedes it.
-- No heuristic text machinery (regex, keyword lists) in the cognitive path: cue
-  extraction, ranking, and activation are model-driven or graph-structural. Redaction is
+- No heuristic text machinery (regex, keyword lists) in the cognitive path: recall's
+  assessment, cue extraction, ranking, and activation are model-driven or graph-structural. Redaction is
   the deliberate exception, since secret detection is deterministic by design.
 
 ## Layout
@@ -51,13 +51,15 @@ packages/core/src/
                                         AION_* registry derive from it; loader
   infrastructure/graph/                 every Cypher statement in the workspace
   infrastructure/logging/               pino wrapper
-  infrastructure/providers/             Anthropic client and batch adapter, local embedder,
-                                        circuit breaker, provisioning
+  infrastructure/providers/             Anthropic and OpenAI backends, the provider router, the
+                                        batch lane and its vendor transports, local embedder,
+                                        circuit breaker, spend guard, provisioning
   infrastructure/sqlite/                reflection queue, batch work, experience archive,
                                         usage-event log, last-pack cache, ops ledger,
                                         introspection insights, locks
   recall/domain/                        pure: activation, fusion (RRF/MMR), pack assembly
-  recall/application/                   cue extraction, seed strategies, the recall pipeline
+  recall/application/                   the recall pipeline, its model assessment, cue
+                                        extraction, seed strategies
   plasticity/                           reinforcement folding and the decay curve, the two bounded
                                         operations that apply them, and the drain's one owner and
                                         its own cadence (drain.ts)
@@ -82,7 +84,9 @@ packages/cli/src/                       aion command: init, status, doctor, stat
                                         maintain, unmerge, costs, logs, uninstall, hooks, help
 packages/cli/src/hook/                  the harness hook client: codex-rollout.ts reads the codex
                                         rollout, codex-settings.ts shapes its hooks file
-bin/aion                                host wrapper: rebuilds the image, runs the CLI container
+bin/aion                                the one launcher: runs the installation init recorded,
+                                        the host CLI on native or the CLI container on Docker;
+                                        bin/aion-native remains only as a compatibility name
 ```
 
 ## Commands
@@ -116,8 +120,9 @@ container, set it explicitly:
 export AION_OLLAMA_URL=http://127.0.0.1:11434
 ```
 
-`./bin/aion <command>` runs the built CLI against the real compose stack (`aion help` lists
-every command). Use it to exercise the actual binary, not as a test runner.
+`aion <command>` runs the built CLI against the installation `init` recorded, the native service
+or the compose stack (`aion help` lists every command). Use it to exercise the actual binary, not
+as a test runner.
 
 ## Guard tests
 
@@ -126,7 +131,7 @@ every command). Use it to exercise the actual binary, not as a test runner.
   finds one outside the three files it skips. The pattern excludes SQL's `DELETE FROM` and
   JavaScript's `delete` operator. Those three files are itself, which has to name the patterns
   it forbids, `test-support/neo4j-harness.fixture.ts`, which clears the test database between
-  files, and `infrastructure/graph/episode-eviction.ts`, C9's reviewed exception and the only
+  files, and `infrastructure/graph/episode-eviction.ts`, the reviewed exception and the only
   production module allowed to remove a node. A test in the same file pins the skip list at
   exactly those three, so widening it takes a deliberate edit. It and the prompt scan below are
   the only two conventions a repo-wide scan enforces; three more are lint-backed and marked
@@ -159,7 +164,7 @@ npm test                 # all vitest projects; the full integration run takes a
                          #   minutes on this machine now that files run three abreast
 ```
 
-Plus the re-exercise batteries below, and `./bin/aion doctor` green against the live stack.
+Plus the re-exercise batteries below, and `aion doctor` green against the live stack.
 The `service-freshness` doctor check warns when the running service's build sha trails the
 repo HEAD: a rebuilt image reaches the container only on a recreate. After any commit that
 should be live:
@@ -174,19 +179,20 @@ through that env var, which `bin/aion` exports and compose alone does not. The s
 the short form. Doctor compares the running stamp against `git rev-parse --short HEAD`, so a
 full-length sha never matches and the service reads stale forever. Any `./bin/aion` command
 also rebuilds the image, correctly stamped, when sources are newer than it. The recreate is
-still a separate step, and doctor's freshness warning is the reminder.
+still a separate step, and doctor's freshness warning is the reminder. That applies to the Docker
+installation.
 
-The native profile has no image, and the same commit reaches its launchd job this way:
+The native installation has no image, and the same commit reaches its launchd job this way:
 
 ```
-npm run build && ./bin/aion-native init --install native
+npm run build && aion init
 ```
 
 The sha rides in the job's environment, so a new one rewrites the plist and init reloads the
 job; an unchanged plist against a healthy server is a no-op. `npm run build` records what it
 built (`scripts/build-record.mjs`, run as `prebuild`/`postbuild`): a content digest of the inputs
 the compiler read and its `.tsbuildinfo` state, written only when the build succeeded and the
-source did not move under it. `bin/aion-native` stamps the job only when that record holds the
+source did not move under it. `bin/aion` stamps the native job only when that record holds the
 source on disk, by content rather than mtime, so an incremental build that left an entry file
 untouched is recognised and a pull with no build reads `unstamped` rather than a sha the running
 code does not hold. Source that differs from HEAD stamps as `<sha>-dirty-<digest>`, never as the
@@ -194,12 +200,14 @@ bare commit, and doctor compares like with like.
 
 ## The re-exercise gate
 
-`packages/mcp/src/gate/` holds twelve int test files. Three of them carry seven scripted
+`packages/mcp/src/gate/` holds fourteen int test files. Three of them carry seven scripted
 batteries, listed below. Each battery is a finding from the first full-system exercise round,
 re-run against the shipped pipeline (`bootstrap.ts`'s own stage list, live Ollama, a pooled
-throwaway Neo4j cleared for each file). The other nine files gate one behavior each, four of
-them the precision batteries further down and one of them `judged-pair-liveness`, which is
-where a fresh contradicting pair has to reach the judge and the judgment has to complete.
+throwaway Neo4j cleared for each file). Nine more gate one behavior each, four of them the
+precision batteries further down and one of them `judged-pair-liveness`, which is where a fresh
+contradicting pair has to reach the judge and the judgment has to complete. The last two,
+`provider-activation` and `review-transcripts`, are opt-in live checks that spend money and skip
+unless asked for (see "Test generation routing").
 
 ```
 npx vitest run --project integration --reporter=verbose re-exercise-gate         # all seven
@@ -220,8 +228,9 @@ are shared with the workstream that owns each area (`floors.data.ts`,
 
 ## Live-stack cautions
 
-- Never point tests at the live `aion` compose project (the `neo4j` / `aion-mcp` /
-  `aion-cli` services `./bin/aion` drives). The integration project starts a pool of
+- Never point tests at the live substrate: the `aion` compose project (the `neo4j` / `aion-mcp` /
+  `aion-cli` services) on Docker, or the native installation's Neo4j on `bolt://127.0.0.1:7687`,
+  its launchd service and its data directory. The integration project starts a pool of
   throwaway Neo4j containers with bare `docker run`s and removes them when the run ends
   (`infrastructure/graph/test-support/neo4j-global-setup.fixture.ts`). Those containers are
   the only Neo4j integration tests may touch. Every container it starts is named
@@ -308,12 +317,22 @@ over the file. Those are the only ones loaded, so a pin sitting in `.env` cannot
 `npm run quality:extraction` loads `AION_ANTHROPIC_API_KEY` and `AION_ANTHROPIC_MODEL` from the
 working directory and measures the Anthropic route only.
 
-`AION_PROVIDER_CHECK=1` runs `gate/provider-activation.int.test.ts`, and `AION_LIVE_BATCH=1` runs
-`description-freshness-live.int.test.ts`: the one-provider checks (a fresh reflection, an
-assessed recall, an exhausted job recovered by `dead_letter`, and a description-refresh batch
-submitted and settled at the vendor). Only the selected provider's key may reach the run, from
-the shell or the repo `.env`; the first file fails if the other one is set. Both spend money and
-neither runs by default.
+Opt-in live checks use `TEST_AION_*` switches, outside the product's `AION_*` namespace, so an
+exported switch never trips the loader's unknown-variable check. Each spends money and none runs
+by default:
+
+- `TEST_AION_PROVIDER_CHECK=1` runs `gate/provider-activation.int.test.ts`: a fresh reflection, an
+  assessed recall, and an exhausted job recovered by `dead_letter`, on the selected provider. Only
+  that provider's key may reach the run, from the shell or the repo `.env`; the file fails if the
+  other one is set.
+- `TEST_AION_LIVE_BATCH=1` runs `description-freshness-live.int.test.ts`: a description-refresh
+  batch submitted and settled at the vendor. `TEST_AION_LIVE_BATCH_DEADLINE_MS` bounds the wait.
+- `TEST_AION_OPENAI_CACHE_CHECK=1` runs `openai-cache.int.test.ts`: two OpenAI requests whose
+  reported usage must show no cache write.
+- `TEST_AION_REVIEW_TRANSCRIPTS=1` and `TEST_AION_REVIEW_SWEEP=1` run
+  `gate/review-transcripts.int.test.ts`: it prints what the second-pass reviewers were sent and
+  answered, and sweeps the entity reviewer over every battery pair. It decides nothing.
+  `TEST_AION_REVIEW_TRANSCRIPT_REPEATS` asks each review again.
 
 A file whose subject is the embedding model itself (`ollama-provider.int.test.ts`) builds its own
 `OllamaProvider` and ignores this switch.
