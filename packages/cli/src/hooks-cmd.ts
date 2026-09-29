@@ -350,7 +350,7 @@ export function statusHooks(options: HooksCommandOptions, write: Writer): number
 }
 
 /**
- * `aion init local` and `aion init full` both install the same way `aion hooks install` does,
+ * `aion init` installs the same hooks as `aion hooks install`,
  * with the full hooks profile.
  */
 export function installFullProfile(write: Writer): number {

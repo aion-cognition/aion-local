@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
-  fullProfileKey,
+  selectedProviderKey,
   keyNoticeLines,
   resolveProviderKey,
   settleProviderKey,
@@ -45,9 +45,9 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-describe('fullProfileKey', () => {
+describe('selectedProviderKey', () => {
   it('settles the Anthropic key when nothing selects a provider', () => {
-    expect(fullProfileKey(loadConfig({ AION_ANTHROPIC_API_KEY: 'sk-ant' }))).toEqual({
+    expect(selectedProviderKey(loadConfig({ AION_ANTHROPIC_API_KEY: 'sk-ant' }))).toEqual({
       provider: 'anthropic',
       envVar: 'AION_ANTHROPIC_API_KEY',
       configured: 'sk-ant',
@@ -55,12 +55,12 @@ describe('fullProfileKey', () => {
   });
 
   it("settles the selected provider's key and never reads the other one", () => {
-    expect(fullProfileKey(keyed('openai', { anthropic: 'sk-ant' }))).toEqual({
+    expect(selectedProviderKey(keyed('openai', { anthropic: 'sk-ant' }))).toEqual({
       provider: 'openai',
       envVar: 'AION_OPENAI_API_KEY',
       configured: '',
     });
-    expect(fullProfileKey(keyed('anthropic', { openai: 'sk-oai' }))).toEqual({
+    expect(selectedProviderKey(keyed('anthropic', { openai: 'sk-oai' }))).toEqual({
       provider: 'anthropic',
       envVar: 'AION_ANTHROPIC_API_KEY',
       configured: '',
@@ -93,37 +93,35 @@ describe('resolveProviderKey', () => {
       ).resolves.toBe('sk-typed');
     }
     expect(questions).toEqual([
-      'anthropic API key (AION_ANTHROPIC_API_KEY): ',
-      'openai API key (AION_OPENAI_API_KEY): ',
+      'anthropic API key (AION_ANTHROPIC_API_KEY, Enter to skip): ',
+      'openai API key (AION_OPENAI_API_KEY, Enter to skip): ',
     ]);
   });
 
-  it('fails naming the selected provider and its variable under --yes', async () => {
-    await expect(
-      resolveProviderKey({
-        provider: 'openai',
-        exported: '',
-        assumeYes: true,
-        interactive: true,
-        ask: never,
-      }),
-    ).rejects.toThrow(
-      'the full profile needs AION_OPENAI_API_KEY for AION_GENERATION_PROVIDER=openai.',
-    );
-    await expect(
-      resolveProviderKey({
-        provider: 'anthropic',
-        exported: '',
-        assumeYes: false,
-        interactive: false,
-        ask: never,
-      }),
-    ).rejects.toThrow(
-      'the full profile needs AION_ANTHROPIC_API_KEY for AION_GENERATION_PROVIDER=anthropic.',
-    );
+  it('leaves generation unavailable without asking in unattended setup', async () => {
+    for (const provider of ['anthropic', 'openai'] as const) {
+      await expect(
+        resolveProviderKey({
+          provider,
+          exported: '',
+          assumeYes: true,
+          interactive: true,
+          ask: never,
+        }),
+      ).resolves.toBeUndefined();
+      await expect(
+        resolveProviderKey({
+          provider,
+          exported: '',
+          assumeYes: false,
+          interactive: false,
+          ask: never,
+        }),
+      ).resolves.toBeUndefined();
+    }
   });
 
-  it('fails the same way when the terminal answer is empty', async () => {
+  it('allows setup to continue when the optional key is skipped', async () => {
     await expect(
       resolveProviderKey({
         provider: 'openai',
@@ -132,7 +130,7 @@ describe('resolveProviderKey', () => {
         interactive: true,
         ask: async () => '',
       }),
-    ).rejects.toThrow(/needs AION_OPENAI_API_KEY for AION_GENERATION_PROVIDER=openai/);
+    ).resolves.toBeUndefined();
   });
 });
 
@@ -153,7 +151,7 @@ describe('settleProviderKey', () => {
       },
       ...options,
     };
-    return { run: async () => await settleProviderKey(config, input, env), written, config };
+    return { run: async () => await settleProviderKey(input, env), written, config };
   }
 
   it("records a typed key under the selected provider's variable and leaves the other alone", async () => {
@@ -179,7 +177,7 @@ describe('settleProviderKey', () => {
 
     const config = await run();
 
-    expect(questions).toEqual(['openai API key (AION_OPENAI_API_KEY): ']);
+    expect(questions).toEqual(['openai API key (AION_OPENAI_API_KEY, Enter to skip): ']);
     expect(readFileSync(envPath, 'utf8')).toBe(
       'AION_GENERATION_PROVIDER=openai\nAION_ANTHROPIC_API_KEY=sk-ant-file\nAION_OPENAI_API_KEY=sk-typed\n',
     );
@@ -196,9 +194,9 @@ describe('settleProviderKey', () => {
       AION_GENERATION_PROVIDER: 'openai',
       AION_OPENAI_API_KEY: 'sk-shell',
     };
-    const { run, written, config } = settle(env);
+    const { run, written } = settle(env);
 
-    await expect(run()).resolves.toBe(config);
+    expect((await run()).openai.apiKey).toBe('sk-file');
     expect(readFileSync(envPath, 'utf8')).toBe(text);
     expect(written).toEqual([]);
     expect(env.AION_OPENAI_API_KEY).toBe('sk-shell');
@@ -237,12 +235,12 @@ describe('settleProviderKey', () => {
     expect(recorded.has('AION_OPENAI_API_KEY')).toBe(false);
   });
 
-  it('fails without writing when no key is anywhere and it cannot ask', async () => {
+  it('keeps capture available without writing a key when setup is unattended', async () => {
     const text = 'AION_GENERATION_PROVIDER=openai\nAION_ANTHROPIC_API_KEY=sk-ant\n';
     writeFileSync(envPath, text);
     const { run, written } = settle({ AION_GENERATION_PROVIDER: 'openai' });
 
-    await expect(run()).rejects.toThrow(/needs AION_OPENAI_API_KEY/);
+    expect((await run()).openai.apiKey).toBe('');
     expect(readFileSync(envPath, 'utf8')).toBe(text);
     expect(written).toEqual([]);
   });
@@ -262,7 +260,7 @@ describe('keyNoticeLines', () => {
     const text = keyNoticeLines(envPath, {}).join(' ');
     expect(text).toContain('AION_GENERATION_PROVIDER=openai needs AION_OPENAI_API_KEY');
     expect(text).toContain('Generation waits for a key');
-    expect(text).toContain('`aion init full` records it');
+    expect(text).toContain('`aion init` records it');
     expect(text).not.toMatch(/local route|Anthropic/);
   });
 

@@ -278,8 +278,8 @@ describe('probeServiceFreshness', () => {
   it('sends a stale docker service to the image and the recreate', async () => {
     const result = await probeServiceFreshness(on('docker'), 'def5678', healthWith('abc1234'));
 
-    expect(result.detail).toContain('rebuild through bin/aion,');
-    expect(result.detail).toContain('recreate aion-mcp');
+    expect(result.detail).toContain('`aion init`');
+    expect(result.detail).toContain('rebuild the image and refresh the service');
     expect(result.detail).not.toContain('bin/aion-native');
   });
 
@@ -287,7 +287,7 @@ describe('probeServiceFreshness', () => {
     const result = await probeServiceFreshness(on('native'), 'def5678', healthWith('abc1234'));
 
     expect(result.detail).toContain('npm run build');
-    expect(result.detail).toContain('./bin/aion-native init --install native');
+    expect(result.detail).toContain('aion init');
     expect(result.detail).not.toContain('recreate aion-mcp');
   });
 
@@ -297,7 +297,7 @@ describe('probeServiceFreshness', () => {
     expect(result.ok).toBe(true);
     expect(result.warn).toBe(true);
     expect(result.detail).toContain('no build sha');
-    expect(result.detail).toContain('rebuild through bin/aion,');
+    expect(result.detail).toContain('`aion init`');
     expect(result.detail).not.toContain('bin/aion-native');
   });
 
@@ -307,7 +307,7 @@ describe('probeServiceFreshness', () => {
     expect(result.ok).toBe(true);
     expect(result.warn).toBe(true);
     expect(result.detail).toContain('no build sha');
-    expect(result.detail).toContain('./bin/aion-native init --install native');
+    expect(result.detail).toContain('aion init');
   });
 
   it('warns when the repo head is unknown to the CLI', async () => {

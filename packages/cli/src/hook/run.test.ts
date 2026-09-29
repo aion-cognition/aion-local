@@ -837,7 +837,7 @@ describe('hook events', () => {
     });
   });
 
-  describe('on the local route, with no anthropic key on the machine', () => {
+  describe('when the selected generation provider has no key', () => {
     let settingsPath: string;
 
     beforeEach(() => {
@@ -990,7 +990,7 @@ describe('main', () => {
     vi.stubEnv('HOME', join(dir, 'home'));
     mkdirSync(join(dir, 'home'), { recursive: true });
 
-    // A readable .env with a blank key is what tells the client it is on the local route.
+    // A blank selected-provider key makes generation unavailable while capture stays installed.
     scriptPath = join(dir, 'repo', 'packages', 'cli', 'dist', 'hook-main.js');
     mkdirSync(join(dir, 'repo', 'packages', 'cli', 'dist'), { recursive: true });
     writeFileSync(join(dir, 'repo', '.env'), 'AION_ANTHROPIC_API_KEY=\n');
@@ -1007,9 +1007,11 @@ describe('main', () => {
   });
 
   it('leaves the codex hooks file alone when the machine has no key', async () => {
+    const { fetchImpl } = transport({ structuredContent: EMPTY_PACK });
     await expect(
       main(['session-start', '--harness', 'codex'], {
         env: { CODEX_HOME: codexHome },
+        fetchImpl,
         readInput: () => Promise.resolve(JSON.stringify({ session_id: SESSION_ID })),
         stateDir: join(dir, 'state'),
         scriptPath,
@@ -1019,8 +1021,7 @@ describe('main', () => {
       }),
     ).resolves.toBe(0);
 
-    // The entries stay, the file is not backed up because it was not rewritten, and the session
-    // start says what it always says: a machine with no key is a machine on the local route.
+    // Missing credentials do not remove capture hooks or rewrite the user's settings.
     const hooksFile = join(codexHome, 'hooks.json');
     expect(describeAionHooks(JSON.parse(readFileSync(hooksFile, 'utf8')))).not.toEqual([]);
     expect(existsSync(backupPath(hooksFile, NOW))).toBe(false);

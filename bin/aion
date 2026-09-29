@@ -1,11 +1,7 @@
 #!/usr/bin/env bash
-# Host wrapper. Keeps the image in step with the working tree, then runs the CLI in the
-# aion-cli container, which is itself the orchestrator of the compose services.
+# One command for either installation. The recorded profile chooses where the CLI runs.
 set -eo pipefail
 
-# The wrapper may be reached through a PATH symlink (`aion link` installs one), so the
-# repo is found by resolving the symlink chain first; dirname of the symlink itself
-# would point at the bin directory the link lives in, not at this repo.
 SELF="${BASH_SOURCE[0]}"
 while [ -L "$SELF" ]; do
   TARGET="$(readlink "$SELF")"
@@ -16,73 +12,82 @@ while [ -L "$SELF" ]; do
 done
 REPO_DIR="$(cd -- "$(dirname -- "$SELF")/.." && pwd)"
 COMPOSE_FILE="$REPO_DIR/compose.yaml"
-IMAGE="aion-local:latest"
+CLI_MAIN="$REPO_DIR/packages/cli/dist/main.js"
 
-COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-aion}"
-AION_GIT_USER_NAME="${AION_GIT_USER_NAME:-$(git -C "$REPO_DIR" config user.name 2>/dev/null || true)}"
-# HEAD travels two ways: baked into the image at build (AION_BUILD_SHA) and handed to every
-# CLI run (AION_REPO_HEAD_SHA), so `doctor` can tell a stale running service from a fresh one.
-AION_REPO_HEAD_SHA="$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || true)"
-AION_BUILD_SHA="$AION_REPO_HEAD_SHA"
-export COMPOSE_PROJECT_NAME AION_GIT_USER_NAME AION_REPO_HEAD_SHA AION_BUILD_SHA
-export AION_REPO_PATH="$REPO_DIR"
-
-# Epoch seconds of the newest tracked source file, or empty when git cannot answer.
-# `git ls-files` rather than `find`, so node_modules and build output never count.
-newest_source_mtime() {
-  git -C "$REPO_DIR" ls-files -z -- \
-      'packages/*' 'Dockerfile' 'package.json' 'package-lock.json' 'tsconfig*.json' 2>/dev/null |
-    xargs -0 stat -f '%m' 2>/dev/null |
-    sort -rn |
-    head -1
-}
-
-image_created_epoch() {
-  local created
-  created="$(docker image inspect "$IMAGE" --format '{{.Created}}' 2>/dev/null)" || return 1
-  # Docker reports UTC. BSD date needs the fractional seconds and the zone stripped and would
-  # otherwise read the stamp as local time, putting the image hours into the future; GNU date
-  # parses the whole timestamp. Try each, and treat "cannot tell" as stale rather than fresh.
-  TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%S' "${created%%.*}" '+%s' 2>/dev/null ||
-    date -d "$created" '+%s' 2>/dev/null
-}
-
-# A `git pull` that lands new CLI or server code must not leave the user running the old
-# image with no warning: the container is the only thing that ever executes this repo.
-needs_build() {
-  local built source
-  built="$(image_created_epoch)" || return 0
-  [ -n "$built" ] || return 0
-  source="$(newest_source_mtime)"
-  [ -n "$source" ] || return 1
-  [ "$source" -gt "$built" ]
-}
-
-# A global install is `npm link` from the clone, which is a symlink chain back to this
-# working tree. A copying install (`npm install -g .`) lands in global node_modules with
-# no repo around it; refuse that early with the fix, instead of failing inside compose.
 if [ ! -f "$COMPOSE_FILE" ]; then
-  echo "aion: no compose.yaml next to this script; it is running from a copied install." >&2
-  echo "aion: run \`npm link\` from the aion-local clone instead of \`npm install -g\`." >&2
+  echo 'aion: run npm link from the aion-local clone; a copied global install is unsupported.' >&2
   exit 1
 fi
 
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-  echo "aion: building $IMAGE (first run)" >&2
-  docker compose -f "$COMPOSE_FILE" build aion-cli
-elif [ "${AION_SKIP_IMAGE_CHECK:-}" != "1" ] && needs_build; then
-  echo "aion: sources are newer than $IMAGE, rebuilding" >&2
-  docker compose -f "$COMPOSE_FILE" build aion-cli
+if [ -f "$REPO_DIR/.env" ]; then
+  PRESET="$(export -p)"
+  set -a
+  # shellcheck disable=SC1091
+  . "$REPO_DIR/.env"
+  set +a
+  eval "$PRESET"
 fi
 
-# The container's mounts are the repo, the docker socket, and the data volumes, so nothing
-# inside it can see the harness settings. Whether hooks are installed is a host fact, computed
-# here and passed through for `doctor` to check against the route reflection resolved to.
-# Either harness counts: the check reads the routing, not which CLI fires the hook.
+COMMAND="${1:-help}"
+INSTALL="${AION_INSTALL_PROFILE:-docker}"
+REQUESTED_INSTALL=""
+HELP=false
+for ARG in "$@"; do
+  if [ "$ARG" = '--help' ] || [ "$ARG" = '-h' ]; then
+    HELP=true
+  fi
+done
+if [ "$COMMAND" = 'help' ]; then
+  HELP=true
+fi
+
+# Init chooses an install before its addresses exist. Other commands follow the saved profile.
+if [ "$COMMAND" = 'init' ] && [ "$HELP" = false ]; then
+  PREVIOUS=""
+  for ARG in "$@"; do
+    if [ "$PREVIOUS" = '--install' ] || [ "$PREVIOUS" = '--profile' ]; then
+      if [ -n "$REQUESTED_INSTALL" ] && [ "$REQUESTED_INSTALL" != "$ARG" ]; then
+        echo 'aion: conflicting install selections.' >&2
+        exit 1
+      fi
+      REQUESTED_INSTALL="$ARG"
+      PREVIOUS=""
+      continue
+    fi
+    PREVIOUS="$ARG"
+  done
+  if [ "$PREVIOUS" = '--install' ] || [ "$PREVIOUS" = '--profile' ]; then
+    echo "aion: $PREVIOUS needs docker or native." >&2
+    exit 1
+  fi
+  if [ -n "$REQUESTED_INSTALL" ]; then
+    if [ "$INSTALL" = 'native' ] && [ "$REQUESTED_INSTALL" = 'docker' ]; then
+      echo 'aion: this installation is native; --install does not migrate an existing substrate.' >&2
+      exit 1
+    fi
+    INSTALL="$REQUESTED_INSTALL"
+  fi
+fi
+
+if [ "$HELP" = false ]; then
+  case "$INSTALL" in
+    native|docker) ;;
+    *)
+      echo "aion: install profile '$INSTALL' is invalid; use docker or native." >&2
+      exit 1
+      ;;
+  esac
+fi
+
+# Running through a PATH link must still use this clone's configuration and compose project.
+cd -- "$REPO_DIR"
+export AION_REPO_PATH="$REPO_DIR"
+AION_GIT_USER_NAME="${AION_GIT_USER_NAME:-$(git -C "$REPO_DIR" config user.name 2>/dev/null || true)}"
+export AION_GIT_USER_NAME
+
 hooks_installed_in() {
   [ -f "$1" ] && grep -q 'hook-main.js' "$1"
 }
-
 if hooks_installed_in "$HOME/.claude/settings.json" ||
   hooks_installed_in "${CODEX_HOME:-$HOME/.codex}/hooks.json"; then
   AION_HOOKS_INSTALLED=true
@@ -91,4 +96,92 @@ else
 fi
 export AION_HOOKS_INSTALLED
 
-exec docker compose -f "$COMPOSE_FILE" run --rm aion-cli "$@"
+# Help only loads the host command catalog. It never builds an image or starts services.
+if [ "$INSTALL" = 'native' ] || [ "$HELP" = true ]; then
+  if [ ! -f "$CLI_MAIN" ]; then
+    echo "aion: $CLI_MAIN is not built; run npm ci and npm run build in $REPO_DIR." >&2
+    exit 1
+  fi
+  if [ "$HELP" = true ]; then
+    exec node "$CLI_MAIN" "$@"
+  fi
+fi
+
+BUILD_STATE="$(node "$REPO_DIR/scripts/build-record.mjs" state "$REPO_DIR" 2>/dev/null || true)"
+AION_REPO_HEAD_SHA="$(printf '%s\n' "$BUILD_STATE" | sed -n 1p)"
+if [ -z "$AION_REPO_HEAD_SHA" ]; then
+  AION_REPO_HEAD_SHA="$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || true)"
+fi
+export AION_REPO_HEAD_SHA
+
+if [ "$INSTALL" = 'native' ]; then
+  BUILT_SHA="$(printf '%s\n' "$BUILD_STATE" | sed -n 2p)"
+  unset AION_BUILD_SHA
+  if [ -n "$BUILT_SHA" ]; then
+    AION_BUILD_SHA="$BUILT_SHA"
+    export AION_BUILD_SHA
+  fi
+  exec node "$CLI_MAIN" "$@"
+fi
+
+IMAGE='aion-local:latest'
+COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-aion}"
+AION_BUILD_SHA="$AION_REPO_HEAD_SHA"
+export COMPOSE_PROJECT_NAME AION_REPO_HEAD_SHA AION_BUILD_SHA
+
+newest_source_mtime() {
+  local flag format
+  if [ "$(uname -s)" = 'Darwin' ]; then
+    flag='-f'
+    format='%m'
+  else
+    flag='-c'
+    format='%Y'
+  fi
+  git -C "$REPO_DIR" ls-files -z -- \
+      'packages/*' 'Dockerfile' 'package.json' 'package-lock.json' 'tsconfig*.json' 2>/dev/null |
+    xargs -0 stat "$flag" "$format" 2>/dev/null |
+    sort -rn |
+    head -1
+}
+
+image_created_epoch() {
+  local created
+  created="$(docker image inspect "$IMAGE" --format '{{.Created}}' 2>/dev/null)" || return 1
+  TZ=UTC date -j -f '%Y-%m-%dT%H:%M:%S' "${created%%.*}" '+%s' 2>/dev/null ||
+    date -d "$created" '+%s' 2>/dev/null
+}
+
+needs_build() {
+  local built source stamp
+  # A removed source has no mtime. Compare the source stamp before the timestamp fallback.
+  stamp="$(docker image inspect "$IMAGE" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null |
+    sed -n 's/^AION_BUILD_SHA=//p')" || return 0
+  if [ -n "$AION_REPO_HEAD_SHA" ] && [ "$stamp" != "$AION_REPO_HEAD_SHA" ]; then
+    return 0
+  fi
+  built="$(image_created_epoch)" || return 0
+  [ -n "$built" ] || return 0
+  source="$(newest_source_mtime)"
+  [ -n "$source" ] || return 1
+  [ "$source" -gt "$built" ]
+}
+
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  echo "aion: building $IMAGE (first run)" >&2
+  docker compose -f "$COMPOSE_FILE" build aion-cli
+elif [ "${AION_SKIP_IMAGE_CHECK:-}" != '1' ] && needs_build; then
+  echo "aion: sources are newer than $IMAGE, rebuilding" >&2
+  docker compose -f "$COMPOSE_FILE" build aion-cli
+fi
+
+# The CLI sees the same overrides on either backend. The image owns its build stamp.
+CLI_ENV=()
+while IFS= read -r NAME; do
+  case "$NAME" in
+    AION_BUILD_SHA|AION_SKIP_IMAGE_CHECK) ;;
+    AION_*) CLI_ENV+=(-e "$NAME") ;;
+  esac
+done < <(compgen -e | sort -u)
+
+exec docker compose -f "$COMPOSE_FILE" run --rm "${CLI_ENV[@]}" aion-cli "$@"

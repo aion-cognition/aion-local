@@ -8,31 +8,17 @@ import {
   type GenerationProvider,
 } from '@aion/core';
 
-import { CliUsageError } from './args.js';
 import { upsertEnvValue } from './install-profile.js';
 import type { Writer } from './output.js';
 
 /**
- * The generation key `aion init` settles or reports. Its own module because it is a question about
- * the provider the installation selected rather than about the machine, and because `init.ts`
- * sits at the line cap.
- *
- * Both questions are answered from `.env`, because that file is all the service reads for them:
- * compose passes none of these variables through from the shell, and the launchd job carries only
- * what the file records. A native CLI run sees its shell's exports over the file, so its own config
- * can hold a key the service will never get.
+ * The service reads its provider and credential from `.env` on either install mode. Setup
+ * records an exported or supplied key there; ordinary shell overrides affect only that CLI run.
  */
 const GENERATION_ENV_VARS: readonly string[] = [
   'AION_GENERATION_PROVIDER',
   ...Object.values(PROVIDER_KEY_ENV_VARS),
 ];
-
-function missingProviderKey(provider: GenerationProvider): string {
-  return (
-    `the full profile needs ${PROVIDER_KEY_ENV_VARS[provider]} for AION_GENERATION_PROVIDER=${provider}. ` +
-    'Set it in the environment or .env, or run `aion init full` from a terminal.'
-  );
-}
 
 /**
  * Config as the service will read it: `env`, with the generation variables taken from `.env` and
@@ -51,14 +37,14 @@ export function serviceGenerationConfig(envPath: string, env: NodeJS.ProcessEnv)
   return loadConfig(view);
 }
 
-/** The key `full` settles: the selected provider's, which is Anthropic when nothing selects one. */
-export type FullProfileKey = {
+/** The selected provider's credential; the other provider is never required. */
+export type GenerationKey = {
   readonly provider: GenerationProvider;
   readonly envVar: string;
   readonly configured: string;
 };
 
-export function fullProfileKey(config: Config): FullProfileKey {
+export function selectedProviderKey(config: Config): GenerationKey {
   const { provider } = config.generation;
   return {
     provider,
@@ -76,26 +62,18 @@ export type ProviderKeyInput = {
   readonly ask: (question: string) => Promise<string>;
 };
 
-/**
- * The key `aion init full` records when `.env` has none. It is asked for because generation runs
- * only on the provider `AION_GENERATION_PROVIDER` selects, and a profile promising generation with
- * no credential for that provider is a request nobody can serve. The other provider's key is never
- * asked for, since nothing reads it. Every other install needs no key for anything, hooks included.
- */
-export async function resolveProviderKey(input: ProviderKeyInput): Promise<string> {
+/** Missing credentials leave generation queued without blocking capture or installation. */
+export async function resolveProviderKey(input: ProviderKeyInput): Promise<string | undefined> {
   const exported = input.exported.trim();
   if (exported !== '') {
     return exported;
   }
   if (input.assumeYes || !input.interactive) {
-    throw new CliUsageError(missingProviderKey(input.provider));
+    return undefined;
   }
   const envVar = PROVIDER_KEY_ENV_VARS[input.provider];
-  const answer = (await input.ask(`${input.provider} API key (${envVar}): `)).trim();
-  if (answer === '') {
-    throw new CliUsageError(missingProviderKey(input.provider));
-  }
-  return answer;
+  const answer = (await input.ask(`${input.provider} API key (${envVar}, Enter to skip): `)).trim();
+  return answer === '' ? undefined : answer;
 }
 
 /**
@@ -121,21 +99,18 @@ export type SettleKeyInput = {
 };
 
 /**
- * Makes sure the service boots with the selected provider's key, and returns the config the rest
- * of the run reads. A key `.env` already holds is left alone, whatever the shell exports. A key
- * only the shell holds is recorded, since the service would never see it otherwise.
+ * Returns the generation configuration the service will read. A recorded key stays unchanged;
+ * an exported or supplied key is saved when none is recorded. Missing keys leave work queued.
  *
  * `env` is this run's environment: read for an exported key, and given the recorded one so the
  * config re-read carries it.
  */
 export async function settleProviderKey(
-  config: Config,
   input: SettleKeyInput,
   env: NodeJS.ProcessEnv,
 ): Promise<Config> {
-  const { provider, envVar, configured } = fullProfileKey(
-    serviceGenerationConfig(input.envPath, env),
-  );
+  const config = serviceGenerationConfig(input.envPath, env);
+  const { provider, envVar, configured } = selectedProviderKey(config);
   if (configured.trim() !== '') {
     return config;
   }
@@ -146,9 +121,12 @@ export async function settleProviderKey(
     interactive: input.interactive,
     ask: input.ask,
   });
+  if (key === undefined) {
+    return config;
+  }
   recordProviderKey(input.envPath, envVar, key, env);
   input.write(`${envVar} recorded in ${input.envPath}`);
-  return loadConfig(env);
+  return serviceGenerationConfig(input.envPath, env);
 }
 
 /**
@@ -164,6 +142,6 @@ export function keyNoticeLines(envPath: string, env: NodeJS.ProcessEnv): readonl
   }
   return [
     `Generation waits for a key: ${unavailableReason(routing)}. Captures are stored and`,
-    'queued until it is set. `aion init full` records it; see docs/harness.md.',
+    'queued until it is set. `aion init` records it; see docs/harness.md.',
   ];
 }

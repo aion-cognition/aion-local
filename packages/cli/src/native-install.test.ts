@@ -3,11 +3,10 @@ import { beginSubstratePairing } from '@aion/core/infrastructure/sqlite/publicat
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { NativeSetupError, type HostActions, type HostResult } from './host-actions.js';
-import { launchAgentPath, MCP_LAUNCH_LABEL, MCP_SCRIPT_RELATIVE } from './launchd.js';
+import { launchAgentPath, MCP_LAUNCH_LABEL } from './launchd.js';
 import { prepareNativeService, serviceEnvironment } from './native-install.js';
 
 /**
@@ -133,11 +132,6 @@ function healthy(storeId: string, buildSha = BUILD_SHA): Record<string, unknown>
   return { status: 'ok', build_sha: buildSha, store_id: storeId };
 }
 
-/** The wrapper as text: it is bash, so what it promises is read rather than run. */
-function nativeWrapper(): string {
-  return readFileSync(fileURLToPath(new URL('../../../bin/aion-native', import.meta.url)), 'utf8');
-}
-
 function repo(): string {
   const repoDir = join(dir, 'repo');
   mkdirSync(join(repoDir, 'packages', 'mcp', 'dist'), { recursive: true });
@@ -185,36 +179,6 @@ describe('the environment the job carries', () => {
     expect(serviceEnvironment(join(dir, 'absent', '.env'), { AION_BUILD_SHA: 'abc1234' })).toEqual([
       ['AION_BUILD_SHA', 'abc1234'],
     ]);
-  });
-
-  /**
-   * The sha has to be in the environment for any of the above to stamp anything, and on this
-   * profile the wrapper is the only thing that computes one: no image is built, so nothing bakes
-   * it in. Without this export every native job carries no sha and `doctor` reads `unstamped`
-   * forever, which is the one thing the freshness check cannot recover from on its own.
-   */
-  it('is exported by the wrapper that starts a native run', () => {
-    expect(nativeWrapper()).toContain('AION_BUILD_SHA="$BUILT_SHA"');
-    expect(nativeWrapper()).toMatch(/\bexport .*\bAION_BUILD_SHA\b/);
-  });
-
-  /**
-   * And exported only when the recorded build holds the source on disk. `npm run build` is a
-   * separate step here, where the docker wrapper rebuilds its image on the way past, so a pull
-   * with no build would stamp the job with a sha the running code does not hold and `doctor` would
-   * read a stale service as fresh — a wrong answer, where the unstamped one was only a useless
-   * one. `build-record.test.ts` drives the record itself over a real repository.
-   */
-  it('stamps only what the build record says the build holds, and requires the entry launchd runs', () => {
-    const wrapper = nativeWrapper();
-    const script = readFileSync(
-      fileURLToPath(new URL('../../../scripts/build-record.mjs', import.meta.url)),
-      'utf8',
-    );
-
-    expect(wrapper).toContain('scripts/build-record.mjs" state');
-    expect(wrapper).toMatch(/if \[ -n "\$BUILT_SHA" \]; then\n\s*AION_BUILD_SHA="\$BUILT_SHA"/);
-    expect(script).toContain(`'${MCP_SCRIPT_RELATIVE}'`);
   });
 });
 

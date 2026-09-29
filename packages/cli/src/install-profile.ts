@@ -18,8 +18,7 @@ import { CliUsageError } from './args.js';
  * consequence of it — the addresses a host install needs, and the refusals that only make sense
  * once you know which two stores are in play.
  *
- * The docker path is untouched by any of it. Every function here either answers for both
- * profiles or is called only from the native branch of `init`.
+ * Ordinary commands use the recorded profile; only setup chooses it.
  */
 
 export type InstallProfile = Config['install']['profile'];
@@ -153,15 +152,13 @@ export function storeDropCommands(profile: InstallProfile, dataDir: string): rea
  * next recreate, and the native job runs the built tree with the sha init wrote into its plist,
  * so a rebuild reaches it through an init that rewrites the job and reloads it.
  *
- * One sentence cannot answer for both, and the docker half must never name the native init:
- * `--install native` on a docker install is the conversion to native rather than a no-op, and an
- * operator following a remedy would be moving their substrate.
+ * The command uses the recorded profile, so a refresh never selects a different install.
  */
 export function serviceRefreshRemedy(profile: InstallProfile): string {
   if (profile === 'native') {
-    return 'npm run build, then `./bin/aion-native init --install native` to restamp the job';
+    return 'npm run build, then `aion init` to restamp the job';
   }
-  return 'rebuild through bin/aion, then recreate aion-mcp';
+  return 'run `aion init` to rebuild the image and refresh the service';
 }
 
 export type StorePairing = 'fresh' | 'paired' | 'graph-without-database' | 'database-without-graph';

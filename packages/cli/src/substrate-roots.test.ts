@@ -70,7 +70,7 @@ describe('the lifecycle every command shares', () => {
   });
 
   /**
-   * The docker-shaped `.env` on a host, which `bin/aion-native` sources into every run. The three
+   * The docker-shaped `.env` on a host, which `bin/aion` sources before native setup. The three
    * paths are what `.env.example` ships, so a machine that copied the template and never ran a
    * native init carries them, and `/data` is a directory a host cannot make.
    */

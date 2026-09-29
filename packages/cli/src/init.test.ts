@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseInitFlags, resolveInitProfile } from './init.js';
+import { parseInitFlags } from './init.js';
 import { resolveMemberName } from './member-name.js';
 import { registrationCommand, registrationJson } from './registration.js';
 
@@ -9,7 +9,7 @@ const never = async (): Promise<string> => {
 };
 
 describe('parseInitFlags', () => {
-  it('defaults to interactive confirmation', () => {
+  it('uses the recorded installation and provider by default', () => {
     expect(parseInitFlags([])).toEqual({ assumeYes: false });
   });
 
@@ -20,19 +20,27 @@ describe('parseInitFlags', () => {
 
   it('rejects an unknown option', () => {
     expect(() => parseInitFlags(['--force'])).toThrow(
-      /unknown option .* for init \(supported: local, full, --install, --yes\)/,
+      /unknown option .* for init \(supported: --install, --provider, --yes\)/,
     );
   });
 
-  it('accepts either profile as a bare word and leaves it unset otherwise', () => {
-    expect(parseInitFlags(['local']).profile).toBe('local');
-    expect(parseInitFlags(['full', '--yes'])).toEqual({ assumeYes: true, profile: 'full' });
-    expect(parseInitFlags([]).profile).toBeUndefined();
+  it('accepts old generation profile words as aliases for the same setup', () => {
+    expect(parseInitFlags(['local'])).toEqual(parseInitFlags([]));
+    expect(parseInitFlags(['full', '--yes'])).toEqual(parseInitFlags(['--yes']));
+  });
+
+  it('selects either provider through the same setup command', () => {
+    expect(parseInitFlags(['--provider', 'openai']).provider).toBe('openai');
+    expect(parseInitFlags(['--provider', 'anthropic']).provider).toBe('anthropic');
+    expect(() => parseInitFlags(['--provider', 'unknown'])).toThrow(
+      '--provider takes anthropic or openai',
+    );
+    expect(() => parseInitFlags(['--provider'])).toThrow('--provider needs a value');
   });
 
   it('rejects a word that is neither profile', () => {
     expect(() => parseInitFlags(['medium'])).toThrow(
-      /unknown option .* for init \(supported: local, full, --install, --yes\)/,
+      /unknown option .* for init \(supported: --install, --provider, --yes\)/,
     );
   });
 
@@ -40,7 +48,6 @@ describe('parseInitFlags', () => {
     expect(parseInitFlags(['--install', 'native']).install).toBe('native');
     expect(parseInitFlags(['full', '--install', 'docker', '--yes'])).toEqual({
       assumeYes: true,
-      profile: 'full',
       install: 'docker',
     });
     expect(parseInitFlags([]).install).toBeUndefined();
@@ -50,7 +57,7 @@ describe('parseInitFlags', () => {
     // One release called it `--profile`, which put two different questions under one word in the
     // same usage line. The alias keeps that invocation working; the usage names `--install`.
     expect(parseInitFlags(['--profile', 'native']).install).toBe('native');
-    expect(() => parseInitFlags(['--nope'])).toThrow(/supported: local, full, --install, --yes/);
+    expect(() => parseInitFlags(['--nope'])).toThrow(/supported: --install, --provider, --yes/);
   });
 
   it('refuses an install profile it does not have, rather than defaulting quietly', () => {
@@ -64,47 +71,6 @@ describe('parseInitFlags', () => {
       "--profile takes docker or native, not 'podman'",
     );
     expect(() => parseInitFlags(['--install'])).toThrow('--install needs a value');
-  });
-});
-
-describe('resolveInitProfile', () => {
-  it('takes the profile the command line named', async () => {
-    await expect(
-      resolveInitProfile({ requested: 'full', assumeYes: false, interactive: true, ask: never }),
-    ).resolves.toBe('full');
-  });
-
-  it('defaults to local under --yes and with no terminal', async () => {
-    await expect(
-      resolveInitProfile({ requested: undefined, assumeYes: true, interactive: true, ask: never }),
-    ).resolves.toBe('local');
-    await expect(
-      resolveInitProfile({
-        requested: undefined,
-        assumeYes: false,
-        interactive: false,
-        ask: never,
-      }),
-    ).resolves.toBe('local');
-  });
-
-  it('asks on a terminal and keeps local for anything but full', async () => {
-    await expect(
-      resolveInitProfile({
-        requested: undefined,
-        assumeYes: false,
-        interactive: true,
-        ask: async () => 'FULL',
-      }),
-    ).resolves.toBe('full');
-    await expect(
-      resolveInitProfile({
-        requested: undefined,
-        assumeYes: false,
-        interactive: true,
-        ask: async () => '',
-      }),
-    ).resolves.toBe('local');
   });
 });
 

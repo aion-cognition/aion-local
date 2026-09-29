@@ -2,6 +2,7 @@ import {
   bootstrapBackbone,
   ensureNeo4jPassword,
   seedEnvFromTemplate,
+  envFileValue,
   GraphConnection,
   isManagedNeo4jUri,
   provisionOllama,
@@ -14,6 +15,7 @@ import {
   SqliteStore,
   validateNeo4jEndpoint,
   type Config,
+  type GenerationProvider,
   type Logger,
   type ProvisionEvent,
 } from '@aion/core';
@@ -33,6 +35,7 @@ import {
   readStorePairing,
   refuseProfileSwitch,
   storePairingRefusal,
+  upsertEnvValue,
   type InstallProfile,
 } from './install-profile.js';
 import { lifecycleIntakeDeps, type LifecycleTarget } from './lifecycle.js';
@@ -54,57 +57,43 @@ import { withSubstrate } from './substrate.js';
 /** Neo4j's first boot downloads and installs the GDS plugin, which outlasts the 60s default. */
 const NEO4J_READY_TIMEOUT_MS = 180_000;
 
-/**
- * `local` is the substrate on its own and asks for no key: capture, embedding and recall run, and
- * generation queues until the provider `AION_GENERATION_PROVIDER` selects has one. `full` settles
- * that provider's key and records it. Neither generates locally, since Ollama only embeds.
- *
- * Both install the Claude Code hooks, which make the recall and reflection cadence a schedule
- * rather than a judgment call. They used to be the keyed profile's alone, because the local model
- * of that build could not keep up with a capture every turn. There is no local model now, and a
- * capture with no key is stored and queued rather than lost.
- *
- * This is the generation profile; `--install` is the install profile, which is what the substrate
- * runs on, docker or native. Two different questions, and the second one is a flag because it is
- * asked once per install and read afterwards from config.
- *
- * `--profile` is accepted as an alias for `--install` and is not advertised. It is what the flag
- * was called for one release, and two things named "profile" in one usage line is the reason it
- * is not called that any more.
- */
-export type InitProfile = 'local' | 'full';
-
 const SPEC: ArgSpec = {
   command: 'init',
-  usage: 'aion init [local | full] [--install docker | native] [--yes]',
+  usage: 'aion init [--install docker | native] [--provider anthropic | openai] [--yes]',
   options: [
     { flag: '--yes', alias: '-y' },
     { flag: '--install', takesValue: true },
     { flag: '--profile', takesValue: true },
+    { flag: '--provider', takesValue: true },
   ],
   maxPositionals: 1,
-  supported: ['local', 'full', '--install', '--yes'],
+  supported: ['--install', '--provider', '--yes'],
 };
 
 export type InitFlags = {
   readonly assumeYes: boolean;
-  readonly profile: InitProfile | undefined;
+  readonly provider: GenerationProvider | undefined;
   /** Absent leaves whatever `AION_INSTALL_PROFILE` already says, which defaults to docker. */
   readonly install: InstallProfile | undefined;
 };
 
 export function parseInitFlags(argv: readonly string[]): InitFlags {
   const { flags, values, positionals } = parseArgs(SPEC, argv);
-  const [profile] = positionals;
-  if (profile !== undefined && profile !== 'local' && profile !== 'full') {
-    throw unknownOption(SPEC, profile);
+  // Old invocations remain aliases for the same setup, without a second generation profile.
+  const [legacy] = positionals;
+  if (legacy !== undefined && legacy !== 'local' && legacy !== 'full') {
+    throw unknownOption(SPEC, legacy);
   }
   const flag = values.has('--install') ? '--install' : '--profile';
   const install = values.get(flag);
   if (install !== undefined && install !== 'docker' && install !== 'native') {
     throw new CliUsageError(`${flag} takes docker or native, not '${install}'`);
   }
-  return { assumeYes: flags.has('--yes'), profile, install };
+  const provider = values.get('--provider');
+  if (provider !== undefined && provider !== 'anthropic' && provider !== 'openai') {
+    throw new CliUsageError(`--provider takes anthropic or openai, not '${provider}'`);
+  }
+  return { assumeYes: flags.has('--yes'), provider, install };
 }
 
 /**
@@ -116,25 +105,6 @@ export function parseInitFlags(argv: readonly string[]): InitFlags {
  */
 export function initConvertsContainerPaths(flags: InitFlags): boolean {
   return flags.install === 'native';
-}
-
-export type InitProfileInput = {
-  readonly requested: InitProfile | undefined;
-  readonly assumeYes: boolean;
-  readonly interactive: boolean;
-  readonly ask: (question: string) => Promise<string>;
-};
-
-/** Local is the default everywhere it cannot be asked, because full changes how sessions behave. */
-export async function resolveInitProfile(input: InitProfileInput): Promise<InitProfile> {
-  if (input.requested !== undefined) {
-    return input.requested;
-  }
-  if (input.assumeYes || !input.interactive) {
-    return 'local';
-  }
-  const answer = (await input.ask('Profile, local or full [local]: ')).trim().toLowerCase();
-  return answer === 'full' ? 'full' : 'local';
 }
 
 async function askOnTerminal(question: string): Promise<string> {
@@ -226,13 +196,12 @@ async function recordInit(
   target: LifecycleSubstrate,
   applied: boolean,
   memberName: string,
-  profile: InitProfile,
 ): Promise<void> {
   const deps = await lifecycleIntakeDeps(target);
   if (target.created) {
     await recordLifecycleEvent(deps, {
       event: 'substrate_initialized',
-      text: `substrate initialized: backbone created for ${memberName}, profile ${profile}`,
+      text: `substrate initialized: backbone created for ${memberName}, ${target.config.install.profile} install`,
     });
     return;
   }
@@ -247,7 +216,6 @@ async function recordInit(
 async function initialize(
   config: Config,
   flags: InitFlags,
-  profile: InitProfile,
   write: Writer,
   logger: Logger,
 ): Promise<void> {
@@ -341,7 +309,6 @@ async function initialize(
       },
       applied,
       memberName,
-      profile,
     );
   } finally {
     await connection.close();
@@ -365,19 +332,20 @@ async function initialize(
  * `.env` once at boot, so a key written afterwards would leave generation queued until the next
  * restart.
  */
-async function prepareFullProfile(
-  config: Config,
-  flags: InitFlags,
-  write: Writer,
-): Promise<Config> {
+async function prepareGeneration(config: Config, flags: InitFlags, write: Writer): Promise<Config> {
   const repoDir = resolveRepoDir();
   const envPath = envFilePath(repoDir);
   // Writing the key into a missing .env would create a bare two-line file and the
   // template copy inside ensureNeo4jPassword would never fire; seed it here first so a
   // fresh install's .env carries the full documented surface, not just what init wrote.
   seedEnvFromTemplate(envPath, envTemplatePath(repoDir));
+  const provider = flags.provider ?? config.generation.provider;
+  if (envFileValue(envPath, 'AION_GENERATION_PROVIDER') !== provider) {
+    upsertEnvValue(envPath, 'AION_GENERATION_PROVIDER', provider);
+    write(`generation provider ${provider} recorded in ${envPath}`);
+  }
+  process.env.AION_GENERATION_PROVIDER = provider;
   return await settleProviderKey(
-    config,
     {
       envPath,
       assumeYes: flags.assumeYes,
@@ -407,25 +375,17 @@ export function runInit(
       // that is about to write to the wrong place should say so before it does.
       write(`data root ${config.operational.dataDir}`);
       const logger = substrate.logger();
-      const profile = await resolveInitProfile({
-        requested: flags.profile,
-        assumeYes: flags.assumeYes,
-        interactive: process.stdin.isTTY,
-        ask: askOnTerminal,
-      });
       refuseProfileSwitch(flags.install, config.install.profile);
       // The addresses first, the key second: both rewrite `.env` and re-read config, and the key
       // is settled against the substrate this install is actually going to talk to.
       const based =
         flags.install === 'native' ? prepareNativeProfile(write, resolveRepoDir()) : config;
-      const resolved = profile === 'full' ? await prepareFullProfile(based, flags, write) : based;
+      const resolved = await prepareGeneration(based, flags, write);
 
-      await initialize(resolved, flags, profile, write, logger);
+      await initialize(resolved, flags, write, logger);
 
       write('');
-      // Every profile, because hooks are route-agnostic: they capture a turn and hand it to the
-      // queue, which drains on the selected provider once it has a key. The generation profile
-      // decides whether init settles that key, not whether the substrate is allowed to remember.
+      // Capture works while generation is unavailable; the same hooks serve either provider.
       installFullProfile(write);
       for (const line of keyNoticeLines(envFilePath(resolveRepoDir()), process.env)) {
         write(line);

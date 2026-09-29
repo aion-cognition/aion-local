@@ -34,7 +34,7 @@ const commands: Record<string, Command> = {
     run: (argv) => runCosts(argv),
   },
   init: {
-    summary: 'provision the substrate: neo4j, models, schema, backbone',
+    summary: 'set up the selected installation and generation provider',
     run: (argv) => runInit(argv),
   },
   hooks: {
@@ -70,7 +70,7 @@ const commands: Record<string, Command> = {
     run: (argv) => runReplayCommand(argv),
   },
   proposals: {
-    summary: 'review judged contradictions and duplicate entities: ls | apply | dismiss',
+    summary: 'inspect autonomous proposals or apply a correction: ls | apply | dismiss | reopen',
     run: (argv) => runProposals(argv),
   },
   maintain: {
@@ -136,6 +136,9 @@ function usage(): string {
     `${CLI_NAME}... local memory substrate`,
     '',
     `usage: ${CLI_NAME} <command> [options]`,
+    '',
+    'setup: aion init --install native|docker --provider anthropic|openai',
+    'Later commands use the recorded installation and provider.',
     '',
     'commands:',
     ...rows,

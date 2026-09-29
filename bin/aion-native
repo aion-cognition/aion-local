@@ -1,13 +1,6 @@
 #!/usr/bin/env bash
-# Host wrapper for the native install profile: the same CLI, run on host Node against host
-# processes, with no image and no container. `bin/aion` is the docker profile's wrapper and
-# drives compose; this one only sources `.env` and executes.
-#
-# Sourcing the file is the point. Compose hands `.env` to the containers, so nothing in this
-# build loads it on the host, and a CLI run that did not source it would resolve the compose
-# service names instead of the loopback addresses a native install recorded.
+# Compatibility name for existing PATH links. The recorded install profile owns dispatch.
 set -eo pipefail
-
 SELF="${BASH_SOURCE[0]}"
 while [ -L "$SELF" ]; do
   TARGET="$(readlink "$SELF")"
@@ -16,62 +9,4 @@ while [ -L "$SELF" ]; do
     *) SELF="$(dirname -- "$SELF")/$TARGET" ;;
   esac
 done
-REPO_DIR="$(cd -- "$(dirname -- "$SELF")/.." && pwd)"
-CLI_MAIN="$REPO_DIR/packages/cli/dist/main.js"
-
-if [ ! -f "$CLI_MAIN" ]; then
-  echo "aion: $CLI_MAIN is not built; run \`npm ci && npm run build\` in $REPO_DIR" >&2
-  exit 1
-fi
-
-if [ -f "$REPO_DIR/.env" ]; then
-  # `set -a` exports every assignment the file makes; an already-exported value still wins,
-  # because the shell's own environment is applied over the file by the re-export below.
-  PRESET="$(export -p)"
-  set -a
-  # shellcheck disable=SC1091
-  . "$REPO_DIR/.env"
-  set +a
-  eval "$PRESET"
-fi
-
-AION_GIT_USER_NAME="${AION_GIT_USER_NAME:-$(git -C "$REPO_DIR" config user.name 2>/dev/null || true)}"
-# The source on disk and the build that holds it, read by content (`scripts/build-record.mjs`).
-# The first line is what the repo holds now: HEAD's short sha, or that sha with `-dirty-<digest>`
-# when any build input differs from HEAD, so a build of uncommitted source never passes for a
-# build of the commit. The second line is the same stamp when the build `npm run build` recorded
-# holds exactly this source, and empty otherwise: never built, a failed build, an edit since, or
-# output rebuilt outside that flow. Empty leaves the service unstamped, which is the honest answer,
-# and the freshness warning names the build.
-#
-# HEAD then travels two ways: handed to every CLI run (AION_REPO_HEAD_SHA) and written into the
-# launchd job's environment by init (AION_BUILD_SHA), which is what a native install has instead
-# of a sha baked into an image. `doctor` compares the two, so a service left behind by an older
-# checkout shows up as stale rather than as healthy.
-BUILD_STATE="$(node "$REPO_DIR/scripts/build-record.mjs" state "$REPO_DIR" 2>/dev/null || true)"
-AION_REPO_HEAD_SHA="$(printf '%s\n' "$BUILD_STATE" | sed -n 1p)"
-if [ -z "$AION_REPO_HEAD_SHA" ]; then
-  AION_REPO_HEAD_SHA="$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || true)"
-fi
-export AION_GIT_USER_NAME AION_REPO_HEAD_SHA
-export AION_REPO_PATH="$REPO_DIR"
-
-BUILT_SHA="$(printf '%s\n' "$BUILD_STATE" | sed -n 2p)"
-if [ -n "$BUILT_SHA" ]; then
-  AION_BUILD_SHA="$BUILT_SHA"
-  export AION_BUILD_SHA
-fi
-
-hooks_installed_in() {
-  [ -f "$1" ] && grep -q 'hook-main.js' "$1"
-}
-
-if hooks_installed_in "$HOME/.claude/settings.json" ||
-  hooks_installed_in "${CODEX_HOME:-$HOME/.codex}/hooks.json"; then
-  AION_HOOKS_INSTALLED=true
-else
-  AION_HOOKS_INSTALLED=false
-fi
-export AION_HOOKS_INSTALLED
-
-exec node "$CLI_MAIN" "$@"
+exec "$(dirname -- "$SELF")/aion" "$@"

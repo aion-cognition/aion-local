@@ -1,14 +1,39 @@
 # @aion/cli
 
-`bin/aion`'s implementation, and the harness hook client. Two compiled entrypoints that share
-the package and nothing else: `dist/main.js` is the `aion` command, `dist/hook-main.js` is
-what Claude Code runs on a hook fire.
+`bin/aion` runs this CLI on the host for native installs and through Compose for Docker installs.
+Both use the same commands. `dist/hook-main.js` is the separate client used by Claude Code and
+Codex hooks.
+
+## Setup and use
+
+Build the host CLI with `npm ci` and `npm run build`. Use `npm link` if the command should be on
+PATH. Select the installation and generation provider at setup:
+
+```sh
+aion init --install native --provider openai
+# Or: aion init --install docker --provider anthropic
+aion status
+aion doctor
+```
+
+Setup records the choices in `.env`. Later commands use that configuration; `aion init` also
+reuses it when refreshing an existing installation. The provider needs only its own key.
+Setup records an exported key when no key is saved, or offers an optional prompt on a terminal.
+Without a key, capture and local embeddings remain available and hosted generation stays queued.
+`--yes` skips setup prompts and does not require a key to preserve capture.
+
+`aion help` and command `--help` use the host command catalog without starting services or
+building a Docker image. Commands work from any directory through the installed PATH link.
+Environment overrides affect the CLI run on either install mode; service configuration comes
+from `.env`. Setup persists the selected provider and its supplied credential there.
+
+The old `aion-native` name and `init local` / `init full` invocations remain compatibility aliases.
+They do not select separate generation behavior. The recorded install profile owns dispatch.
 
 ## Boundaries
 
-Imports `@aion/core` for every substrate read and write, `@aion/protocol` for the pack shape
-`aion last` renders, and four symbols from `@aion/mcp` (`HEALTH_PATH`, `runningInContainer`,
-`USAGE_PROTOCOL`, `reflectionStages`). Nothing imports this package.
+Imports `@aion/core` for substrate operations, `@aion/protocol` for wire shapes, and `@aion/mcp`
+for service constants and runtime integration.
 
 `hook/` is the exception, with a stricter rule: node builtins and its own siblings, nothing
 else. It runs on the host's bare node with no install step, so one third-party import breaks
@@ -19,22 +44,28 @@ every fire on a machine that never ran `npm install`. `hook/imports.test.ts` fai
 `run.ts` is the dispatch table and the source of `aion help`.
 
 ```
-init        provision the substrate: neo4j, models, schema, backbone
+init        set up the selected installation and generation provider
 hooks       install the Claude Code harness hooks: install | uninstall | status
 status      services, models, routing, and graph counts
 doctor      check every substrate invariant and name what is broken
 last        the last MemoryPack served per session, with rationale
-queue       inspect the reflection queue: ls | drop | promote | reconcile
+queue       inspect the reflection queue: ls | drop | promote | reconcile | index
 replay      put archived experiences and the usage stream back: ls | run | usage
-proposals   review judged contradictions and duplicate entities: ls | apply | dismiss
+proposals   inspect autonomous proposals or apply a correction: ls | apply | dismiss | reopen
 maintain    the maintenance catalog, and forcing one operation to run now: ls | run
 unmerge     split an identity back out of the entity dedup absorbed it into: ls | apply
 stats       substrate counts, queue and plasticity health, cadence, per-method pack shares
 why         provenance, lineage, and open proposals for one node
 timeline    one episode across the archive, the graph, the queue, and the ledger
 search      direct hybrid search through the seed layer, bypassing pack assembly
+source-search literal search over captured source parts
+source      read a captured source or part
 forget      bitemporal close of a node by id or query: nothing is deleted
+unforget    retract a forget while retaining its history
 unsupersede reopen a claim a supersession closed, whatever made the close
+costs       API token usage and estimated cost by day and surface
+logs        inspect the substrate log
+uninstall   remove installation-owned components and report anything left
 ```
 
 Dispatch is all `run.ts` does. Each command opens its own logger from validated config, which
@@ -97,5 +128,6 @@ npx tsc -b packages/cli
 npx eslint packages/cli
 ```
 
-`./bin/aion <command>` runs the built CLI against the live compose stack, to exercise the real
-binary rather than as a test runner. `docs/harness.md` covers the hooks.
+`./bin/aion <command>` uses the recorded installation. Tests use disposable fixtures instead of
+the live stores. `launcher.test.ts` executes both dispatch paths with isolated transports.
+`docs/harness.md` covers the hooks.
