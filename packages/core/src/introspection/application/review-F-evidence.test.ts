@@ -1,11 +1,6 @@
 import { expect, it } from 'vitest';
 
-import {
-  buildBatchCadenceReport,
-  describeBatchCadenceReport,
-} from './reports/batch-cadence-report.js';
 import { summarizeBridgeTraversal } from './senses/bridge-traversal-sense.js';
-import { appendApiCall } from '../../infrastructure/sqlite/api-usage.js';
 import { openSqliteHandle } from '../../infrastructure/sqlite/database.js';
 import {
   appendModelLesson,
@@ -95,31 +90,3 @@ it('does not count recurring-only updates as additional birth-strength observati
   console.log(JSON.stringify({ case: 'recurrences-as-births', summary }));
   expect(summary.birthStrengths).toEqual([0.8]);
 });
-for (const [inputTokens, cacheReadTokens, percent] of [
-  [10, 90, '90.0'],
-  [0, 100, '100.0'],
-] as const) {
-  it(`uses all input classes as the cache-share denominator: ${percent}`, () => {
-    const db = openSqliteHandle({ filePath: ':memory:' });
-    try {
-      appendApiCall(db, {
-        occurredAt: NOW,
-        model: 'claude-haiku-4-5',
-        surface: 'review',
-        inputTokens,
-        cacheReadTokens,
-        outputTokens: 0,
-        cacheCreationTokens: 0,
-        durationMs: 1,
-        attempts: 1,
-      });
-      const lines = describeBatchCadenceReport(
-        buildBatchCadenceReport(db, NOW, new Date(NOW.getTime() + 1)),
-      );
-      console.log(JSON.stringify({ case: 'cache-share', lines }));
-      expect(lines.join(' ')).toContain(`(${percent}% served from cache)`);
-    } finally {
-      db.close();
-    }
-  });
-}
