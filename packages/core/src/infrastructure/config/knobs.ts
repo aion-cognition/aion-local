@@ -128,7 +128,8 @@ export const KNOBS = {
     // the answer lands, so the number bounds committed spend rather than reported spend. Past it,
     // background work queues and recall serves the retrieval ranking unassessed: exhaustion is
     // generation being unavailable, the same shape a substrate with no key already answers
-    // correctly, and not a failure anything retries. Five is the figure the batch producer
+    // correctly: no attempt is spent and no request sent, and the worker's deferred recheck
+    // resumes the work once the UTC day turns. Five is the figure the batch producer
     // shipped with and is a backstop rather than a budget: the whole 2026-09-13 build round spent
     // $5.12 across every chunk, so an ordinary day of use is nowhere near it and a runaway loop
     // reaches it in minutes.

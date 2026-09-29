@@ -182,8 +182,10 @@ spending an attempt**: burning three attempts against a missing key would leave 
 exhausted rows a later key could never revive.
 
 Claiming then narrows rather than stops. The enrichment rows are all about to refuse for the same
-reason, so the worker leaves them for a cooldown and keeps claiming `attach_vectors` rows, which
-reach the local embedder and have no reason to wait. A keyless substrate goes on vectoring
+reason, so the worker leaves them for one breaker cooldown (`AION_WORKER_BREAKER_COOLDOWN_MS`,
+60s) and keeps claiming `attach_vectors` rows, which reach the local embedder and have no reason
+to wait. After each cooldown it rechecks. A recheck spends no attempt and sends nothing, because
+the unavailable route refuses it before any dispatch. A keyless substrate goes on vectoring
 everything it captures.
 
 **What the caller sees.** Ordinary answers with thinner ranking, and a queue that is not
@@ -581,5 +583,8 @@ held against before every dispatch, by both routes and either provider, from one
 When a day cannot cover the next request, background work goes back on the queue without spending
 an attempt, batch submissions are not sent and their work stays queued, and recall serves the
 retrieval ranking with `degraded: assessment/unavailable`. The substrate keeps capturing, embedding,
-reading the graph and serving what it already holds. Nothing retries against it: the next UTC day
-clears it, and so does raising the number. `aion costs` prints the day against the ceiling.
+reading the graph and serving what it already holds. While it holds, nothing spends an attempt
+or sends a request: the worker rechecks after each breaker cooldown
+(`AION_WORKER_BREAKER_COOLDOWN_MS`) and each recheck is refused before dispatch. The first
+recheck after the UTC day turns resumes the work; a raised number takes effect when `aion init`
+restarts the service. `aion costs` prints the day against the ceiling.

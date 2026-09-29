@@ -233,8 +233,10 @@ machine is released.
 A day that cannot cover the next dispatch refuses it as generation being unavailable, the same
 type a substrate with no key answers with. Background work goes back on the queue without spending
 an attempt, a batch submission is not sent and its work stays queued, and recall serves the
-retrieval ranking unassessed. Nothing retries against a spent ceiling, because nothing a retry
-does clears it: a new UTC day or a higher number does.
+retrieval ranking unassessed. While the day stays spent, nothing spends an attempt or sends a
+request: the worker rechecks after each breaker cooldown and each recheck is refused before
+dispatch. The first recheck after the UTC day turns resumes the work; a higher number takes
+effect when the service restarts.
 
 `aion costs` prints the day against the ceiling, with what is still in flight beside it, and names
 the part of the total nothing could price. A model the price table does not carry is bounded at

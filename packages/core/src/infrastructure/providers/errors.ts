@@ -33,9 +33,13 @@ export function summarizeErrorBody(body: string): string {
  *
  * It is a distinct type because the callers answer it differently from a failure: the reflection
  * worker puts the job back without spending an attempt, and recall serves its ranking unassessed
- * (the raw-query cues under the `cues` mode).
- * Nothing retries it on a timer. A key arrives by an operator editing `.env` and restarting, so
- * the honest report is a queue that is not draining and a status line that says why.
+ * (the raw-query cues under the `cues` mode). The worker then narrows claiming for one breaker
+ * cooldown and rechecks (`ClaimGate.holdGeneration`). A recheck spends no attempt and sends
+ * nothing: while the route stays unavailable it is refused here again, before any dispatch. A
+ * spent ceiling clears on the first recheck after the UTC day turns. A missing key does not,
+ * because routing is resolved at boot: it takes an operator editing `.env` and rerunning
+ * `aion init`, and until then the honest report is a queue that is not draining and a status
+ * line that says why.
  *
  * `reason` says which: the routing layer names the selected provider's missing key, and the
  * ceiling names the day's spend. The default is for a caller that names only a surface.
@@ -55,9 +59,9 @@ export class GenerationUnavailableError extends Error {
  *
  * The same type as a missing key, deliberately: every caller already answers that one correctly.
  * Background work goes back on the queue without spending an attempt, recall serves its ranking
- * unassessed, and nothing throws an ordinary failure into a pipeline that would retry it against the
- * same exhausted ceiling. What clears it is a new UTC day or a higher ceiling, neither of which a
- * retry timer can bring about.
+ * unassessed, and nothing throws an ordinary failure into a pipeline that would spend attempts
+ * against the same exhausted ceiling. The worker's deferred recheck resumes the work on the first
+ * cooldown after the UTC day turns. A higher ceiling takes effect when the service restarts.
  */
 export class GenerationCeilingReachedError extends GenerationUnavailableError {
   constructor(surface: string, committedUsd: number, ceilingUsd: number) {
