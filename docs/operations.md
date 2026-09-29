@@ -1,13 +1,15 @@
 # Operating the substrate
 
-Day-to-day operation happens through `./bin/aion`. This page carries the semantics behind the
-sharper commands and the knobs an operator tunes. The command list is in the top-level README;
-`aion <command> --help` prints each one's flags.
+Day-to-day operation happens through `aion`, the `bin/aion` launcher that `npm link` puts on the
+PATH. This page carries the semantics behind the sharper commands and the knobs an operator
+tunes. The command list is in the top-level README; `aion <command> --help` prints each one's
+flags.
 
 ## Install profiles
 
-Two substrates, one substrate code. `AION_INSTALL_PROFILE` says which one this install runs on,
-`aion init` records it, and `aion doctor` and `aion status` read it back so they check the right
+Two installations, one substrate code and one CLI. `AION_INSTALL_PROFILE` says which one this
+install runs on. `aion init --install docker|native` records it, and every later command reads
+it back and runs against that installation, so `aion doctor` and `aion status` check the right
 thing without being told again.
 
 **Where the files go is settled before the profile is.** The knob table's path defaults
@@ -21,24 +23,21 @@ that rather than the profile, so a bare `node packages/cli/dist/main.js` gets it
 |---|---|---|
 | Neo4j | the `neo4j` compose service | a server on the host, installed by init if it is missing |
 | MCP server | the `aion-mcp` compose service | a launchd job, `com.aion.mcp` |
-| CLI | `./bin/aion` (runs in `aion-cli`) | `./bin/aion-native` (host node, sources `.env`) |
+| CLI | `aion`, run in the `aion-cli` container | `aion`, run by the host's node from `packages/cli/dist` |
 | Both stores | the `aion_aion-data` and `aion_aion-neo4j` volumes | directories under `~/.aion` and Neo4j's own data directory |
 | Ollama | on the host either way, reached at `host.docker.internal` | on the host, reached at `127.0.0.1` |
 
-Either way, one command brings it up:
+Either way, one command brings it up, with either generation provider:
 
 ```
-./bin/aion init              # docker
-./bin/aion-native init --install native
+aion init --install native --provider openai
+aion init --install docker --provider anthropic
 ```
 
-`init` is idempotent on both. A re-run against a healthy install reports what is already there
-and changes nothing: it recreates no container, bounces no launchd job, and rewrites no
-configuration file.
-
-The flag was `--profile` for one release and is now `--install`, because `aion init full --profile
-native` put two different questions under one word. The old spelling still works and is not
-advertised.
+Both flags are optional once `.env` records their settings, so a plain `aion init` re-runs the
+recorded install. `init` is idempotent on both. A re-run against a healthy install reports what
+is already there and changes nothing: it recreates no container, bounces no launchd job, and
+rewrites no configuration file.
 
 The flag chooses a profile once; it does not switch one. `--install docker` on a native install is
 refused. The two profiles keep their stores in different places, so moving between them means
@@ -47,8 +46,9 @@ conversion rather than a switch, since `docker` is the code default and a record
 be told from nobody having chosen.
 
 `.env.example` ships the three storage paths at the compose volume (`AION_DATA_DIR=/data`,
-`AION_SQLITE_PATH`, `AION_LOG_FILE`), and `bin/aion-native` sources `.env` into every run, so a
-host that copied the template carries them. Only `init --install native` converts them. Every
+`AION_SQLITE_PATH`, `AION_LOG_FILE`), and the launcher reads every `AION_*` line of `.env` into
+each run as literal data, so a host that copied the template carries them. Only
+`init --install native` converts them. Every
 other command refuses by name and prints the ways through: run that init, take the three lines
 out of `.env` and let each run resolve its own paths under `~/.aion`, or, on a host that really
 does keep a disk at `/data`, name a directory under it (`AION_DATA_DIR=/data/aion`). The rule is
@@ -61,8 +61,10 @@ Prerequisites: [Ollama](https://ollama.com) running on the host, and a host buil
 server and the CLI run from `packages/*/dist` rather than from an image.
 
 ```
-npm ci && npm run build
-./bin/aion-native init --install native
+npm ci
+npm run build
+npm link
+aion init --install native --provider openai
 ```
 
 That one command does all of it, in order:
@@ -70,30 +72,35 @@ That one command does all of it, in order:
 1. Records the profile and its five addresses in `.env` (`AION_INSTALL_PROFILE`,
    `AION_NEO4J_URI`, `AION_OLLAMA_URL`, `AION_DATA_DIR`, `AION_SQLITE_PATH`, `AION_LOG_FILE`).
    An address you set yourself is kept rather than converted, and init says which it kept.
-2. Generates the Neo4j password into `.env` if there is not one there already.
-3. Brings up Neo4j. A server that already answers is left alone. Otherwise: `brew install neo4j`
+2. Records `AION_GENERATION_PROVIDER` and settles that provider's key: a key already in `.env`
+   wins, a key exported in the shell is recorded, and otherwise a terminal offers an optional
+   prompt. No key leaves generation queued; the install still completes.
+3. Generates the Neo4j password into `.env` if there is not one there already.
+4. Brings up Neo4j. A server that already answers is left alone. Otherwise: `brew install neo4j`
    if it is not installed, the matching graph-data-science jar fetched and checked against a
    digest recorded in `packages/cli/src/gds-releases.ts`, the substrate's settings written into
    `neo4j.conf` (the two `gds.*` procedure lines, heap 512m/1G, pagecache 512m, transaction-log
    retention `1 days 256M`, Bolt on loopback), the initial password set, and the service started.
-4. Pulls and verifies the Ollama models the routing needs.
-5. Applies the graph schema, creates the Member, Workspace and Substrate
+5. Pulls and verifies the one Ollama model, the embedder, and unloads resident models nothing
+   needs.
+6. Applies the graph schema, creates the Member, Workspace and Substrate
    backbone nodes, and records the substrate's birth.
-6. Writes `~/Library/LaunchAgents/com.aion.mcp.plist`, loads it with `launchctl bootstrap`, and
+7. Writes `~/Library/LaunchAgents/com.aion.mcp.plist`, loads it with `launchctl bootstrap`, and
    waits for `/health`. The job carries `KeepAlive`, `RunAtLoad`, and `ExitTimeOut` 20 seconds,
    which is the drain the compose service had as `stop_grace_period`.
-7. Records what it installed in `install-manifest.json` under the data root, which is what
+8. Records what it installed in `install-manifest.json` under the data root, which is what
    `aion uninstall` reads to tell what it put there from what was already there.
-8. Prints the `aion doctor` report, which is where the coverage contract and the Ollama tuning
+9. Prints the `aion doctor` report, which is where the coverage contract and the Ollama tuning
    flags are reported.
+10. Prints the `claude mcp add` line that registers the server, and installs the harness hooks
+    at the `full` profile ([harness](harness.md)).
 
-Then register the server with your harness, which `init` prints at the end, and the install is
-done.
+Run the printed registration line and the install is done.
 
-**What the launchd job does not do.** It reads `.env` as it was when init ran, because a launchd
-job inherits almost nothing and nothing in this build loads `.env` on the host. After editing
-`.env`, run init again (which rewrites and reloads the job) or
-`launchctl kickstart -k gui/$(id -u)/com.aion.mcp` if the file has not changed. Its
+**What the launchd job does not do.** It carries the `AION_*` values `.env` held when init ran,
+written into the plist, because a launchd job inherits almost nothing. After editing `.env`, run
+`aion init` again, which rewrites and reloads the job; `launchctl kickstart -k
+gui/$(id -u)/com.aion.mcp` restarts it when the file has not changed. Its
 `StandardOutPath` is `/dev/null`: the service's own logger writes the durable JSONL, and nothing
 rotates a launchd file. Its `StandardErrorPath` catches a failure that happens before the logger
 opens.
@@ -140,9 +147,11 @@ answers would report the batch lane as cheaper than it is by the amount of the w
 The thinking column is a share of the output column, not an addition to it. The API bills
 reasoning as output, so a total that sums the two counts it twice. It says how much of the output
 bill was the model reasoning before it answered, which is the number that moves when
-`AION_ANTHROPIC_THINKING_BUDGET_TOKENS` changes. Only surfaces that ask to reason spend it:
-today that is `tier3_advisor`, `symbiosis_bridge` and `synthesis`, which is the one enrichment
-stage whose whole question is what several memories add up to. Measured 2026-09-13 against Haiku 4.5, one
+`AION_ANTHROPIC_THINKING_BUDGET_TOKENS` (Anthropic) or `AION_OPENAI_REASONING_EFFORT` (OpenAI,
+`low` by default) changes. OpenAI reports it as `reasoning_tokens` inside `output_tokens`, the
+same share. Only surfaces that ask to reason spend it, and every other call goes to OpenAI at
+effort `none`. Today those are `tier3_advisor`, `symbiosis_bridge` and `synthesis`, which is the
+one enrichment stage whose whole question is what several memories add up to. Measured 2026-09-13 against Haiku 4.5, one
 tier-3 advisor call read 774 input tokens and wrote 916 output, 794 of which were reasoning.
 Not every response reports the breakdown. Where one carried no reasoning share, the row stores
 the input and output totals it did report and leaves that share out, because zero is what a call
@@ -168,9 +177,12 @@ because one unknown row leaves the window's denominator unknown.
 
 A failed ledger write logs `API usage write failed` without retrying the paid generation.
 
-Estimates use the provider price table dated 2026-09-06, with the hour-long cache-write rate
-re-read 2026-09-13. For Haiku 4.5, rates per million tokens are $1 input, $5 output, $1.25 for a
-five-minute cache write, $2 for an hour-long one, and $0.10 cache read. The two write classes are
+Estimates use the price table in `packages/core/src/infrastructure/providers/api-pricing.ts`.
+For GPT-6 Luna, read 2026-09-27 from OpenAI's standard card, rates per million tokens are $0.10
+input, $0.50 output, $0.125 for a cache write and $0.01 cache read. A request past 272K input
+tokens bills whole at the long-context card ($0.20 input, $0.75 output). For Haiku 4.5, verified
+2026-09-06 with the hour-long write re-read 2026-09-13, they are $1 input, $5 output, $1.25 for a
+five-minute cache write, $2 for an hour-long one, and $0.10 cache read. Haiku's two write classes are
 priced apart because the API bills them apart: a response reports `ephemeral_5m_input_tokens` and
 `ephemeral_1h_input_tokens` inside its write total, and charging that total at one rate is wrong
 by sixty percent on a request written for the hour. A response that carried no breakdown keeps
@@ -186,18 +198,25 @@ endpoint on 2026-09-13, the concise frame is 161 tokens and the full one 372, ag
 4,096-token floor, so the provider leaves the marker off and the day's bound prices those
 requests as ordinary input.
 
+The OpenAI route writes nothing to the cache. Left implicit, the Responses API caches up to the
+end of the last message, so every call wrote its whole prompt at 1.25x input and none read it
+back, because the evidence differs on every call. The route sends explicit cache mode with no
+breakpoint instead: the fixed instructions on the busiest surfaces are shorter than the 1,024
+tokens a cached prefix needs. `responsesCacheWriteClass` reads the same fact off a batch row's
+body, so the day's hold prices those requests as ordinary input too.
+
 | Control | Default | Effect |
 |---|---|---|
 | `AION_DAILY_CEILING_USD` | `5` | Dollars of generation one UTC day may commit, shared by ordinary calls and batch submissions on either provider. Consulted before dispatch, never after. The older name `AION_ANTHROPIC_DAILY_CEILING_USD` still sets it; where both are set the new name wins, and the service logs a warning at start if the two differ. |
-| `AION_ANTHROPIC_PROMPT_CACHE` | `true` | Allows the marker on the shared frame when it reaches the API's 4,096-token floor. Neither rendering does, so no shipped call carries it; the provider decides per call rather than marking unconditionally. `false` switches the marker off whatever the length. |
-| `AION_CUE_CACHE_TTL_MINUTES` | `30` | Reuses successful cue results in this process for identical generation requests. `0` disables it. The cache holds at most 256 entries. |
+| `AION_ANTHROPIC_PROMPT_CACHE` | `true` | Anthropic route only. Allows the marker on the shared frame when it reaches the API's 4,096-token floor. Neither rendering does, so no shipped call carries it; the provider decides per call rather than marking unconditionally. `false` switches the marker off whatever the length. |
+| `AION_CUE_CACHE_TTL_MINUTES` | `30` | Under `AION_RECALL_MODE=cues` only, reuses successful cue results in this process for identical generation requests. `0` disables it. The cache holds at most 256 entries. The default `assess` mode makes no cue call to cache. |
 
 ### The daily ceiling
 
 Every dispatch holds against the day before it is sent. The hold is a maximum rather than a
 likely amount. Its input side is the request body in UTF-8 bytes, which the tokenizer cannot beat
 because every token it produces covers at least one byte; its output side is the call's own
-`max_tokens`, which the API enforces. Input is priced at the class the request can reach, so only
+output cap (`max_tokens`, or `max_output_tokens` on OpenAI), which the API enforces. Input is priced at the class the request can reach, so only
 a prompt carrying a cache marker is held at the cache-write rate. When the answer lands, what it
 actually cost replaces the hold.
 
@@ -213,25 +232,21 @@ machine is released.
 
 A day that cannot cover the next dispatch refuses it as generation being unavailable, the same
 type a substrate with no key answers with. Background work goes back on the queue without spending
-an attempt, a batch submission is not sent and its work stays queued, and recall falls back to the
-raw query text. Nothing retries against a spent ceiling, because nothing a retry does clears it: a
-new UTC day or a higher number does.
+an attempt, a batch submission is not sent and its work stays queued, and recall serves the
+retrieval ranking unassessed. Nothing retries against a spent ceiling, because nothing a retry
+does clears it: a new UTC day or a higher number does.
 
 `aion costs` prints the day against the ceiling, with what is still in flight beside it, and names
 the part of the total nothing could price. A model the price table does not carry is bounded at
 the top of the published card, so it is held, refused when it does not fit, and counted on that
 line rather than read as free headroom.
 
-The extraction floor, `AION_REFLECTION_MIN_EXTRACTION_CHARS`, is owned by the separate
-hardening change and is not present on this branch. `AION_NARRATIVE_MIN_NEW_EPISODES` is
-deferred and is not a supported setting. Neither should be set before its implementation lands.
-
 ### Batched generation
 
 Background work that tolerates minutes to hours goes through the selected provider's batch API at
 half the ordinary rate: Anthropic's Message Batches API, or OpenAI's Batch API over the Responses
-endpoint. Cues and anything a caller is waiting on stay on ordinary calls: a batch takes up to 24
-hours, which is not a latency budget.
+endpoint. Recall's model call and anything else a caller is waiting on stay on ordinary calls: a
+batch takes up to 24 hours, which is not a latency budget.
 
 Each `batch_work` row records the provider its request is encoded for (`provider`; rows from
 before the column read as `anthropic`). Submission sends only rows encoded for the provider
@@ -313,18 +328,20 @@ standing. The gloss and those sources are then read and compared again inside th
 transaction, under the entity's lock, so a description another pass committed while the answer
 was being embedded keeps the node and the older answer is owed again.
 
-Foreground cues stay on Messages. A surface that moves its own judgment off the hot path
-registers its handler in `catalog.ts` beside that one.
+Recall's model call stays an ordinary call. A surface that moves its own judgment off the hot
+path registers its handler in `catalog.ts` beside that one.
 
 ### Prompt caching
 
-Haiku 4.5 caches no prefix shorter than 4,096 tokens. A `cache_control` marker on a shorter one
-is accepted and ignored, which reads as cached in the request and as uncached on the bill, so the
-provider attaches it only where the prefix reaches the floor.
+This section is the Anthropic route; the OpenAI route writes no cache at all (see
+[API costs](#api-costs)). Haiku 4.5 caches no prefix shorter than 4,096 tokens. A
+`cache_control` marker on a shorter one is accepted and ignored, which reads as cached in the
+request and as uncached on the bill, so the provider attaches it only where the prefix reaches
+the floor.
 
-Nothing reaches it. `packages/core/src/prompts/prompt-prefix-size.test.ts` measures all 36 shipped
-system prompts on every run: the longest is `supersession-review:KEYED` at 2,491 characters,
-roughly 620 tokens, against a floor of about 16,384 characters. That test fails if a prompt grows
+Nothing reaches it. `packages/core/src/prompts/prompt-prefix-size.test.ts` measures the 24 shipped
+system prompts on every run: on 2026-09-29 the longest was `supersession-review:REVIEW_PROMPT` at
+2,714 characters, roughly 680 tokens, against a floor of about 16,384 characters. That test fails if a prompt grows
 past the floor, which is how the decision gets revisited. No prompt is padded to reach it: a
 prefix written to be long is text the model reads on every call that nobody wrote for a reason.
 
@@ -344,18 +361,6 @@ the prefix, so a surface that builds its schema per call has a prefix that chang
 Semantic relationships, the tier-3 advisor and cognitive restatement build theirs that way, and
 entity merge judgment and consolidation synthesis take a caller's. A changing eligible prefix
 pays the cache write every time and reads it back never.
-
-The CLI reported these cache-effectiveness lines:
-
-```text
-before, four control calls:
-cache effectiveness: 0 / 31680 input tokens (0.0%)
-after, four controls plus twelve production samples:
-cache effectiveness: 15818 / 39474 input tokens (40.1%)
-```
-
-The populations differ. The dollar comparison above uses only matched controls, and these
-test measurements do not establish a saving for ordinary daily usage.
 
 ## Queue triage
 
@@ -404,8 +409,9 @@ tell apart (`re-mark` against `remark`, an identity already answering to the oth
 alias) are merged with no model call at all, by the cascade's tier 0 during reflection and by
 `merge_auto` sweeping the whole graph on the hour.
 
-`aion proposals` is where a person decides the residue first, ahead of `proposal_resolution`
-deciding it on the hour (below) and of `proposal_hygiene` ageing one out. Past
+`aion proposals` is an optional correction: a person may decide a row before
+`proposal_resolution` decides it on the hour (below) or `proposal_hygiene` ages it out, and
+nothing waits for that. Past
 `AION_MAINTENANCE_HYGIENE_RESIDUE_AGE_DAYS` (or the shorter
 `AION_MAINTENANCE_HYGIENE_POLLUTED_AGE_HOURS` for a proposal whose source episode was pure
 tool exhaust, no conversation to judge) hygiene dismisses the row and ledgers the class, the
@@ -480,7 +486,8 @@ The default is a measurement, not a preference. `supersession-precision.int.test
 judges over 24 designed pairs and asserts the shipped default matches what it measures: at or
 above 0.9 precision and 0.9 recall the default is `unanimous`, under either bar it is `propose`,
 and the test fails loudly either way round. Measured 2026-08-30 on claude-haiku-4-5: two-pass
-precision 1.000 and recall 1.000, against 0.857 and 1.000 for the single pass.
+precision 1.000 and recall 1.000, against 0.857 and 1.000 for the single pass. The battery has
+not been re-run on GPT-6 Luna.
 
 `auto` still works and is documented here only so a deployment that pinned it knows what it has.
 It gates on the judge's stated confidence, which came back 0.95 on every affirmative in the same
@@ -503,7 +510,8 @@ asserts the shipped value against what it measures, in both directions.
 
 Measured 2026-09-01 on claude-haiku-4-5 with `snowflake-arctic-embed2` embeddings, 24 pairs
 of sessions through the shipped extraction stages: 2 mechanical closes, precision 1.000,
-recall 0.250. Recall falls short of the bar `close` needs, so this ships `judge`.
+recall 0.250. Recall falls short of the bar `close` needs, so this ships `judge`. The battery
+has not been re-run on GPT-6 Luna.
 
 ## Entity merge mode
 
@@ -532,7 +540,7 @@ what it measures: at or above 0.9 auto-merge precision the default is `unanimous
 with `snowflake-arctic-embed2` embeddings: TP 8, FP 0, FN 4, TN 12, precision 1.000, recall
 0.667. Every miss was a pair the second pass split and the cascade queued, never a wrong merge.
 Precision held at 1.000 across three runs; recall moved between 0.583 and 0.667 and gates
-nothing.
+nothing. The battery has not been re-run on GPT-6 Luna.
 
 ## Reopening a correction
 
@@ -722,12 +730,11 @@ model-calling batches because this operation asks nothing.
 
 ## Lifecycle events
 
-The substrate records its own life events as memory. Five of them exist: an init that created
+The substrate records its own life events as memory. Four of them exist: an init that created
 the backbone, an init that recorded the graph schema version on a substrate that already existed,
-a replay that re-derived something, a boot that unloaded a model routing no longer needs, and a
-question `curiosity` filed (below). Each goes through intake as an observation on the bulk lane,
-carrying the numbers that describe it (member name, profile; replay counts and pipeline version;
-which model left memory).
+a replay that re-derived something, and a question `curiosity` filed (below). Each goes through
+intake as an observation on the bulk lane, carrying the numbers that describe it (member name and
+install profile; schema version; replay counts and pipeline version).
 
 They are ordinary episodes, so recall serves them, `aion search` finds them, and `aion forget`
 removes one. All of them chain in one standing session, `aion-system`, which hangs off the
@@ -786,7 +793,7 @@ Its recall runs with no listener (no reinforcement rows, no access stamps, no us
 with session dedup off, under a session identity of its own, and against a throwaway in-memory
 store. The pack it persists, the served rows it would record, and the cadence and pack-method
 counters it moves all land in that store and go when the run ends. One thing it does count: the
-cue call, in `generation by route`, because a probe call is a real call on a real route.
+recall model call, in `generation by route`, because a probe call is a real call on a real route.
 
 Both rates read as unmeasured rather than as zero until there is something to measure. Served
 rows go when their session closes, so on an install whose sessions are short the served rate
@@ -795,7 +802,7 @@ about how memory is being used.
 
 `AION_MAINTENANCE_RECALL_PROBE` (default `true`) is the kill switch: off, nothing is asked and
 both rates stand where the last run left them. `AION_RECALL_PROBE_SAMPLE` (default `3`) is how
-many experiences one run asks back for. Each one is a full recall, cue call included.
+many experiences one run asks back for. Each one is a full recall, its model call included.
 
 `aion maintain run recall_probe` declines with a noop. The probe's recall is assembled by the
 running service, and a CLI run holds none, the same as `curiosity` and its intake path.
@@ -844,7 +851,7 @@ On the docker profile:
    running.
 3. Drop them: `docker volume rm aion_aion-neo4j aion_aion-data`. This deletes the graph, the
    SQLite database, and the experience archive. Nothing survives it.
-4. `aion init full` (or `local`).
+4. `aion init`.
 
 On the native profile the same two drops are two directories:
 
@@ -856,7 +863,7 @@ On the native profile the same two drops are two directories:
    file drop: with the server stopped, remove the `databases/neo4j` and `transactions/neo4j`
    directories under Neo4j's data directory. `SHOW SETTINGS 'server.directories.data'` on a
    running server names it, and on a Homebrew install it is `$(brew --prefix)/var/neo4j`.
-5. Start Neo4j again, then `./bin/aion-native init --install native`.
+5. Start Neo4j again, then `aion init`.
 
 The next init is then the fresh-substrate case, so the first thing the new substrate remembers
 is being initialized.
@@ -917,8 +924,8 @@ both profiles get it without a second place to wire it. The first start after an
 whatever the old build left and writes one line saying so. This is the file logger only. The
 graph's transaction logs are Neo4j's own `db.tx_log.rotation.retention_policy`.
 
-The harness hooks are the one component outside the containers; each fire appends one line to
-`~/.aion/hook-state/hooks.log` on the host.
+The harness hooks run on the host on either install; each fire appends one line to
+`~/.aion/hook-state/hooks.log`.
 
 ## Configuration
 
@@ -926,10 +933,12 @@ Every runtime knob is an `AION_*` environment variable, declared with its type a
 `packages/core/src/infrastructure/config/knobs.ts`. That file folds in the `maintenance`,
 `reflection` and `temporal` groups' own tables from the files beside it.
 
-`.env` is for what an install has to decide: endpoints, models, the key, the behavior switches.
-Values copied into `.env` stop following the code that calibrated them, so leave a tuning knob
-alone unless a measurement says otherwise. An unknown `AION_*` variable fails the boot loudly;
-a knob that once existed and was retired is ignored with no complaint.
+`.env` is for what an install has to decide: endpoints, models, the generation provider and its
+key, the behavior switches. Values copied into `.env` stop following the code that calibrated
+them, so leave a tuning knob alone unless a measurement says otherwise. An unknown `AION_*`
+variable fails the boot loudly; a knob that once existed and was retired is ignored with no
+complaint, and an older name for a renamed knob (`AION_ANTHROPIC_DAILY_CEILING_USD`) still sets it.
+Test-only switches use the `TEST_AION_*` prefix, so they never reach this check.
 
 `proposal_hygiene`'s four: `AION_MAINTENANCE_PROPOSAL_HYGIENE` (default `true`) is its kill
 switch. `AION_MAINTENANCE_HYGIENE_POLLUTED_AGE_HOURS` (default `24`) is the fast horizon for
@@ -998,14 +1007,13 @@ floor policy itself is untouched by this knob; the lane is a separate, bounded d
 `AION_WORKER_COUNT` (default `1`) sets how many episodes the reflection worker claims and
 runs at once, on one claim loop and one queue claimant. Intake wakes that loop directly:
 enqueueing a job calls the worker's `wake()`, and the SQLite row is what a restart replays
-from regardless. Raising the count alone does not raise throughput: the recall cue model,
-the reflection worker, and the idle narrative sweeper all call the same host Ollama, so
-extra workers just queue behind the one model each is waiting on. Set `OLLAMA_NUM_PARALLEL`
-on the host Ollama process (not a compose variable; Ollama runs on the host, not in a
-container) to raise its per-model request concurrency alongside `AION_WORKER_COUNT`:
+from regardless. More workers run more hosted calls at once, bounded by the provider's rate
+limits and the daily ceiling. Embedding stays local: `attach_vectors` jobs, recall's embed stage
+and the maintenance embeds share one host Ollama, which serializes requests to one model by
+default. Set `OLLAMA_NUM_PARALLEL` on the host Ollama process (not a compose variable; Ollama
+runs on the host, not in a container) to raise its per-model request concurrency alongside
+`AION_WORKER_COUNT`:
 
 ```
 OLLAMA_NUM_PARALLEL=2 ollama serve
 ```
-
-See [degradation.md](degradation.md) for the measured cost of shared-Ollama contention.
