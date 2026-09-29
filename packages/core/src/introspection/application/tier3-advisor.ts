@@ -44,10 +44,9 @@ export type Tier3CallOptions = {
 export const TIER3_NO_OPERATION = 'none';
 
 /**
- * Named rather than left to the route's default, since the provider sends the parameter only
- * when a caller names one. The remote route drops it when reasoning is on, because the API
- * takes only temperature 1 there; the local route keeps it, so a hybrid model reasons without
- * also sampling its final answer.
+ * Named rather than left to the route's default, since a provider sends the parameter only when
+ * a caller names one. On this reasoning call both providers drop it: Anthropic takes only
+ * temperature 1 with thinking on, and OpenAI accepts a temperature only at effort `none`.
  */
 const TIER3_TEMPERATURE = 0;
 

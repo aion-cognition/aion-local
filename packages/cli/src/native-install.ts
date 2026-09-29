@@ -56,9 +56,9 @@ import {
  * — the member name, the schema, the migrations, the backbone, the birth event — is the same code
  * on both profiles, because it is the substrate rather than the machine.
  *
- * No step brings anything up. Init on the docker profile starts the two services compose owns;
- * here, both processes are owned by something else, so init verifies the one that is already
- * running and writes the job file for the one that is not.
+ * Two of them start something. Neo4j is installed and started when nothing answers Bolt, and
+ * left exactly as it is when a server already does. The MCP server becomes a launchd job, loaded
+ * and waited on until `/health` answers, where the docker profile starts the compose service.
  */
 
 /**

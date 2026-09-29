@@ -38,10 +38,9 @@ export {
 /**
  * The chunk lifecycle's operator.
  *
- * C2 built the two halves and scheduled neither: a session's tail seals through `sealSessionChunk`
- * and a sealed chunk's narrative publishes through `publishChunkNarrative`, and until this nothing
- * called either in production. This is what calls them, on the ordinary maintenance cadence and
- * under the ordinary bounds. It adds no second partition algorithm, no second publication path,
+ * A session's tail seals through `sealSessionChunk` and a sealed chunk's narrative publishes
+ * through `publishChunkNarrative`. This operation calls both, on the ordinary maintenance cadence
+ * and under the ordinary bounds. It adds no second partition algorithm, no second publication path,
  * and no recovery scheduler of its own.
  *
  * Three things happen per run, in this order and for this reason:

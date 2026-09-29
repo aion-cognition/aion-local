@@ -90,8 +90,9 @@ function containerPathOverrides(env: NodeJS.ProcessEnv): readonly (readonly [str
 /**
  * A host run whose environment still carries the compose volume, refused by name.
  *
- * `bin/aion-native` sources `.env` into every run, and `.env.example` ships these three at
- * `/data`, so a machine that copied the template and never converted it hands them to the CLI.
+ * The launcher reads every `AION_*` line of `.env` into each run, and `.env.example` ships these
+ * three at `/data`, so a machine that copied the template and never converted it hands them to
+ * the CLI.
  * They read as an operator pin, which is honoured, and on the macOS host this was found on,
  * honouring them was `mkdir '/data/logs'` on a read-only root: the command died before it could
  * say why. The refusal is the way it says why.
@@ -106,7 +107,7 @@ function containerPathRefusal(found: readonly (readonly [string, string])[]): Co
   return new ConfigError(
     `${named} is the compose volume in this build, and this run is on a host.\n` +
       'Those are the lines .env.example ships for the docker profile. Convert them with\n' +
-      '`./bin/aion-native init --install native`, which rewrites all three to addresses under\n' +
+      '`aion init --install native`, which rewrites all three to addresses under\n' +
       'the home directory, or take them out of .env and let each run resolve its own. A host\n' +
       'with its own disk at /data keeps that disk by naming a directory under it, such as\n' +
       'AION_DATA_DIR=/data/aion.',

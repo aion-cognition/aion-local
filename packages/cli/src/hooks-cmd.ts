@@ -247,8 +247,8 @@ function renderManualInstall(
 }
 
 export function installHooks(options: HooksCommandOptions, write: Writer): number {
-  // No key gate. Hooks capture a turn and hand it to whichever generation route this install
-  // resolved, and the local one is a route: the refusal that used to stand here came from a build
+  // No key gate. A hook captures a turn whether or not the selected provider has a key: intake
+  // stores it and queues its enrichment. The refusal that used to stand here came from a build
   // whose local model could not keep up with a capture every turn.
   const hooks = specFor(options);
   if (!options.repo.verified) {

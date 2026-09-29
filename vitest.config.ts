@@ -20,9 +20,10 @@ const ollamaStateTests = [
   'packages/mcp/src/routing-key-flip.int.test.ts',
 ];
 
-// Seeds AION_ANTHROPIC_API_KEY and AION_ANTHROPIC_MODEL from the repo `.env` when the shell
-// did not export them, so a run on the host generates on the same route the service does. Unit
-// tests get none of it: they talk to no provider.
+// Seeds each provider's key and model (`AION_ANTHROPIC_*`, `AION_OPENAI_*`) from the repo `.env`
+// when the shell did not export them. Which provider a run measures is still the
+// `AION_GENERATION_PROVIDER` the shell exports. Unit tests get none of it: they talk to no
+// provider.
 const loadEnv = `${root}packages/core/src/infrastructure/config/test-support/load-env.fixture.ts`;
 
 // Tests import workspace packages by their published specifier but must run against

@@ -45,8 +45,9 @@ export type QueueLagSnapshot = {
   /** `undefined` until the first job completes; see `lag-samples.ts`. */
   readonly p95EnrichmentLagMs: number | undefined;
   /**
-   * Share of recent recalls that answered without the cue model. `undefined` until the first
-   * recall lands, so a fresh install reads as unmeasured rather than as healthy.
+   * Share of recent recalls that degraded on the recall model call: the assessment, or cue
+   * extraction under `AION_RECALL_MODE=cues`. `undefined` until the first recall lands, so a
+   * fresh install reads as unmeasured rather than as healthy.
    */
   readonly cueDegradedRate: number | undefined;
   /**

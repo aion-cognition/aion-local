@@ -20,9 +20,10 @@ import { chunkMemberUnits, joinedUnits, type ChunkMemberText } from './chunk-ren
  *
  * Defined here rather than derived from the episode knobs: the product of a member count and a
  * per-member clip is a statement about clipping, not about what a provider will read. The value
- * matches the order of the measured judge-route allowance on the same local model class and is
- * owed a measurement of its own against the narrative surface's prompt and answer reserve. C3
- * wires it, and `chunkMaxSpanMs` beside it, to the config surface.
+ * matches the order of the judge-route allowance measured on the earlier local model class and
+ * is owed a measurement of its own against the narrative surface's prompt and answer reserve.
+ * `AION_MAINTENANCE_CHUNK_RENDERED_INPUT_ALLOWANCE` sets it, and
+ * `AION_MAINTENANCE_CHUNK_MAX_SPAN_MS` sets `chunkMaxSpanMs` beside it.
  */
 export const CHUNK_RENDERED_INPUT_ALLOWANCE = 16_384;
 

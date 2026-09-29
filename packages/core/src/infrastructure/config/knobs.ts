@@ -126,11 +126,12 @@ export const KNOBS = {
     // this group because readers outside core reach it here. Every dispatch holds its own
     // conservative maximum against it before it is sent and replaces that with what it cost when
     // the answer lands, so the number bounds committed spend rather than reported spend. Past it,
-    // background work queues and recall falls back to the raw query: exhaustion is generation
-    // being unavailable, the same shape a substrate with no key already answers correctly, and
-    // not a failure anything retries. Five is the retained W4 figure and is a backstop rather
-    // than a budget: the whole 2026-09-13 build round spent $5.12 across every chunk, so an
-    // ordinary day of use is nowhere near it and a runaway loop reaches it in minutes.
+    // background work queues and recall serves the retrieval ranking unassessed: exhaustion is
+    // generation being unavailable, the same shape a substrate with no key already answers
+    // correctly, and not a failure anything retries. Five is the figure the batch producer
+    // shipped with and is a backstop rather than a budget: the whole 2026-09-13 build round spent
+    // $5.12 across every chunk, so an ordinary day of use is nowhere near it and a runaway loop
+    // reaches it in minutes.
     dailyCeilingUsd: ['AION_DAILY_CEILING_USD', positive, 5],
   },
   generation: GENERATION_KNOBS,

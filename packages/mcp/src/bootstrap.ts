@@ -333,9 +333,6 @@ export async function bootstrapService(env: NodeJS.ProcessEnv): Promise<AionServ
       // One assigner for the service's life: its counters are the arrival rate, and a fresh
       // instance per call would measure nothing.
       lanes: new LaneAssigner(config.lanes),
-      // Hooks are route-agnostic: the local route digests a capture, slower and free. The gate
-      // stays in the intake type for a deployment that wants to shut hook capture off on its own
-      // terms, and the service no longer decides it from the routing.
     };
     if (stages.length > 0) {
       // The drain runs alongside the first tool calls rather than in front of them: a long

@@ -60,8 +60,6 @@ export async function lifecycleIntakeDeps(target: LifecycleTarget): Promise<Refl
     entropyThreshold: target.config.redaction.entropyThreshold,
     lanes: new LaneAssigner(target.config.lanes),
     workerMaxAttempts: target.config.operational.workerMaxAttempts,
-    // The gate exists to keep a hook from flooding a local model with transcript. A command
-    // recording one observation about itself is neither.
   };
 }
 

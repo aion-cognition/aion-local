@@ -33,12 +33,12 @@ export const DEFAULT_ANTHROPIC_MODEL = 'claude-haiku-4-5';
  * How the caller's JSON Schema reaches the model.
  *
  * `system_prompt` states the schema as an instruction and parses whatever text comes back. It
- * accepts any schema a caller already hands to Ollama, at the cost of a validation pass the
+ * accepts any schema a caller builds, at the cost of a validation pass the
  * caller has to run itself. This is the production mode: the stages validate their own output,
  * and the extraction quality the gate batteries measure is the quality this mode produces.
  *
  * `output_config` is the API's own structured-output mode: the answer is constrained to the
- * schema, the same guarantee the local route gets from Ollama's grammar. It constrains the
+ * schema, the guarantee a grammar-constrained decoder gives. It constrains the
  * model harder and measurably thins what extraction returns, so it is not the default; it is
  * where a prompt-delivered answer that will not parse is retried. The API refuses an object
  * schema that leaves `additionalProperties` unset, which every schema the stages build does,
@@ -371,9 +371,9 @@ export type AnthropicProviderOptions = {
  * model owns that space for the life of a substrate, and Anthropic has no embeddings API
  * either way.
  *
- * The breaker runs its own default policy: 5 consecutive failures, then a 60s cooldown. It
- * matters more here than on the local route, since an expired key or a regional outage fails
- * every call, and without it each queued episode pays three HTTP attempts with backoff before
+ * The breaker runs its own default policy: 5 consecutive failures, then a 60s cooldown. An
+ * expired key or a regional outage fails every call, and without it each queued episode pays
+ * three HTTP attempts with backoff before
  * the worker's own retry gets a turn.
  */
 export class AnthropicProvider implements GenerationBackend {
