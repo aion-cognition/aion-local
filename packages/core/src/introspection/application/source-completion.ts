@@ -1,6 +1,6 @@
 import type { CoverageRefusal } from '@aion/protocol';
 
-import { eligibilityAt } from '../../evidence/application/sources.js';
+import { eligibilityAt } from '../../evidence/application/source-gate.js';
 import { idAddress } from '../../evidence/domain/address.js';
 import type { EvidenceIssue } from '../../evidence/domain/result.js';
 import type { SqliteHandle } from '../../infrastructure/sqlite/database.js';

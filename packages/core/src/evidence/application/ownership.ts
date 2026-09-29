@@ -1,5 +1,5 @@
 import { readRelationScope, sourcePartsDependency, sourceStateDependency } from './dependencies.js';
-import { eligibilityAt, locateAddress } from './sources.js';
+import { eligibilityAt, locateAddress } from './source-gate.js';
 import { isTimeTravel } from '../../infrastructure/graph/read-modes.js';
 import type { EvidenceDependency } from '../../infrastructure/publication/preconditions.js';
 import {

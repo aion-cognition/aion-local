@@ -36,6 +36,31 @@ export const EVIDENCE_LIMITS: EvidenceLimits = {
   lineageHops: MAX_LINEAGE_HOPS,
 };
 
+/**
+ * What one entity judgment reads: a bounded, disclosed selection of source excerpts, never every
+ * source of both entities read whole. That requirement grew with history until a well-known
+ * entity could not be judged at all, so these bounds hold whatever the history length or the
+ * capture size, and everything left out is named in the judge's input.
+ */
+export type EntityExcerptLimits = {
+  /** Sources nominated for one side, its corrections and the sources it shares included. */
+  readonly sourcesPerSide: number;
+  /** The largest stored part one excerpt may decode, since a part is verified whole. */
+  readonly partBytes: number;
+  /** The longest window one excerpt shows, in UTF-16 code units. */
+  readonly windowUnits: number;
+};
+
+export const ENTITY_EXCERPT_LIMITS: EntityExcerptLimits = {
+  sourcesPerSide: 12,
+  // One part may take an eighth of the pair's decode allowance, so a long capture cannot crowd
+  // out the other sources.
+  partBytes: EVIDENCE_LIMITS.decodedRawBytes / 8,
+  // A few paragraphs. The 240-unit source-search window is sized for a list of hits, which is
+  // too short to keep a negation beside the name it qualifies.
+  windowUnits: 1_200,
+};
+
 /** Which bound a charge ran into, kept apart in diagnostics though the transport says one word. */
 export type BudgetLimitKind =
   | 'requested_ids'

@@ -1,10 +1,13 @@
+import type { ReflectionTurn, ToolExecution } from '@aion/protocol';
+
 import type { ExperienceArchiveRow } from '../../infrastructure/sqlite/experience-archive.js';
 import type {
+  SourcePartInput,
   SourcePartRecord,
   SourceRecord,
 } from '../../infrastructure/sqlite/source-identity.js';
-import { sourcePartsOf } from '../../reflection/application/source-manifest.js';
-import { prepareEpisode } from '../../reflection/domain/content.js';
+import { sourcePartOf, sourcePartsOf } from '../../reflection/application/source-manifest.js';
+import { prepareEpisode, renderToolExecution } from '../../reflection/domain/content.js';
 import { partAddress, type EvidenceAddress, type SourcePartKind } from '../domain/address.js';
 import type { EvidenceIssue } from '../domain/result.js';
 
@@ -17,6 +20,61 @@ function issueOn(
   required: boolean,
 ): EvidenceIssue {
   return { address, field, reason, required };
+}
+
+/** A part as the episode text renders it, so a part read and a whole read show the same words. */
+export function renderPartValue(kind: SourcePartKind, value: unknown): string {
+  if (kind === 'turn') {
+    const turn = value as ReflectionTurn;
+    return `${turn.role}: ${turn.text}`;
+  }
+  if (kind === 'observation') {
+    return `observation: ${value as string}`;
+  }
+  return renderToolExecution(value as ToolExecution).join('\n');
+}
+
+/** Whether a derived part agrees with its recorded row on content, attribution and clock. */
+export function partMatchesRecord(
+  derived: SourcePartInput | undefined,
+  stored: SourcePartRecord,
+): boolean {
+  return (
+    derived?.contentHash === stored.contentHash &&
+    (derived.role ?? null) === stored.role &&
+    (derived.occurredAt ?? null) === stored.occurredAt
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * One decoded part against its recorded row, for a reader that decodes nothing else.
+ *
+ * The row's content hash is what the writer computed from this part alone, so the part can be
+ * proved without the rest of the payload. A turn with no clock of its own takes the source's
+ * recorded occurrence, which is the episode clock the writer gave it. What this does not prove is
+ * that the manifest is whole; a reader citing one part does not rest on the others.
+ */
+export function partHolds(
+  kind: SourcePartKind,
+  ordinal: number,
+  value: unknown,
+  record: SourceRecord,
+  stored: SourcePartRecord,
+): boolean {
+  const shaped =
+    kind === 'observation'
+      ? typeof value === 'string'
+      : isRecord(value) && (kind !== 'turn' || typeof value.role === 'string');
+  return (
+    shaped &&
+    stored.partKind === kind &&
+    stored.ordinal === ordinal &&
+    partMatchesRecord(sourcePartOf(kind, ordinal, value, new Date(record.occurredAt)), stored)
+  );
 }
 
 /**
@@ -65,11 +123,7 @@ export function verifyParts(
       continue;
     }
     seen.add(identity);
-    if (
-      match?.contentHash !== part.contentHash ||
-      (match.role ?? null) !== part.role ||
-      (match.occurredAt ?? null) !== part.occurredAt
-    ) {
+    if (!partMatchesRecord(match, part)) {
       mismatch(part.partKind, part.ordinal);
       continue;
     }

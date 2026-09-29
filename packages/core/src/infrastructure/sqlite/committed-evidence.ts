@@ -157,7 +157,7 @@ type IncidenceRowData = {
   link_version: number;
 };
 
-const COMMITTED_INCIDENCE = `SELECT s.source_id, s.node_id, s.role, s.currency, s.link_id, s.link_version
+export const COMMITTED_INCIDENCE = `SELECT s.source_id, s.node_id, s.role, s.currency, s.link_id, s.link_version
   FROM source_incidence s
   JOIN evidence_link_versions v ON v.link_id = s.link_id AND v.version = s.link_version
   JOIN publication_intents i ON i.operation_id = v.operation_id AND i.state = 'acknowledged'`;

@@ -1,4 +1,9 @@
-import type { ReflectionOrigin, ReflectionProvenance } from '@aion/protocol';
+import type {
+  ReflectionOrigin,
+  ReflectionProvenance,
+  ReflectionTurn,
+  ToolExecution,
+} from '@aion/protocol';
 
 import {
   prepareReferenceAcceptance,
@@ -35,7 +40,13 @@ import {
   SOURCE_INDEX_EFFECT,
   touchSessionRemainder,
 } from '../../infrastructure/sqlite/source-lifecycle.js';
-import { hashContent, type PreparedEpisode, type ReflectionContent } from '../domain/content.js';
+import {
+  hashContent,
+  prepareTurn,
+  type PreparedEpisode,
+  type PreparedTurn,
+  type ReflectionContent,
+} from '../domain/content.js';
 
 /**
  * The durable records an accepted payload leaves behind, written as one synchronous
@@ -104,6 +115,29 @@ function partHash(value: unknown): string {
   return hashContent(value);
 }
 
+function turnPart(turn: PreparedTurn, index: number): SourcePartInput {
+  return {
+    partKind: 'turn',
+    ordinal: index,
+    role: turn.role,
+    contentHash: turn.contentHash,
+    occurredAt: turn.occurredAt.toISOString(),
+  };
+}
+
+function observationPart(entry: unknown, index: number): SourcePartInput {
+  return { partKind: 'observation', ordinal: index, contentHash: partHash(entry) };
+}
+
+function executionPart(entry: ToolExecution, index: number): SourcePartInput {
+  return {
+    partKind: 'tool_execution',
+    ordinal: index,
+    contentHash: partHash(entry),
+    ...(entry.occurred_at === undefined ? {} : { occurredAt: entry.occurred_at }),
+  };
+}
+
 /**
  * One row per part of the source: its turns, its observations, its tool executions. Only turns
  * carry an original turn id, and nothing invents one for the others.
@@ -114,25 +148,31 @@ export function sourcePartsOf(
   turnIds: readonly string[],
 ): readonly SourcePartInput[] {
   const turns = prepared.turns.map((turn, index) => ({
-    partKind: 'turn' as const,
-    ordinal: index,
+    ...turnPart(turn, index),
     ...(turnIds[index] === undefined ? {} : { turnId: turnIds[index] }),
-    role: turn.role,
-    contentHash: turn.contentHash,
-    occurredAt: turn.occurredAt.toISOString(),
   }));
-  const observations = (payload.observations ?? []).map((entry, index) => ({
-    partKind: 'observation' as const,
-    ordinal: index,
-    contentHash: partHash(entry),
-  }));
-  const executions = (payload.tool_executions ?? []).map((entry, index) => ({
-    partKind: 'tool_execution' as const,
-    ordinal: index,
-    contentHash: partHash(entry),
-    ...(entry.occurred_at === undefined ? {} : { occurredAt: entry.occurred_at }),
-  }));
+  const observations = (payload.observations ?? []).map(observationPart);
+  const executions = (payload.tool_executions ?? []).map(executionPart);
   return [...turns, ...observations, ...executions];
+}
+
+/**
+ * One part's row derived from its own archived value, the same derivation `sourcePartsOf` makes
+ * for every part at once. A turn with no clock of its own takes the episode's.
+ */
+export function sourcePartOf(
+  partKind: SourcePartInput['partKind'],
+  ordinal: number,
+  value: unknown,
+  episodeOccurredAt: Date,
+): SourcePartInput {
+  if (partKind === 'turn') {
+    return turnPart(prepareTurn(value as ReflectionTurn, ordinal, episodeOccurredAt), ordinal);
+  }
+  if (partKind === 'observation') {
+    return observationPart(value, ordinal);
+  }
+  return executionPart(value as ToolExecution, ordinal);
 }
 
 function introducedReferences(references: ReflectionProvenance | undefined): readonly string[] {

@@ -136,7 +136,8 @@ function earliestOccurredAt(content: ReflectionContent, fallback: Date): Date {
   return stamps.reduce((earliest, stamp) => (stamp < earliest ? stamp : earliest));
 }
 
-function prepareTurn(
+/** A turn as the writer prepares it, which is also what one part read verifies against. */
+export function prepareTurn(
   turn: ReflectionTurn,
   sequence: number,
   episodeOccurredAt: Date,
