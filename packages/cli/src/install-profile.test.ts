@@ -1,4 +1,4 @@
-import { DEFAULTS, loadConfig } from '@aion/core';
+import { DEFAULTS, envFileValue, loadConfig } from '@aion/core';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,36 +14,37 @@ import {
   storeDropCommands,
   storePairing,
   storePairingRefusal,
+  upsertEnvValue,
 } from './install-profile.js';
 
-const HOME = '/Users/someone';
+const MEMBER_HOME = '/Users/someone';
 
 describe('the addresses a native install records', () => {
   it('moves every compose-shaped address to a host one, under one data directory', () => {
-    const values = new Map(nativeAddresses(HOME).map(([key, value]) => [key, value]));
+    const values = new Map(nativeAddresses(MEMBER_HOME).map(([key, value]) => [key, value]));
 
     expect(values.get('AION_INSTALL_PROFILE')).toBe('native');
     expect(values.get('AION_NEO4J_URI')).toBe('bolt://127.0.0.1:7687');
     expect(values.get('AION_OLLAMA_URL')).toBe('http://127.0.0.1:11434');
-    expect(values.get('AION_DATA_DIR')).toBe(nativeDataDir(HOME));
+    expect(values.get('AION_DATA_DIR')).toBe(nativeDataDir(MEMBER_HOME));
     // Both stores and the log under the one directory, which is what makes the reset a pair of
     // drops rather than a hunt.
-    expect(values.get('AION_SQLITE_PATH')?.startsWith(nativeDataDir(HOME))).toBe(true);
-    expect(values.get('AION_LOG_FILE')?.startsWith(nativeDataDir(HOME))).toBe(true);
+    expect(values.get('AION_SQLITE_PATH')?.startsWith(nativeDataDir(MEMBER_HOME))).toBe(true);
+    expect(values.get('AION_LOG_FILE')?.startsWith(nativeDataDir(MEMBER_HOME))).toBe(true);
   });
 
   it('names only variables the config surface knows, and values it accepts', () => {
     // The drift guard. `loadConfig` refuses an unknown `AION_*` variable outright, so a renamed
     // knob or a typo here fails this rather than surfacing as a native install that cannot boot.
     const env: NodeJS.ProcessEnv = {};
-    for (const [key, value] of nativeAddresses(HOME)) {
+    for (const [key, value] of nativeAddresses(MEMBER_HOME)) {
       env[key] = value;
     }
     const config = loadConfig(env);
 
     expect(config.install.profile).toBe('native');
     expect(config.neo4j.uri).toBe('bolt://127.0.0.1:7687');
-    expect(config.operational.dataDir).toBe(nativeDataDir(HOME));
+    expect(config.operational.dataDir).toBe(nativeDataDir(MEMBER_HOME));
   });
 });
 
@@ -53,7 +54,7 @@ describe('planNativeEnv', () => {
 
   it('converts a value the template still owns, and one the file never carried', () => {
     const plan = planNativeEnv({
-      home: HOME,
+      home: MEMBER_HOME,
       current: (key) => (key === 'AION_NEO4J_URI' ? 'bolt://neo4j:7687' : undefined),
       template,
     });
@@ -63,7 +64,7 @@ describe('planNativeEnv', () => {
 
   it('keeps an address this install chose for itself', () => {
     const plan = planNativeEnv({
-      home: HOME,
+      home: MEMBER_HOME,
       current: (key) => (key === 'AION_NEO4J_URI' ? 'bolt://graph.lan:7687' : undefined),
       template,
     });
@@ -76,7 +77,7 @@ describe('planNativeEnv', () => {
 
   it('reads a value already equal to the native one as written rather than as a choice', () => {
     const plan = planNativeEnv({
-      home: HOME,
+      home: MEMBER_HOME,
       current: (key) => (key === 'AION_NEO4J_URI' ? 'bolt://127.0.0.1:7687' : undefined),
       template,
     });
@@ -118,6 +119,33 @@ describe('applyNativeEnv', () => {
     // The process copy is what the rest of the run reads: nothing on the host loads `.env`.
     expect(env.AION_DATA_DIR).toBe('/tmp/data');
     expect(env.AION_NEO4J_URI).toBeUndefined();
+  });
+
+  it('updates the effective entry when a setting is repeated or padded with whitespace', () => {
+    const envPath = join(dir, '.env');
+    writeFileSync(
+      envPath,
+      'AION_GENERATION_PROVIDER=openai\n AION_GENERATION_PROVIDER = "anthropic"\nAION_LOG_LEVEL=info\n',
+    );
+
+    upsertEnvValue(envPath, 'AION_GENERATION_PROVIDER', 'openai');
+
+    expect(envFileValue(envPath, 'AION_GENERATION_PROVIDER')).toBe('openai');
+    expect(envFileValue(envPath, 'AION_LOG_LEVEL')).toBe('info');
+  });
+
+  it('converts quoted template addresses using the same reader as the service', () => {
+    const envPath = join(dir, '.env');
+    writeFileSync(envPath, ' AION_NEO4J_URI = "bolt://neo4j:7687"\n');
+    const plan = planNativeEnv({
+      home: MEMBER_HOME,
+      current: (key) => envFileValue(envPath, key),
+      template: (key) => (key === 'AION_NEO4J_URI' ? 'bolt://neo4j:7687' : undefined),
+    });
+
+    applyNativeEnv(envPath, plan, {});
+
+    expect(envFileValue(envPath, 'AION_NEO4J_URI')).toBe('bolt://127.0.0.1:7687');
   });
 });
 

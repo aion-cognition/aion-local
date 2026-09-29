@@ -1,5 +1,6 @@
 import {
   hostDataDir,
+  parseEnvFile,
   appliedGraphSchemaVersion,
   readMemberName,
   type Config,
@@ -84,20 +85,15 @@ export function planNativeEnv(input: NativeEnvInput): readonly NativeEnvStep[] {
   });
 }
 
-/** Reads `.env` on each call, which suits a writer that runs a handful of times at init. */
-export function envFileEntry(path: string, key: string): string | undefined {
-  if (!existsSync(path)) {
-    return undefined;
-  }
-  const line = readFileSync(path, 'utf8')
-    .split('\n')
-    .find((entry) => entry.startsWith(`${key}=`));
-  return line === undefined ? undefined : line.slice(key.length + 1);
-}
-
+/** Update the effective last entry, matching the config reader's handling of duplicates. */
 export function upsertEnvValue(path: string, key: string, value: string): void {
   const lines = existsSync(path) ? readFileSync(path, 'utf8').split('\n') : [];
-  const index = lines.findIndex((entry) => entry.startsWith(`${key}=`));
+  let index = -1;
+  for (const [position, line] of lines.entries()) {
+    if (parseEnvFile(line).has(key)) {
+      index = position;
+    }
+  }
   const entry = `${key}=${value}`;
   if (index === -1) {
     lines.push(entry);
