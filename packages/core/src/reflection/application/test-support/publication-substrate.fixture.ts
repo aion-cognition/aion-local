@@ -1,10 +1,7 @@
 import type { Driver } from 'neo4j-driver';
 
-import {
-  PUBLICATION_GUARD_ID_PROPERTY,
-  PUBLICATION_GUARD_LABEL,
-  readPublicationGuardBirth,
-} from '../../../infrastructure/graph/publication-guard.js';
+import { readPublicationGuardBirth } from '../../../infrastructure/graph/publication-guard.js';
+import { backdatePublicationGuardBirth } from '../../../infrastructure/graph/test-support/publication-guard.fixture.js';
 import type { Logger } from '../../../infrastructure/logging/logger.js';
 import { PublicationCoordinator } from '../../../infrastructure/publication/coordinator.js';
 import { readCurrentCoverageContract } from '../../../infrastructure/sqlite/coverage-contract.js';
@@ -98,9 +95,5 @@ export async function backdateSubstrateBirth(
       `a birth moves earlier only: ${at.toISOString()} is after ${born.toISOString()}`,
     );
   }
-  await driver.executeQuery(
-    `MATCH (g:${PUBLICATION_GUARD_LABEL} {${PUBLICATION_GUARD_ID_PROPERTY}: $substrateId})
-     SET g.created_at = $at`,
-    { substrateId: pairing.substrateId, at: at.toISOString() },
-  );
+  await backdatePublicationGuardBirth(driver, pairing.substrateId, at);
 }
