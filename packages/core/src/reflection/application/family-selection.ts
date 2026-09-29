@@ -44,6 +44,12 @@ const Data = Payload.extend({
 });
 const Result = z.strictObject({ family: z.literal(NARRATIVE_FAMILY) });
 
+/**
+ * The refusal for a transport session that never created a Session node: an MCP session that only
+ * recalled has nothing to narrate, which is the ordinary case rather than a fault.
+ */
+export const NARRATIVE_SESSION_MISSING = 'session_missing';
+
 export const familySelectionPublication = new PublicationOperation({
   kind: 'narrative_family_selection',
   effectKinds: [FAMILY_EFFECT],
@@ -58,7 +64,7 @@ export const familySelectionPublication = new PublicationOperation({
       ...payload,
       refusal: (await hasNarrativeSession(context.graph, payload.sessionId))
         ? null
-        : 'session_missing',
+        : NARRATIVE_SESSION_MISSING,
       observedAt: context.now.toISOString(),
     };
     return {

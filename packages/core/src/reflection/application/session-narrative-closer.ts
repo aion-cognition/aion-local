@@ -1,3 +1,4 @@
+import { NARRATIVE_SESSION_MISSING } from './family-selection.js';
 import {
   closeSessionNarrative,
   type NarrativeDeps,
@@ -24,8 +25,11 @@ export class SessionNarrativeCloser {
         // `narrateSession` fails closed by returning rather than throwing, so the catch below
         // never sees a refusal. Dropping the result made an entirely uncomposed narrative half
         // silent at every log level, and the only symptom was a session that never narrated.
+        // A session that never created a Session node, one that only recalled, has nothing to
+        // narrate. That is debug; any other refusal is a real failure and stays a warning.
         if (result.status === 'failed') {
-          this.#deps.logger.warn(
+          const level = result.summary === NARRATIVE_SESSION_MISSING ? 'debug' : 'warn';
+          this.#deps.logger[level](
             { sessionId, summary: result.summary },
             'session close narrative did not write',
           );
