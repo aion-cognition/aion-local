@@ -45,6 +45,12 @@ import { GateSubstrate, waitFor, REMOTE_JUDGE_ABSENT } from './gate-substrate.fi
  * The seed budget is narrowed to four. At the shipped budget every node in a substrate this
  * size is a seed, the exclusion set swallows the whole graph, and a run that returns nothing
  * resonant proves nothing about resonance.
+ *
+ * The recall mode is `raw`. The shipped `assess` mode retrieves on the same raw query and then
+ * lets the recall model choose what to serve, and a valid choice may leave every association
+ * out: on Luna the pass found the target, and the model served three memories from the anchor's
+ * world and nothing resonant. That is a judgment the mode permits, not a failure of the pass,
+ * so the buckets here are the ranking's.
  */
 
 const READ_SESSION = 'gate-resonance-read';
@@ -58,6 +64,7 @@ const SEED_BUDGET = 4;
 const substrate = new GateSubstrate('resonance', {
   tune: (config) => ({
     ...config,
+    recall: { ...config.recall, mode: 'raw' },
     contextResonance: { ...config.contextResonance, seedLimit: SEED_BUDGET },
   }),
 });
@@ -249,7 +256,7 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)(
 
     /**
      * The band `contextResonance.contextSearchThreshold` sits in, measured rather than assumed.
-     * The search runs from a centroid over what the first pass admitted, which is this query's
+     * The search runs from a centroid over what the first pass activated, which is this query's
      * anchor world, so the two readings against that world's own neighborhood shape are the two
      * distributions the threshold has to separate: the memory whose crew has the same shape, and
      * the memory whose crew has a different one.
@@ -372,13 +379,15 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)(
 );
 
 /**
- * Resonance cannot fire on a query the first pass could not answer: the centroid would be the
- * shape of whatever the recency leg happened to return, and searching from it is how an
- * off-topic pack fills itself with memories nothing measured.
+ * No resonant bucket at all was the rule while the centroid averaged only what fusion admitted.
+ * The stage now runs when fusion admits nothing, from any node a cue-seeded path reached, and
+ * the vector leg seeds its nearest rows whatever they score, so an off-topic query can carry
+ * associations: three or four for every query in this battery, measured in the `raw` mode. What
+ * the pack still owes the reader is that none of them poses as an answer.
  */
-describe.skipIf(REMOTE_JUDGE_ABSENT)('an off-topic query gets no resonant bucket at all', () => {
+describe.skipIf(REMOTE_JUDGE_ABSENT)('an off-topic query is never answered by association', () => {
   it.each(OFF_TOPIC_BATTERY)(
-    'stays quiet for: %s',
+    'admits nothing and labels every association for: %s',
     async (query) => {
       const result = await substrate.recall(query, { identity: READ_SESSION, now: RECALLED_AT });
 
@@ -388,7 +397,17 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('an off-topic query gets no resonant bucket
           `resonant ${String(result.pack.resonant?.length ?? 0)}`,
       );
 
-      expect(result.pack.resonant).toBeUndefined();
+      expect(result.admission.anchored).toBe(false);
+      for (const [name, bucket] of bucketsOf(result.pack)) {
+        if (name === 'resonant') {
+          continue;
+        }
+        expect(bucket).toEqual([]);
+      }
+      for (const item of result.pack.resonant ?? []) {
+        expect(item.rationale.method).toBe('resonance');
+        expect(item.rationale.path).toBe(RESONANCE_PATH);
+      }
     },
     120_000,
   );
