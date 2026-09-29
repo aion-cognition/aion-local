@@ -24,8 +24,8 @@ import {
  * Rates measured here describe this workload on the machine that ran it.
  */
 
-const SEQUENTIAL_ATTEMPTS = Number(process.env.AION_INTAKE_SEQUENTIAL_ATTEMPTS ?? '20');
-const CONCURRENT_ATTEMPTS = Number(process.env.AION_INTAKE_CONCURRENT_ATTEMPTS ?? '20');
+const SEQUENTIAL_ATTEMPTS = Number(process.env.TEST_AION_INTAKE_SEQUENTIAL_ATTEMPTS ?? '20');
+const CONCURRENT_ATTEMPTS = Number(process.env.TEST_AION_INTAKE_CONCURRENT_ATTEMPTS ?? '20');
 const CONCURRENT_CREATIONS = 8;
 
 let probe: IntakeProbe;

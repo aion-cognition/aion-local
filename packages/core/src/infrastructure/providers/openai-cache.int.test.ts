@@ -19,11 +19,13 @@ import { DEFAULTS } from '../config/defaults.js';
  * caching guide says writes nothing, so every answer should report no cache-write tokens.
  *
  * Opt-in on top of the key, because it spends money and nothing else in the suite needs it:
- * `AION_OPENAI_CACHE_CHECK=1` with `AION_GENERATION_PROVIDER=openai` and `AION_OPENAI_API_KEY`.
+ * `TEST_AION_OPENAI_CACHE_CHECK=1` with `AION_GENERATION_PROVIDER=openai` and `AION_OPENAI_API_KEY`.
  */
 
 const ENABLED =
-  process.env.AION_OPENAI_CACHE_CHECK === '1' && testRoutesToOpenAi() && testGenerationKey() !== '';
+  process.env.TEST_AION_OPENAI_CACHE_CHECK === '1' &&
+  testRoutesToOpenAi() &&
+  testGenerationKey() !== '';
 
 const MODEL = process.env.AION_OPENAI_MODEL ?? DEFAULT_OPENAI_MODEL;
 

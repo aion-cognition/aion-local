@@ -39,7 +39,7 @@ import { applyUnmerge } from './unmerge-queries.js';
 
 const NOW = new Date('2026-09-01T00:00:00.000Z');
 const LATER = new Date('2026-09-01T00:05:00.000Z');
-const ATTEMPTS = Number(process.env.AION_UNMERGE_CONCURRENT_ATTEMPTS ?? '16');
+const ATTEMPTS = Number(process.env.TEST_AION_UNMERGE_CONCURRENT_ATTEMPTS ?? '16');
 
 let probe: FamilyProbe;
 

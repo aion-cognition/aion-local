@@ -49,13 +49,13 @@ import { healthFixture } from '../../domain/test-support/health.fixture.js';
  * sends, which no scripted remote can say.
  *
  * It never runs by default. It spends money and can wait a long time on the vendor:
- * `AION_LIVE_BATCH=1` opts in, `AION_GENERATION_PROVIDER` selects the vendor, and only that
- * vendor's key is read. `AION_LIVE_BATCH_DEADLINE_MS` bounds the wait (an hour by default).
+ * `TEST_AION_LIVE_BATCH=1` opts in, `AION_GENERATION_PROVIDER` selects the vendor, and only that
+ * vendor's key is read. `TEST_AION_LIVE_BATCH_DEADLINE_MS` bounds the wait (an hour by default).
  */
 
-const ENABLED = process.env.AION_LIVE_BATCH === '1' && testGenerationKey() !== '';
+const ENABLED = process.env.TEST_AION_LIVE_BATCH === '1' && testGenerationKey() !== '';
 
-const DEADLINE_MS = Number(process.env.AION_LIVE_BATCH_DEADLINE_MS ?? 3_600_000);
+const DEADLINE_MS = Number(process.env.TEST_AION_LIVE_BATCH_DEADLINE_MS ?? 3_600_000);
 
 const POLL_MS = 30_000;
 

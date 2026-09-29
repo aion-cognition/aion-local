@@ -15,7 +15,7 @@ import { GateSubstrate, REMOTE_JUDGE_ABSENT, waitFor } from './gate-substrate.fi
  * reflection through the shipped pipeline, a recall the model assesses, and an exhausted job
  * `dead_letter` takes back on its own once its conditions change.
  *
- * It never runs by default. It spends money: `AION_PROVIDER_CHECK=1` opts in, and
+ * It never runs by default. It spends money: `TEST_AION_PROVIDER_CHECK=1` opts in, and
  * `AION_GENERATION_PROVIDER` selects the provider whose key must be the only one exported. The
  * other provider's key being set fails the run, since the claim is that one key is enough.
  *
@@ -25,7 +25,7 @@ import { GateSubstrate, REMOTE_JUDGE_ABSENT, waitFor } from './gate-substrate.fi
  * under unchanged conditions, and the reconsidered cycle after a build change completing.
  */
 
-const ENABLED = process.env.AION_PROVIDER_CHECK === '1' && !REMOTE_JUDGE_ABSENT;
+const ENABLED = process.env.TEST_AION_PROVIDER_CHECK === '1' && !REMOTE_JUDGE_ABSENT;
 
 const ENRICH_DEADLINE_MS = 900_000;
 

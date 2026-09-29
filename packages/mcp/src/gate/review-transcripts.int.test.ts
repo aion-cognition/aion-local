@@ -45,8 +45,8 @@ import { PRECISION_BATTERY } from './supersession-precision.fixture.js';
  * same calls the shipped stages send, through the same functions, and prints both sides of each.
  *
  * It never runs by default. It spends money, it decides nothing, and nothing in the product reads
- * it: `AION_REVIEW_TRANSCRIPTS=1` opts in, and the selected route's key has to be exported too.
- * `AION_REVIEW_TRANSCRIPT_REPEATS` asks each review again on the same request, because a single
+ * it: `TEST_AION_REVIEW_TRANSCRIPTS=1` opts in, and the selected route's key has to be exported too.
+ * `TEST_AION_REVIEW_TRANSCRIPT_REPEATS` asks each review again on the same request, because a single
  * answer at temperature zero can still move between calls and a veto seen once is not a pattern.
  *
  * The supersession half sweeps the first pass over one true replacement stated as an event and every
@@ -55,9 +55,12 @@ import { PRECISION_BATTERY } from './supersession-precision.fixture.js';
  * judge reads are the ones the stage measures rather than ones written here.
  */
 
-const ENABLED = process.env.AION_REVIEW_TRANSCRIPTS === '1';
+const ENABLED = process.env.TEST_AION_REVIEW_TRANSCRIPTS === '1';
 
-const REPEATS = Math.min(5, Math.max(1, Number(process.env.AION_REVIEW_TRANSCRIPT_REPEATS ?? 1)));
+const REPEATS = Math.min(
+  5,
+  Math.max(1, Number(process.env.TEST_AION_REVIEW_TRANSCRIPT_REPEATS ?? 1)),
+);
 
 const TIMEOUT_MS = 120_000;
 
@@ -401,9 +404,9 @@ describe.skipIf(!ENABLED || REMOTE_JUDGE_ABSENT)('second-pass review transcripts
  * `reviewEntityMerge` sends: same surface, same pair text, the review schema. A veto on a
  * duplicate is an error the review adds; a veto on a non-duplicate is the catch it exists for.
  *
- * `AION_REVIEW_SWEEP=1` opts in, separately from the transcripts above.
+ * `TEST_AION_REVIEW_SWEEP=1` opts in, separately from the transcripts above.
  */
-const SWEEP_ENABLED = process.env.AION_REVIEW_SWEEP === '1';
+const SWEEP_ENABLED = process.env.TEST_AION_REVIEW_SWEEP === '1';
 
 const REVIEW_SCHEMA: StructuredRequest['schema'] = {
   type: 'object',
