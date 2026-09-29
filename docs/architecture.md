@@ -386,7 +386,10 @@ assembly, and the three subtractions below it carry no timing.
    the floors did not pass it. The host checks identity, never judgment, so a number that names
    no candidate is dropped. A call that produces no usable answer serves the ranking assembly
    below, marked `degraded: assessment`. Under `cues` and `raw`, that ranking assembly is the
-   pack.
+   pack. `AION_CUE_BUDGET_MS` guards recall's one call in either mode at 8000ms, a deliberate
+   deviation from PRD §14's 2000: the earlier cue model measured 2030ms on the run after an
+   eviction, so the pinned value fired on ordinary recalls. Live assessments on GPT-6 Luna
+   measured p50 1.6s and p95 2.6s over 119 recalls on 2026-09-29.
 
    Fused items route to a bucket by node label (`pack-buckets.ts`):
    `Episode`/`Turn` to `episodes`, `Narrative` to `narratives`, and `Entity`, `Bridge`, plus the

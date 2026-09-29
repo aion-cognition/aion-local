@@ -102,9 +102,9 @@ opposite thing, which is why the two are separate shapes.
 
 Three loops run over one graph, and their separation is a correctness requirement.
 
-**Recall constructs.** It is synchronous and sits inside the agent's reasoning cycle: cue
-extraction, seed selection, spreading activation, fusion, resonance, pack assembly, all inside
-a time and token budget. Off the latency path, it also nominates the pairs that fired together
+**Recall constructs.** It is synchronous and sits inside the agent's reasoning cycle: seed
+selection from the caller's own words, spreading activation, fusion, resonance, a judgment of
+what helps, pack assembly, all inside a time and token budget. Off the latency path, it also nominates the pairs that fired together
 and whose ends both reached the pack the caller was handed.
 
 **Reflection distills.** It is asynchronous and runs after an episode is durably stored, from a
@@ -256,35 +256,37 @@ Recall returns a MemoryPack, and that is the whole interface between memory and 
 buckets, each present only when it has content: `facts`, `episodes`, `narratives`,
 `intentions`, `preferences`, `resonant`. Every item carries its content, its rank, the
 confidence behind its admission, a rationale naming which method found it and through which
-path, and a currency marker. The pack also carries a rendered text block, the extracted cues,
-and stage timings.
+path, and a currency marker. The pack also carries a rendered text block, the cues it searched
+with, and stage timings.
 
 The pack is a self-contained context supplement, not a ranked result list. Ranking and admission
 are separate: an item reaches the pack only on absolute evidence, however well it ranks against
 its neighbors.
 
-A pack also says what it is short of. A degraded cue model, a spread that stopped on its budget,
+A pack also says what it is short of. A recall judgment that failed, a spread that stopped on its budget,
 episodes stored but not yet enriched: all of it lands in one plain line at the top of the text
 block. A client reading only the text sees the same honesty as one reading the metadata.
 
 `intentions` is the one bucket that answers a question the caller did not ask. It returns a
 standing goal or plan whose trigger condition this moment meets. It is brought back on the
 entity it is about, the date it named, or a situation that resembles the one it was formed in.
-`preferences` has no producer yet, so it is structurally absent rather than empty.
+`preferences` holds what the substrate inferred about how somebody works.
 
-## Cue extraction is inference-first
+## Recall's judgment is inference-first
 
-Recall's first stage turns the query, and optionally a summary and recent turns, into weighted
-cues. It is one model call, with no keyword extractor, no stopword list, and no regex behind
-it.
+Recall spends one model call, and by default it spends it after retrieval. Retrieval runs on the
+caller's own query and summary. The model is then shown what was found, what the floors refused,
+and what resonated or came due, and it chooses what helps, most useful first. A surprising
+association is its to keep. No keyword extractor, stopword list, or regex stands behind either
+half.
 
 That is a rule. Degradation here means doing less inference, never switching to heuristics. A
 keyword fallback looks like resilience and is not. It silently answers a different question from
 the one the pipeline was built around, at the moment the caller can least tell.
 
-So the fallback is the caller's own text verbatim: a raw-query cue, plus the summary at its
-damped weight when one was sent. Nothing derives terms from either, and the pack records that it
-degraded.
+So the fallback is the retrieval ranking of the same candidates, and the pack records that it
+degraded. The earlier path, which spends the call on extracting search cues before retrieval,
+falls back to the caller's own text verbatim. Nothing derives terms from it either way.
 
 Redaction is the one place inference is deliberately not used: credential detection is
 deterministic and rule-based, because a leak cannot wait on a model's judgment.
@@ -319,8 +321,8 @@ the full-text index over captured parts that `source_search` queries, the insert
 stream that records what recall and the weight sweeps did, the operations ledger, the proposal
 queues, and the last-pack cache.
 
-Generation runs on the one provider an installation selects, Anthropic's Haiku by default or
-OpenAI, and does not run without that provider's key. Embeddings stay local on Ollama either way,
+Generation runs on the one provider an installation selects, Anthropic's Haiku 4.5 by default or
+OpenAI's GPT-6 Luna, and does not run without that provider's key. Embeddings stay local on Ollama either way,
 because the vector space is the substrate. Every generating surface is told the same thing first,
 ahead of its own instructions and in its own request block: what Aion is, what its node kinds are
 for, why an answer has to say what it rests on, and that the memories in the request are evidence
@@ -339,8 +341,10 @@ Where this build differs from the paper:
 - **Redaction is credentials only.** The paper puts PII detection at ingestion. This detects
   keys, tokens, and connection strings, and does not detect patient data or other regulated
   content. A deployment where such data can reach the substrate needs something this lacks.
+- **Recall judges after retrieval.** The paper extracts cues with a model before it searches.
+  This searches on the caller's words and spends the model call on choosing what helps.
 - **No keyword fallback.** The paper falls back to keyword extraction when the cue model fails.
-  This falls back to the raw query, per the rule above.
+  This serves the retrieval ranking, per the rule above.
 - **Bitemporal stamps, supersession, and forget are an extension** the paper does not describe.
   They are the section above.
 - **Synthesis and preferences are an extension too.** The paper's five node families are all
@@ -348,8 +352,8 @@ Where this build differs from the paper:
   somebody worked are neither, so each is its own node kind carrying its premises and the fact
   that it is an inference.
 - **Some tuned values disagree with the paper's appendix** (the episode cap, the summary cue
-  weight, the cue-call budget), each on a measurement `architecture.md` records.
-- **Thirty-one maintenance operations are registered**, and two the paper names are not,
+  weight, the recall call's budget), each on a measurement `architecture.md` records.
+- **Thirty-two maintenance operations are registered**, and two the paper names are not,
   each for a reason `architecture.md` gives. Entity unmerge sits outside the catalog on
   purpose, since a bad merge and a correct one have the same shape in the graph.
 - **A third implementation.** The paper describes two, TypeScript and Go, both multi-tenant
