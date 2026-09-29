@@ -28,6 +28,7 @@ import { readSourcePartTurnIds } from '../../infrastructure/sqlite/source-identi
 import { INSTALLED_PUBLICATION_HANDLERS } from '../../reflection/application/installed-publications.js';
 import { handleReflection } from '../../reflection/application/intake.js';
 import { LaneAssigner } from '../../reflection/application/lanes.js';
+import { backdateSubstrateBirth } from '../../reflection/application/test-support/publication-substrate.fixture.js';
 import { PIPELINE_VERSION } from '../../reflection/domain/version.js';
 import { drainAcceptedVectors } from '../../reflection/test-support/direct-intake.fixture.js';
 import { SessionManager } from '../../session/session-manager.js';
@@ -46,6 +47,12 @@ const EMBED_DIMENSION = 8;
 const WRITE_SESSION = 'origin-census-writer';
 const READ_SESSION = 'origin-census-reader';
 
+/**
+ * The coordinator runs on `STORED_AT`, and the substrate is born before it, as a substrate that
+ * accepted these turns had to be. Its guard would otherwise take the day of the run, and the
+ * birth fence would drop both turns and leave the capture with no parts to count.
+ */
+const BORN_AT = new Date('2026-06-01T09:00:00.000Z');
 const UNRELATED_AT = new Date('2026-06-01T10:00:00.000Z');
 const STORED_AT = new Date('2026-06-01T11:00:00.000Z');
 const RECALLED_AT = new Date('2026-06-02T09:00:00.000Z');
@@ -203,6 +210,7 @@ beforeAll(async () => {
     now: () => STORED_AT,
   });
   await coordinator.initialize();
+  await backdateSubstrateBirth(harness.driver, db, BORN_AT);
 
   await push(UNRELATED, READ_SESSION, UNRELATED_AT);
   episodeId = await push(CAPTURE, WRITE_SESSION, STORED_AT);

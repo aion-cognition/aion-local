@@ -84,7 +84,12 @@ let intake: ReflectionIntakeDeps;
 let resolver: EvidenceResolver;
 
 let prompts: string[] = [];
-let failAt: PublicationBoundary | undefined;
+/**
+ * One boundary of one publication. The operation prefix is part of it because a run publishes
+ * more than the narrative: the first seal of a session publishes its family selection before any
+ * narrative, and an interruption that lands on whichever goes first is not the case it names.
+ */
+let failAt: { readonly boundary: PublicationBoundary; readonly operation: string } | undefined;
 /** Sources whose synthesis the scripted provider refuses, by the marker their body carries. */
 let refuse = new Set<string>();
 
@@ -206,8 +211,8 @@ beforeAll(async () => {
     db: store.db,
     logger,
     handlers: [...INSTALLED_PUBLICATION_HANDLERS],
-    boundary: ({ boundary }) => {
-      if (boundary === failAt) {
+    boundary: ({ boundary, operationId }) => {
+      if (boundary === failAt?.boundary && operationId.startsWith(failAt.operation)) {
         failAt = undefined;
         throw new Error(`interrupted at ${boundary}`);
       }
@@ -365,9 +370,11 @@ it('finishes an interrupted publication with no fresh work to do', async () => {
   await drain(later);
   const source = await accept('session-interrupted', 'interrupted');
 
-  failAt = 'before_ack';
+  failAt = { boundary: 'before_ack', operation: 'narrative-publish:' };
   await expect(runSeal(later)).rejects.toThrow();
   const chunkId = chunkOfSource(store.db, source) ?? '';
+  // Sealed and synthesized before the interruption, so what is left pending is the narrative.
+  expect(chunkId).not.toBe('');
   expect(coordinator.hasPending()).toBe(true);
 
   // The census says nothing fresh is eligible, and the pending reading says otherwise.

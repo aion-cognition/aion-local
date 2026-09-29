@@ -13,7 +13,10 @@ import {
   type NarrativeOptions,
 } from './narratives.js';
 import { publishPipelineReadinessPolicy } from './readiness.js';
-import { activatedCoordinator } from './test-support/publication-substrate.fixture.js';
+import {
+  activatedCoordinator,
+  backdateSubstrateBirth,
+} from './test-support/publication-substrate.fixture.js';
 import { findPendingVectorNodes } from './vectors.js';
 import { durableRoleScope } from '../../evidence/domain/scopes.js';
 import { establishScope } from '../../evidence/test-support/evidence.fixture.js';
@@ -147,6 +150,9 @@ async function closeWithGroundingRetry(
  * partial one is a recorded gap. The partition claim replaces them below, on the deterministic
  * provider, which also takes two live-model-gated cases out of the keyed set.
  */
+
+// Before every turn below: a substrate born on the day of the run refuses April at the birth fence.
+const BORN_AT = new Date('2026-04-01T00:00:00.000Z');
 
 const SESSION_IDENTITY = 'mcp-transport-session-narratives';
 const IDLE_SESSION_IDENTITY = 'mcp-transport-session-narratives-idle';
@@ -395,6 +401,7 @@ beforeAll(async () => {
   // through the same coordinator rather than through the direct publisher, because a chunk's
   // members are the source records intake writes and they have to be real.
   publications = await activatedCoordinator({ driver: harness.driver, db, logger }, 'narratives');
+  await backdateSubstrateBirth(harness.driver, db, BORN_AT);
   publishPipelineReadinessPolicy(
     db,
     [{ name: 'entities', run: () => Promise.resolve({ status: 'ok', summary: '' }) }],

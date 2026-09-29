@@ -18,12 +18,15 @@ export const PUBLICATION_GUARD_LABEL = 'PublicationGuard';
 
 export const PUBLICATION_GUARD_ID_PROPERTY = 'substrate_id';
 
+/** The substrate's birth: set once when the guard is minted, and read by the intake birth fence. */
+export const PUBLICATION_GUARD_BIRTH_PROPERTY = 'created_at';
+
 export const PUBLICATION_GUARD_CONSTRAINT = 'publication_guard_substrate_id_unique';
 
 export const PUBLICATION_GUARD_CONSTRAINT_STATEMENT = `CREATE CONSTRAINT ${PUBLICATION_GUARD_CONSTRAINT} IF NOT EXISTS FOR (n:${PUBLICATION_GUARD_LABEL}) REQUIRE n.${PUBLICATION_GUARD_ID_PROPERTY} IS UNIQUE`;
 
 const MERGE_GUARD = `MERGE (g:${PUBLICATION_GUARD_LABEL} {${PUBLICATION_GUARD_ID_PROPERTY}: $substrateId})
-  ON CREATE SET g.created_at = $now, g.protocol_version = $protocolVersion
+  ON CREATE SET g.${PUBLICATION_GUARD_BIRTH_PROPERTY} = $now, g.protocol_version = $protocolVersion
   RETURN g.${PUBLICATION_GUARD_ID_PROPERTY} AS substrateId`;
 
 const COUNT_GUARDS = `MATCH (g:${PUBLICATION_GUARD_LABEL} {${PUBLICATION_GUARD_ID_PROPERTY}: $substrateId})
@@ -80,7 +83,7 @@ export async function bootstrapPublicationGuard(
 }
 
 const READ_GUARD_CREATED_AT = `MATCH (g:${PUBLICATION_GUARD_LABEL} {${PUBLICATION_GUARD_ID_PROPERTY}: $substrateId})
-  RETURN g.created_at AS createdAt`;
+  RETURN g.${PUBLICATION_GUARD_BIRTH_PROPERTY} AS createdAt`;
 
 /**
  * The substrate's own birth: the instant its one `PublicationGuard` node was minted, which the

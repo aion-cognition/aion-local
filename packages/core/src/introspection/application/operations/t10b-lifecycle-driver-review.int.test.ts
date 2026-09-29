@@ -1,4 +1,4 @@
-import { expect, it } from 'vitest';
+import { beforeAll, expect, it } from 'vitest';
 
 import { narrativeRegroundingOperation } from './narrative-regrounding.js';
 import { narrativeSealOperation } from './narrative-seal.js';
@@ -15,6 +15,7 @@ import {
   publishChunkNarrative,
   sealSessionChunk,
 } from '../../../reflection/application/chunk-narrative.js';
+import { backdateSubstrateBirth } from '../../../reflection/application/test-support/publication-substrate.fixture.js';
 import {
   acceptSource,
   acceptCorrection,
@@ -34,6 +35,13 @@ import { readSealDemand } from '../seal-census.js';
 
 const DAY = 86400000;
 const SCALES = { batch: 2, maxSpanMs: DAY, renderedInputAllowance: 16384 };
+
+// The fixture's coordinator runs on `NOW`, so its substrate is born on that clock too. Left on the
+// day of the run, the birth fence refuses the future-dated turn below once the run is more than
+// ten days past `NOW`.
+beforeAll(async () => {
+  await backdateSubstrateBirth(driver, store.db, NOW);
+});
 
 function context(now = NOW): OperationContext {
   return {
