@@ -78,7 +78,11 @@ const KEYED_CLOSE_SAMPLE_FLOOR = 4;
 
 const SESSION_ID = 'keyed-close-battery';
 
-/** The prior half happens a week before the new one, so world time separates the two claims. */
+/**
+ * The prior half happens a week before the new one, so world time separates the two claims.
+ * These are world times only: every write is stamped at the moment it runs, as the service
+ * stamps it, and that moment comes after the substrate's birth.
+ */
 const PRIOR_AT = new Date('2026-09-01T00:00:00.000Z');
 
 const NEW_AT = new Date('2026-09-08T00:00:00.000Z');
@@ -117,35 +121,31 @@ let keyedClaims: KeyedClaim[] = [];
 
 const halfOf = new Map<string, { readonly entry: KeyedCase; readonly half: CaseHalf }>();
 
-/**
- * The route `testGenerationProvider` picks, which is the one extraction answered on. It reads the
- * key from the environment rather than from config, so a config-only reading would name a model
- * this battery never called.
- */
-function batteryApiKey(): string {
-  return process.env.AION_ANTHROPIC_API_KEY ?? '';
-}
-
 async function seedEpisode(id: string, text: string, occurredAt: Date): Promise<void> {
   await writeStampedNode(substrate.driver, {
     label: 'Episode',
     id,
-    now: occurredAt,
+    now: new Date(),
     occurredAt,
     properties: { text, session_id: SESSION_ID },
   });
 }
 
-/** The pipeline's stages, on the pipeline's knobs, with only the keyed-close mode pinned. */
+/**
+ * The pipeline's stages, on the pipeline's knobs, with only the keyed-close mode pinned. The
+ * context is the one the orchestrator builds: the run's own clock beside the episode's world
+ * time, and the publication coordinator each extraction stage records its nodes' sources through.
+ */
 async function enrich(episodeId: string, text: string, occurredAt: Date): Promise<void> {
   const ctx = {
     driver: substrate.driver,
     db: substrate.db,
+    publications: substrate.publications,
     provider: substrate.provider,
     episodeId,
     episode: { id: episodeId, sessionId: SESSION_ID, text, turns: [] },
     logger: substrate.logger,
-    now: occurredAt,
+    now: new Date(),
     occurredAt,
     pipelineVersion: PIPELINE_VERSION,
   };
@@ -221,15 +221,9 @@ function describeKeys(claims: readonly KeyedClaim[]): string {
 }
 
 beforeAll(async () => {
-  // The key so the reported route is the route the provider took. `testGenerationProvider` decides
-  // from the environment and the substrate's config does not carry the key, so without this the
-  // battery would name the local model while extraction answered on the remote one.
-  substrate = new GateSubstrate('keyed-close', {
-    tune: (config) => ({
-      ...config,
-      anthropic: { ...config.anthropic, apiKey: batteryApiKey() },
-    }),
-  });
+  // The substrate's config already carries the route and key `testGenerationProvider` selects, so
+  // the route reported below is the one extraction answered on.
+  substrate = new GateSubstrate('keyed-close');
   await substrate.open();
 
   for (const entry of KEYED_BATTERY) {
@@ -283,7 +277,7 @@ describe.skipIf(REMOTE_JUDGE_ABSENT)('the 24-case keyed close battery', () => {
   it('names the route it measured, so the number belongs to a model', () => {
     const route = resolveProviderRouting(substrate.config).roles.reflect;
     console.log(
-      `keyed close battery route: model ${route.model}, ` +
+      `keyed close battery route: ${route.provider}:${route.model}, ` +
         `available ${String(route.available)}; embeddings on ` +
         `${substrate.config.models.embed} at ${String(substrate.config.models.embedDimension)} dimensions`,
     );
