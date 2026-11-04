@@ -88,7 +88,10 @@ export class PublicationCoordinator {
   constructor(options: PublicationCoordinatorOptions) {
     this.#options = options;
     this.#now = options.now ?? (() => new Date());
-    this.#transactionTimeoutMs = options.transactionTimeoutMs ?? 5000;
+    // 5s proved too small for uncapped context_vector_sync plans (a 1,169-node
+    // sync needs >7s and wedges the pending slot forever); 30s clears real work
+    // while still bounding a hung store.
+    this.#transactionTimeoutMs = options.transactionTimeoutMs ?? 30000;
     this.#readTimeoutMs = options.readTimeoutMs ?? 1000;
     this.#intentByteLimit = options.intentByteLimit ?? 4 * 1024 * 1024;
     for (const value of [this.#transactionTimeoutMs, this.#readTimeoutMs, this.#intentByteLimit]) {
