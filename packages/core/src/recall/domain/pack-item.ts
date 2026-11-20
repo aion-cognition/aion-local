@@ -8,7 +8,8 @@ import type {
 } from '@aion/protocol';
 
 import type { FusedItem } from './fusion.js';
-import { BUCKET_HEADINGS, PACK_BUCKETS, type PackBucket } from './pack-buckets.js';
+import { BUCKET_HEADINGS, PACK_BUCKETS, answersQuery, type PackBucket } from './pack-buckets.js';
+import { unansweredBody } from './pack-notes.js';
 import { standingFor } from './standing.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 
@@ -405,7 +406,11 @@ export function renderBucket(bucket: PackBucket, entries: readonly PackEntry[]):
 
 export const PACK_HEADING = '# Memory';
 
-/** The whole rendered block: the note, then the legend and the buckets, or what an empty pack says. */
+/**
+ * The whole rendered block: the note, then the legend and the buckets, or what an empty pack
+ * says. A pack whose only items reached it another way also says what an empty one would, above
+ * them, since none of them answers the query.
+ */
 export function renderPack(
   selection: ReadonlyMap<PackBucket, readonly PackEntry[]>,
   note: string | undefined,
@@ -415,17 +420,14 @@ export function renderPack(
   if (note !== undefined) {
     sections.push(note);
   }
-  const buckets: string[] = [];
-  for (const bucket of PACK_BUCKETS) {
-    const entries = selection.get(bucket);
-    if (entries === undefined || entries.length === 0) {
-      continue;
-    }
-    buckets.push(renderBucket(bucket, entries));
-  }
+  const filled = PACK_BUCKETS.filter((bucket) => (selection.get(bucket)?.length ?? 0) > 0);
+  const buckets = filled.map((bucket) => renderBucket(bucket, selection.get(bucket) ?? []));
   if (buckets.length === 0) {
     sections.push(emptyBody());
   } else {
+    if (!answersQuery(filled)) {
+      sections.push(unansweredBody(emptyBody()));
+    }
     // The legend explains a word every item below carries, so it goes above them and only when
     // there are items to explain. An empty pack has nothing to key.
     sections.push(STANDING_LEGEND, ...buckets);

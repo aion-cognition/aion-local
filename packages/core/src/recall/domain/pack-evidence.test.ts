@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { foldableClaims } from './pack-duplicates.js';
 import { emittedPackIds } from './session-dedup.js';
 import { candidate, ids, items, list } from './test-support/fusion.fixture.js';
-import { assemble, CAPS, item } from './test-support/pack.fixture.js';
+import { assemble, CAPS, item, report } from './test-support/pack.fixture.js';
 import { viewOf } from './test-support/resolved-view.fixture.js';
 import type { ItemProvenance } from '../../infrastructure/graph/claim-provenance-queries.js';
 
@@ -292,16 +292,17 @@ describe('one source reaching the pack twice', () => {
   it('prefers a known successor arriving through resonance', () => {
     const stale = item('stale', { superseded: true, content: 'old account' });
     const fresh = item('stale-successor', { content: 'new account' });
-    const alone = assemble([stale]);
-    const freshAlone = assemble([], {
-      resonant: [fresh],
-      tokenBudget: alone.metadata.token_estimate,
-    });
-    expect(freshAlone.resonant?.map((entry) => entry.id) ?? []).toContain('stale-successor');
-    const pack = assemble([stale], {
-      resonant: [fresh],
-      tokenBudget: alone.metadata.token_estimate,
-    });
+    // Room for either memory alone and not for both. Alone, the successor also carries the line
+    // that says nothing matched the query, so the budget grows until it holds that too.
+    const admission = report([stale]);
+    let budget = assemble([stale]).metadata.token_estimate;
+    while (
+      assemble([], { admission, resonant: [fresh], tokenBudget: budget }).resonant === undefined
+    ) {
+      budget += 1;
+    }
+    const pack = assemble([stale], { resonant: [fresh], tokenBudget: budget });
     expect(pack.resonant?.map((entry) => entry.id) ?? []).toContain('stale-successor');
+    expect(pack.episodes).toBeUndefined();
   });
 });

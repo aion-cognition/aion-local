@@ -17,6 +17,41 @@ export const PACK_BUCKETS: readonly PackBucket[] = [
   'resonant',
 ];
 
+/** The buckets that say how an item was found. Nothing in them matched the query. */
+const BESIDE_BUCKETS: ReadonlySet<PackBucket> = new Set<PackBucket>(['intentions', 'resonant']);
+
+/**
+ * Whether a pack with items in these buckets answered the query. One holding only resonant
+ * discoveries or triggered intentions has not, and it says so above them.
+ */
+export function answersQuery(filled: Iterable<PackBucket>): boolean {
+  for (const bucket of filled) {
+    if (!BESIDE_BUCKETS.has(bucket)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * What placing an item in `bucket` does to the budget's charge for the line an unanswered pack
+ * prints, given the buckets that already hold items. The line prints while the pack holds items
+ * and no answer, so the first item pays for it when it answers nothing, and the first answer
+ * after that takes the charge back.
+ */
+export function unansweredCharge(
+  bucket: PackBucket,
+  filled: Iterable<PackBucket>,
+  lineCost: number,
+): number {
+  const held = [...filled];
+  const answers = answersQuery([bucket]);
+  if (held.length === 0) {
+    return answers ? 0 : lineCost;
+  }
+  return answers && !answersQuery(held) ? -lineCost : 0;
+}
+
 export type BucketCaps = Readonly<Record<PackBucket, number>>;
 
 /**
